@@ -1,4 +1,5 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { resolve } from "node:path";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 const AUTH_HEADERS = { Authorization: "Bearer local-dev" };
@@ -35,15 +36,14 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
 
   await expect(page.getByText("Local dev auth")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Preview", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Search", exact: true })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Actions", exact: true })).toBeVisible();
-  await expect(page.getByText("Recent Tasks")).toBeVisible();
+  if (testInfo.project.name === "chromium-desktop") {
+    await expect(page.getByText("Recent Tasks")).toBeVisible();
+  }
   await expect(page.locator(".explorer-pane")).toBeVisible();
-  await expect(page.locator(".preview-pane")).toBeVisible();
+  await expect(page.locator(".explorer-detail")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
+  await expect(page.locator("openai-chatkit")).toBeVisible();
   await expect(page.getByPlaceholder("Search files, tags, type, status")).toBeVisible();
-  await expect(page.getByPlaceholder("Search selected files or the library")).toBeVisible();
   await expect(page.getByText("0 files for chat")).toBeVisible();
   await expect(page.getByRole("button", { name: "Select visible" })).toBeDisabled();
   await expect(page.getByText("Choose files")).toBeVisible();
@@ -56,46 +56,45 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
   test.skip(testInfo.project.name !== "chromium-desktop", "Run the live ChatKit flow once.");
   test.setTimeout(420_000);
 
-  const marker = `pw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  const filename = `chatkit-live-${marker}.txt`;
-  const fileText = [
-    `Playwright marker: ${marker}.`,
-    "The project codename is Cobalt Maple.",
-    "The retention policy is seven years.",
-    "The deletion confirmation phrase is clean-room-finish.",
-  ].join("\n");
+  const samplePaths = [resolve("sample_sources/rag-field-notes.txt"), resolve("sample_sources/research-index.json")];
+  const sampleFilenames = ["rag-field-notes.txt", "research-index.json"];
 
-  let sourceId: string | null = null;
+  const sourceIds: string[] = [];
   try {
     await page.goto("/");
     await expect(page.getByText("Local dev auth")).toBeVisible();
     await waitForChatKit(page);
-    await page.locator(".upload-strip textarea").fill("Keep this small test fixture as one semantic chunk.");
+    await page.locator(".upload-strip textarea").fill("Preserve the named fields and short notes as retrievable facts.");
 
-    await page.locator(".upload-strip input[type='file']").setInputFiles({
-      name: filename,
-      mimeType: "text/plain",
-      buffer: Buffer.from(fileText),
-    });
-    await expect(page.getByText("1 selected")).toBeVisible();
+    await page.locator(".upload-strip input[type='file']").setInputFiles(samplePaths);
+    await expect(page.getByText("2 selected")).toBeVisible();
     await page.locator(".upload-strip").getByRole("button", { name: "Upload" }).click();
 
-    const queuedSource = await waitForSourceRecordByFilename(request, filename, 60_000);
-    sourceId = queuedSource.id;
-    const source = await waitForSourceReady(request, sourceId, 240_000);
-    expect(source.status).toBe("ready");
+    const queuedSources = await Promise.all(
+      sampleFilenames.map((filename) => waitForSourceRecordByFilename(request, filename, 60_000)),
+    );
+    sourceIds.push(...queuedSources.map((source) => source.id));
+    const readySources = await Promise.all(sourceIds.map((id) => waitForSourceReady(request, id, 240_000)));
+    for (const source of readySources) {
+      expect(source.status).toBe("ready");
+    }
     await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
-    await page.getByLabel(`Select ${source.display_title} for chat`).check();
-    await expect(page.getByText("1 file for chat")).toBeVisible();
-    await expect(page.locator(".chat-scope-strip")).toContainText(source.display_title);
+    for (const source of readySources) {
+      await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
+      await page.getByLabel(`Select ${source.display_title} for chat`).check();
+    }
+    await expect(page.getByText("2 files for chat")).toBeVisible();
+    await expect(page.locator(".chat-scope-strip")).toContainText(readySources[0].display_title);
+    await page.locator(".file-name-button").filter({ hasText: readySources[0].display_title }).click();
+    await expect(page.locator(".explorer-detail")).toContainText("Cobalt Maple");
+    await page.screenshot({ path: testInfo.outputPath("workspace-sample-library.png"), fullPage: true });
 
     await sendChatKitMessage(
       page,
       [
         "Use the currently selected file scope and call answer_from_library.",
         "Question: what is the project codename and retention policy?",
-        "Use only that uploaded file and include the exact phrases Cobalt Maple and seven years.",
+        "Use only the selected files and include the exact phrases Cobalt Maple and seven years.",
       ].join(" "),
     );
 
@@ -110,16 +109,17 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
         jsonText(task.input_json).toLowerCase().includes("cobalt maple"),
     );
     expect(jsonText(qaTask.result_json)).toContain("seven years");
-    expect(jsonText(qaTask.input_json)).toContain(source.id);
+    for (const sourceId of sourceIds) {
+      expect(jsonText(qaTask.input_json)).toContain(sourceId);
+    }
 
-    await sendChatKitMessage(
-      page,
-      `Delete source ${sourceId}. I explicitly confirm deletion of this uploaded source.`,
-    );
-    await waitForSourceDeleted(request, sourceId, 120_000);
-    sourceId = null;
+    for (const sourceId of [...sourceIds]) {
+      await sendChatKitMessage(page, `Delete source ${sourceId}. I explicitly confirm deletion of this uploaded source.`);
+      await waitForSourceDeleted(request, sourceId, 120_000);
+      sourceIds.splice(sourceIds.indexOf(sourceId), 1);
+    }
   } finally {
-    if (sourceId !== null) {
+    for (const sourceId of sourceIds) {
       await request.delete(`${BACKEND_URL}/api/sources/${sourceId}`, {
         headers: AUTH_HEADERS,
         failOnStatusCode: false,

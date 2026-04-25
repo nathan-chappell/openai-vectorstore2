@@ -1,0 +1,14 @@
+AI Files Field Notes
+
+Project codename: Cobalt Maple.
+Retention policy: seven years.
+Deletion confirmation phrase: clean-room-finish.
+
+The explorer should behave like a fast file browser with semantic memory. The primary actions are query, tag, select files for chat, preview file contents, and ask ChatKit to search or answer from the selected scope.
+
+Useful tags:
+- policy
+- retention
+- field-notes
+
+Implementation preference: keep the interface quiet and dense. File rows should scan quickly, tags should be easy to filter, and ChatKit should explain what it found without requiring users to copy attachments into the chat composer.

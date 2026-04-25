@@ -10,6 +10,40 @@
 - [x] Implement the current baseline phases below.
 - [x] Keep this file updated as phases move from planned to complete.
 
+## Current Implementation Pass: Explorer Plus ChatKit Teardown/Rebuild
+
+Status: completed.
+
+Intent:
+
+The webapp should start from the product's real center of gravity: a sleek AI-powered file browser plus ChatKit. The explorer owns files, tags, query, preview, upload, and selected-file scope. ChatKit owns retrieval, branching, grounded QA, generation, and orchestration over that scope. The older standalone preview/search/actions workbench is now too much surface area for the first product shape and should be torn down rather than polished further.
+
+Tasks:
+
+- [x] Record the teardown/rebuild direction in this plan.
+- [x] Remove the separate Preview/Search/Actions workbench from the main React shell.
+- [x] Rebuild the web layout as two primary surfaces: explorer on the left and ChatKit on the right.
+- [x] Keep file preview and metadata editing inside the explorer so it behaves like an AI filesystem, not a dashboard.
+- [x] Preserve upload, semantic split preview, tag creation/filtering, source tag editing, re-split, delete, and selected-file ChatKit scope.
+- [x] Add committed text/json sample sources that can be ingested during browser iteration.
+- [x] Update Playwright shell/live checks around the simpler explorer-plus-chat layout.
+- [x] Use Playwright screenshots to iterate on desktop and mobile until the explorer looks clean and compact.
+- [x] Run typecheck, build, and Playwright verification.
+- [x] Commit this teardown/rebuild pass.
+
+Implementation notes:
+
+- Removed duplicate direct Search, Branch, Actions, and Results panels from the React shell. Those capabilities now belong to ChatKit for the web product surface.
+- Embedded file preview, chunk map, metadata, tag editing, re-split, upload, query, tags, and selected-file scope inside the explorer.
+- Added a render window for the explorer table so very large libraries do not create a huge DOM while the backend/server-paged explorer is still future work.
+- Fixed two obvious polling/render churn issues: activity polling now depends on selected source ID instead of the selected source object, and source-content preview fetches are keyed by preview-relevant source fields instead of every refreshed detail object.
+- Added `sample_sources/rag-field-notes.txt` and `sample_sources/research-index.json` as ingestion fixtures for Playwright and manual iteration.
+- Verification completed:
+  - `npm run typecheck`
+  - `npm run build`
+  - `npm run test:e2e -- --grep "workspace shell"`
+  - `npm run test:e2e -- --project=chromium-desktop --grep "explorer-selected"`
+
 ## Current Implementation Pass: Live ChatKit Attachment QA
 
 Status: completed.

@@ -1,0 +1,23 @@
+{
+  "collection": "AI Files Research Index",
+  "codename": "Cobalt Maple",
+  "retention_policy": "seven years",
+  "delete_phrase": "clean-room-finish",
+  "tags": ["research-index", "metadata", "rag"],
+  "files": [
+    {
+      "name": "vector-store-metadata.md",
+      "kind": "design-note",
+      "summary": "Metadata fields include creation time, source kind, filename, and comma-separated tags for user-facing display."
+    },
+    {
+      "name": "explorer-ux.md",
+      "kind": "product-note",
+      "summary": "The explorer should prioritize files, tags, query, source preview, and selected-file scope for ChatKit."
+    }
+  ],
+  "qa_expectations": {
+    "codename_question": "Cobalt Maple",
+    "retention_question": "seven years"
+  }
+}
