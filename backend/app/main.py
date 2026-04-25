@@ -28,6 +28,7 @@ from backend.app.schemas import (
     QaRequest,
     SearchRequest,
     SearchResponse,
+    SplitPreviewResponse,
     TagSummary,
     TaskDetail,
     TaskKind,
@@ -66,7 +67,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         expose_headers=["mcp-session-id"],
     )
 
-    @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"])
+    @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"], include_in_schema=False)
     async def mcp_root_redirect(request: Request) -> RedirectResponse:
         query_string = request.url.query
         target = "/mcp/"
@@ -125,6 +126,28 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 payload=payload,
                 tag_ids=tag_ids or [],
                 user_guidance=user_guidance,
+                origin_surface="web",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.post("/api/sources/split-preview")
+    async def preview_source_split_api(
+        file: UploadFile = File(...),
+        user_guidance: str | None = Form(default=None),
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> SplitPreviewResponse:
+        payload = await file.read()
+        await file.close()
+        try:
+            return await services.sources.preview_semantic_split(
+                clerk_user_id=user.clerk_user_id,
+                filename=file.filename or "preview",
+                declared_media_type=file.content_type,
+                payload=payload,
+                user_guidance=user_guidance,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -158,7 +181,9 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         user: AuthenticatedUser = Depends(require_active_web_user),
     ) -> Response:
         try:
-            detail, payload = await services.sources.read_source_bytes(clerk_user_id=user.clerk_user_id, source_id=source_id)
+            detail, payload = await services.sources.read_source_bytes(
+                clerk_user_id=user.clerk_user_id, source_id=source_id
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         return Response(

@@ -29,6 +29,7 @@ class AppServices:
         if self._closed:
             return
         self._closed = True
+        await self.sources.close()
         await self.openai.close()
         await self.auth.close()
         await self.database.close()

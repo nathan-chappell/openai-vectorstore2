@@ -2,7 +2,9 @@ import type {
   ActionResponse,
   AuthUser,
   BranchSearchResponse,
+  IngestFinalizeResponse,
   SearchResponse,
+  SplitPreviewResponse,
   SourceDetail,
   SourceKind,
   SourceListResponse,
@@ -85,7 +87,7 @@ export async function getSource(sourceId: string): Promise<SourceDetail> {
   return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}`);
 }
 
-export async function uploadSource(file: File, userGuidance: string, tagIds: string[]): Promise<SourceListResponse> {
+export async function uploadSource(file: File, userGuidance: string, tagIds: string[]): Promise<IngestFinalizeResponse> {
   const formData = new FormData();
   formData.set("file", file, file.name);
   if (userGuidance.trim()) {
@@ -94,11 +96,22 @@ export async function uploadSource(file: File, userGuidance: string, tagIds: str
   for (const tagId of tagIds) {
     formData.append("tag_ids", tagId);
   }
-  await fetchJson("/sources", {
+  return apiRequest<IngestFinalizeResponse>("/sources", {
     method: "POST",
     body: formData,
   });
-  return listSources({ pageSize: 50 });
+}
+
+export async function previewSemanticSplit(file: File, userGuidance: string): Promise<SplitPreviewResponse> {
+  const formData = new FormData();
+  formData.set("file", file, file.name);
+  if (userGuidance.trim()) {
+    formData.set("user_guidance", userGuidance.trim());
+  }
+  return apiRequest<SplitPreviewResponse>("/sources/split-preview", {
+    method: "POST",
+    body: formData,
+  });
 }
 
 export async function deleteSource(sourceId: string): Promise<void> {

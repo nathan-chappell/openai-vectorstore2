@@ -189,6 +189,25 @@ class OpenAIGateway:
         )
         return str(uploaded.id)
 
+    async def detach_file_from_vector_store(self, *, vector_store_id: str, file_id: str) -> None:
+        started_at = perf_counter()
+        await self._client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=file_id)
+        logger.info(
+            "openai_vector_file_detached vector_store_id=%s file_id=%s duration_ms=%.1f",
+            vector_store_id,
+            file_id,
+            (perf_counter() - started_at) * 1000,
+        )
+
+    async def delete_file(self, *, file_id: str) -> None:
+        started_at = perf_counter()
+        await self._client.files.delete(file_id)
+        logger.info(
+            "openai_file_deleted file_id=%s duration_ms=%.1f",
+            file_id,
+            (perf_counter() - started_at) * 1000,
+        )
+
     async def search_vector_store(
         self,
         *,

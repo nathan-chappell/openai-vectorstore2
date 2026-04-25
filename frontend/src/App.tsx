@@ -84,7 +84,7 @@ export function App({ authMode }: AppProps) {
     try {
       for (const file of Array.from(files)) {
         const response = await uploadSource(file, uploadGuidance, []);
-        setSources(response.sources);
+        setStatus(`Uploaded ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "complete"}.`);
       }
       const [sourceList, tagList] = await Promise.all([listSources({ pageSize: 50 }), listTags()]);
       setSources(sourceList.sources);

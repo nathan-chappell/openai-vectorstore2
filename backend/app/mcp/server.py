@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from base64 import b64decode
+import binascii
 from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 import json
@@ -50,6 +52,7 @@ from backend.app.schemas import (
     QaRequest,
     SearchRequest,
     SearchResponse,
+    SplitPreviewResponse,
     SourceKind,
     TagSummary,
     TaskDetail,
@@ -193,7 +196,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=_list_tags(services=services, clerk_user_id=clerk_user_id),
         )
 
-    @server.tool(name="get_source_detail", description="Load source metadata and semantic chunks.", annotations=read_only)
+    @server.tool(
+        name="get_source_detail", description="Load source metadata and semantic chunks.", annotations=read_only
+    )
     async def get_source_detail_tool(source_id: Annotated[str, Field(min_length=1)]) -> LibrarySourceDetail:
         clerk_user_id = current_mcp_clerk_user_id()
         return await _run_logged_tool(
@@ -226,10 +231,108 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 payload=text.encode("utf-8"),
                 tag_ids=tag_ids or [],
                 user_guidance=user_guidance,
+                origin_surface="mcp",
             ),
         )
 
-    @server.tool(name="delete_source", description="Delete one source after explicit confirmation.", annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False))
+    @server.tool(
+        name="ingest_file_source",
+        description="Create a file source from base64 payload and publish its semantic chunks to the vector store.",
+        annotations=mutating,
+    )
+    async def ingest_file_source_tool(
+        filename: Annotated[str, Field(min_length=1)],
+        payload_base64: Annotated[str, Field(min_length=1)],
+        media_type: str | None = None,
+        tag_ids: list[str] | None = None,
+        user_guidance: str | None = None,
+    ) -> IngestFinalizeResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        try:
+            payload = b64decode(payload_base64, validate=True)
+        except binascii.Error as exc:
+            raise ValueError("payload_base64 must be valid base64 data.") from exc
+        return await _run_logged_tool(
+            tool_name="ingest_file_source",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "filename": filename,
+                "media_type": media_type,
+                "bytes": len(payload),
+                "tag_ids": tag_ids or [],
+            },
+            operation=services.sources.ingest_source(
+                clerk_user_id=clerk_user_id,
+                filename=filename,
+                declared_media_type=media_type,
+                payload=payload,
+                tag_ids=tag_ids or [],
+                user_guidance=user_guidance,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="preview_text_split",
+        description="Preview semantic chunks and tags for text without creating a source or publishing vectors.",
+        annotations=read_only,
+    )
+    async def preview_text_split_tool(
+        filename: Annotated[str, Field(min_length=1)] = "note.txt",
+        text: Annotated[str, Field(min_length=1)] = "",
+        media_type: str | None = "text/plain",
+        user_guidance: str | None = None,
+    ) -> SplitPreviewResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="preview_text_split",
+            clerk_user_id=clerk_user_id,
+            arguments={"filename": filename, "chars": len(text), "media_type": media_type},
+            operation=services.sources.preview_semantic_split(
+                clerk_user_id=clerk_user_id,
+                filename=filename,
+                declared_media_type=media_type,
+                payload=text.encode("utf-8"),
+                user_guidance=user_guidance,
+            ),
+        )
+
+    @server.tool(
+        name="preview_file_split",
+        description="Preview semantic chunks and tags for a base64 file payload without creating a source or publishing vectors.",
+        annotations=read_only,
+    )
+    async def preview_file_split_tool(
+        filename: Annotated[str, Field(min_length=1)],
+        payload_base64: Annotated[str, Field(min_length=1)],
+        media_type: str | None = None,
+        user_guidance: str | None = None,
+    ) -> SplitPreviewResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        try:
+            payload = b64decode(payload_base64, validate=True)
+        except binascii.Error as exc:
+            raise ValueError("payload_base64 must be valid base64 data.") from exc
+        return await _run_logged_tool(
+            tool_name="preview_file_split",
+            clerk_user_id=clerk_user_id,
+            arguments={"filename": filename, "media_type": media_type, "bytes": len(payload)},
+            operation=services.sources.preview_semantic_split(
+                clerk_user_id=clerk_user_id,
+                filename=filename,
+                declared_media_type=media_type,
+                payload=payload,
+                user_guidance=user_guidance,
+            ),
+        )
+
+    @server.tool(
+        name="delete_source",
+        description="Delete one source after explicit confirmation.",
+        annotations=ToolAnnotations(
+            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
+        ),
+    )
     async def delete_source_tool(
         source_id: Annotated[str, Field(min_length=1)],
         confirm: bool = False,
@@ -249,7 +352,11 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
         return {"deleted_source_id": deleted_id}
 
-    @server.tool(name="search_chunks", description="Search semantic chunks and return full app-owned chunk text.", annotations=read_only)
+    @server.tool(
+        name="search_chunks",
+        description="Search semantic chunks and return full app-owned chunk text.",
+        annotations=read_only,
+    )
     async def search_chunks_tool(
         query: Annotated[str, Field(min_length=1)],
         selected_source_ids: list[str] | None = None,
@@ -274,7 +381,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=services.sources.search(clerk_user_id=clerk_user_id, request=payload),
         )
 
-    @server.tool(name="branch_search", description="Layer semantic search outward from each layer's hits.", annotations=read_only)
+    @server.tool(
+        name="branch_search", description="Layer semantic search outward from each layer's hits.", annotations=read_only
+    )
     async def branch_search_tool(
         query: Annotated[str, Field(min_length=1)],
         selected_source_ids: list[str] | None = None,
@@ -324,7 +433,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=services.actions.qa(clerk_user_id=clerk_user_id, payload=payload, origin_surface="mcp"),
         )
 
-    @server.tool(name="freeform", description="Generate grounded or creative text with retrieved context.", annotations=mutating)
+    @server.tool(
+        name="freeform", description="Generate grounded or creative text with retrieved context.", annotations=mutating
+    )
     async def freeform_tool(
         prompt: Annotated[str, Field(min_length=1)],
         mode: Literal["grounded", "creative"] = "grounded",
@@ -349,7 +460,11 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=services.actions.freeform(clerk_user_id=clerk_user_id, payload=payload, origin_surface="mcp"),
         )
 
-    @server.tool(name="generate_image", description="Generate an image asset, optionally grounded in chunks.", annotations=mutating)
+    @server.tool(
+        name="generate_image",
+        description="Generate an image asset, optionally grounded in chunks.",
+        annotations=mutating,
+    )
     async def generate_image_tool(
         prompt: Annotated[str, Field(min_length=1)],
         size: str = "1024x1024",
@@ -400,7 +515,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(name="list_tasks", description="List recent app tasks.", annotations=read_only)
-    async def list_tasks_tool(kind: TaskKind | None = None, limit: Annotated[int, Field(ge=1, le=200)] = 50) -> TaskListResponse:
+    async def list_tasks_tool(
+        kind: TaskKind | None = None, limit: Annotated[int, Field(ge=1, le=200)] = 50
+    ) -> TaskListResponse:
         clerk_user_id = current_mcp_clerk_user_id()
         return await _run_logged_tool(
             tool_name="list_tasks",
@@ -504,8 +621,20 @@ def _summarize_result(result: object) -> object:
         return {"returned": len(result.hits)}
     if isinstance(result, BranchSearchResponse):
         return {"levels": len(result.levels), "returned": sum(len(level.hits) for level in result.levels)}
+    if isinstance(result, SplitPreviewResponse):
+        return {
+            "source_kind": result.source_kind,
+            "chunks": len(result.split.chunks),
+            "tags": len(result.split.tags),
+            "extracted_character_count": result.extracted_character_count,
+        }
     if isinstance(result, ActionResponse):
-        return {"task_id": result.task_id, "kind": result.kind, "hits": len(result.hits), "asset": result.asset is not None}
+        return {
+            "task_id": result.task_id,
+            "kind": result.kind,
+            "hits": len(result.hits),
+            "asset": result.asset is not None,
+        }
     if isinstance(result, TaskListResponse):
         return {"returned": len(result.tasks)}
     if isinstance(result, BaseModel):

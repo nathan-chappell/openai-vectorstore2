@@ -1,24 +1,27 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 import logging
 import mimetypes
 from pathlib import Path
 import re
 from tempfile import NamedTemporaryFile
+from time import perf_counter
 from typing import Any, Literal, cast
 
 from openai.types.file_purpose import FilePurpose
 from openai.types.shared_params.comparison_filter import ComparisonFilter
 from openai.types.shared_params.compound_filter import CompoundFilter
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.models import AppUser, SemanticChunk, SourceFile, SourceTagLink, Tag, UserLibrary
+from backend.app.models import AppTask, AppUser, SemanticChunk, SourceFile, SourceTagLink, Tag, UserLibrary
 from backend.app.schemas import (
     BranchSearchLevel,
     BranchSearchRequest,
@@ -33,10 +36,14 @@ from backend.app.schemas import (
     SearchRequest,
     SearchResponse,
     SemanticChunkDraft,
+    SemanticSplitResult,
+    SplitPreviewResponse,
     SourceKind,
     SourceStatus,
     TagMatchMode,
     TagSummary,
+    TaskStatus,
+    TaskSummary,
 )
 from backend.app.services.auth import AuthService
 from backend.app.storage import StorageService
@@ -76,6 +83,22 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
+PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
+
+
+@dataclass(frozen=True, slots=True)
+class PdfTextBatch:
+    start_page: int | None
+    end_page: int | None
+    text: str
+
+    @property
+    def label(self) -> str:
+        if self.start_page is None or self.end_page is None:
+            return "PDF text"
+        if self.start_page == self.end_page:
+            return f"page {self.start_page}"
+        return f"pages {self.start_page}-{self.end_page}"
 
 
 class SourceService:
@@ -95,6 +118,76 @@ class SourceService:
         self._auth = auth
         self._storage = storage
         self._openai = openai
+        self._ingest_semaphore: asyncio.Semaphore | None = None
+        self._background_tasks: set[asyncio.Task[None]] = set()
+        self._closed = False
+
+    async def close(self) -> None:
+        self._closed = True
+        if not self._background_tasks:
+            return
+        tasks = tuple(self._background_tasks)
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+    def _ingest_runner_semaphore(self) -> asyncio.Semaphore:
+        if self._ingest_semaphore is None:
+            self._ingest_semaphore = asyncio.Semaphore(max(1, self._settings.task_runner_max_concurrency))
+        return self._ingest_semaphore
+
+    def _schedule_ingest_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("Source service is closed.")
+        task = asyncio.create_task(
+            self._run_ingest_job(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                task_id=task_id,
+                tag_ids=list(tag_ids),
+                user_guidance=user_guidance,
+            ),
+            name=f"ingest-source-{source_id}",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    async def _run_ingest_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        try:
+            async with self._ingest_runner_semaphore():
+                await self._execute_ingest_job(
+                    clerk_user_id=clerk_user_id,
+                    source_id=source_id,
+                    task_id=task_id,
+                    tag_ids=tag_ids,
+                    user_guidance=user_guidance,
+                )
+        except asyncio.CancelledError:
+            await self._cancel_ingest_job(clerk_user_id=clerk_user_id, source_id=source_id, task_id=task_id)
+            raise
+        except Exception:
+            logger.exception(
+                "source_ingest_background_task_crashed clerk_user_id=%s source_id=%s task_id=%s",
+                clerk_user_id,
+                source_id,
+                task_id,
+            )
 
     async def ensure_app_user(self, session: Any, *, clerk_user_id: str) -> AppUser:
         existing = await session.scalar(select(AppUser).where(AppUser.clerk_user_id == clerk_user_id))
@@ -147,9 +240,14 @@ class SourceService:
                     or normalized_query in source.source_kind.casefold()
                 ]
             if selected_tag_ids:
+
                 def matches_tags(source: SourceFile) -> bool:
                     source_tag_ids = {link.tag_id for link in source.tag_links}
-                    return selected_tag_ids.issubset(source_tag_ids) if tag_match_mode == "all" else bool(selected_tag_ids & source_tag_ids)
+                    return (
+                        selected_tag_ids.issubset(source_tag_ids)
+                        if tag_match_mode == "all"
+                        else bool(selected_tag_ids & source_tag_ids)
+                    )
 
                 sources = [source for source in sources if matches_tags(source)]
 
@@ -186,10 +284,22 @@ class SourceService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            cleanup_result = await self._delete_openai_files_for_source(source=source)
             await self._storage.delete_object(key=source.storage_key)
+            await session.execute(
+                update(AppTask)
+                .where(AppTask.source_file_id == source.id)
+                .values(source_file_id=None, updated_at=_utcnow())
+            )
             await session.delete(source)
             await session.commit()
-            logger.info("source_deleted clerk_user_id=%s source_id=%s", clerk_user_id, source_id)
+            logger.info(
+                "source_deleted clerk_user_id=%s source_id=%s openai_chunk_files=%s openai_original_file=%s",
+                clerk_user_id,
+                source_id,
+                cleanup_result["chunk_file_count"],
+                cleanup_result["original_file_deleted"],
+            )
         return source_id
 
     async def ingest_source(
@@ -201,6 +311,7 @@ class SourceService:
         payload: bytes,
         tag_ids: list[str],
         user_guidance: str | None,
+        origin_surface: str,
     ) -> IngestFinalizeResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
@@ -239,34 +350,203 @@ class SourceService:
             )
             session.add(source)
             await session.flush()
+            task = AppTask(
+                user_id=app_user.id,
+                library_id=library.id,
+                kind="ingest",
+                status="queued",
+                title=f"Ingest: {display_title}",
+                origin_surface=origin_surface,
+                source_file_id=source.id,
+                input_json={
+                    "filename": filename,
+                    "declared_media_type": declared_media_type,
+                    "media_type": media_type,
+                    "byte_size": len(payload),
+                    "tag_ids": tag_ids,
+                    "user_guidance": user_guidance,
+                },
+                state_json={"stage": "queued", "source_id": source.id},
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+            session.add(task)
+            await session.commit()
+            await session.refresh(source)
+            await session.refresh(task)
+            logger.info(
+                "source_ingest_queued clerk_user_id=%s source_id=%s task_id=%s kind=%s bytes=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                source.source_kind,
+                source.byte_size,
+            )
+            self._schedule_ingest_job(
+                clerk_user_id=clerk_user_id,
+                source_id=source.id,
+                task_id=task.id,
+                tag_ids=tag_ids,
+                user_guidance=user_guidance,
+            )
+            return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
+
+    async def preview_semantic_split(
+        self,
+        *,
+        clerk_user_id: str,
+        filename: str,
+        declared_media_type: str | None,
+        payload: bytes,
+        user_guidance: str | None,
+    ) -> SplitPreviewResponse:
+        preview_started_at = perf_counter()
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to preview splits.")
+
+        media_type = guess_media_type(filename=filename, declared_media_type=declared_media_type)
+        source_kind = classify_source_kind(filename=filename, media_type=media_type)
+        source_title = Path(filename).stem or filename
+        extracted_text, strategy_hint = await self._extract_searchable_text(
+            filename=filename,
+            source_kind=source_kind,
+            media_type=media_type,
+            payload=payload,
+        )
+        split_result = await self._split_semantic_text(
+            source_id=None,
+            source_title=source_title,
+            source_kind=source_kind,
+            extracted_text=extracted_text,
+            user_guidance=user_guidance,
+        )
+        normalized_split = SemanticSplitResult(
+            strategy_label=split_result.strategy_label,
+            tags=_dedupe_text_values(split_result.tags),
+            chunks=_normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text),
+        )
+        logger.info(
+            "semantic_split_previewed clerk_user_id=%s filename=%s kind=%s strategy_hint=%s chunks=%s duration_ms=%.1f",
+            clerk_user_id,
+            filename,
+            source_kind,
+            strategy_hint,
+            len(normalized_split.chunks),
+            (perf_counter() - preview_started_at) * 1000,
+        )
+        return SplitPreviewResponse(
+            filename=filename,
+            media_type=media_type,
+            source_kind=source_kind,
+            byte_size=len(payload),
+            ingest_strategy=strategy_hint,
+            extracted_character_count=len(extracted_text),
+            split=normalized_split,
+            previewed_at=_utcnow(),
+        )
+
+    async def _execute_ingest_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        ingest_started_at = perf_counter()
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            source = await self._source_by_id(session, source_id=source_id)
+            task = await self._task_by_id(session, task_id=task_id)
+            library = source.library
+            now = _utcnow()
+            task.status = "running"
+            task.started_at = task.started_at or now
+            task.state_json = {"stage": "validating_tags", "source_id": source.id}
+            task.updated_at = now
+            await session.commit()
+            logger.info(
+                "source_ingest_started clerk_user_id=%s source_id=%s task_id=%s kind=%s bytes=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                source.source_kind,
+                source.byte_size,
+            )
 
             try:
                 selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
                 source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+                task.state_json = {"stage": "reading_source_payload", "source_id": source.id}
+                task.updated_at = _utcnow()
+                await session.commit()
+
+                payload = await self._storage.get_bytes(key=source.storage_key)
+                source_kind = cast(SourceKind, source.source_kind)
+                task.state_json = {"stage": "uploading_original_file", "source_id": source.id}
+                task.updated_at = _utcnow()
+                await session.commit()
                 source.openai_original_file_id = await self._openai.upload_file_bytes(
-                    filename=filename,
+                    filename=source.original_filename,
                     payload=payload,
                     purpose=_openai_file_purpose(source_kind=source_kind),
                 )
+                task.state_json = {
+                    "stage": "extracting_text",
+                    "source_id": source.id,
+                    "openai_original_file_id": source.openai_original_file_id,
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
 
                 extracted_text, strategy_hint = await self._extract_searchable_text(
-                    filename=filename,
+                    filename=source.original_filename,
                     source_kind=source_kind,
-                    media_type=media_type,
+                    media_type=source.media_type,
                     payload=payload,
                 )
                 source.ingest_strategy = strategy_hint
-                split_result = await self._openai.split_semantically(
-                    source_title=source.display_title,
-                    source_kind=source.source_kind,
-                    text=extracted_text,
+                task.state_json = {
+                    "stage": "splitting_semantically",
+                    "source_id": source.id,
+                    "strategy_hint": strategy_hint,
+                    "extracted_character_count": len(extracted_text),
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
+                split_started_at = perf_counter()
+                split_result = await self._split_semantically(
+                    source=source,
+                    extracted_text=extracted_text,
                     user_guidance=user_guidance,
+                )
+                logger.info(
+                    "source_ingest_split_completed clerk_user_id=%s source_id=%s task_id=%s tags=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(split_result.tags),
+                    len(split_result.chunks),
+                    (perf_counter() - split_started_at) * 1000,
                 )
                 auto_tags = await self._ensure_auto_tags(session, library=library, tag_names=split_result.tags)
                 merged_tags = _merge_tags([*selected_tags, *auto_tags])
                 source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in merged_tags]
 
                 normalized_chunks = _normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text)
+                publish_started_at = perf_counter()
+                task.state_json = {
+                    "stage": "publishing_chunks",
+                    "source_id": source.id,
+                    "chunk_count": len(normalized_chunks),
+                    "published_chunk_count": 0,
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
                 for draft in normalized_chunks:
                     chunk = SemanticChunk(
                         source_file_id=source.id,
@@ -307,28 +587,136 @@ class SourceService:
                     )
                     chunk.status = "ready"
                     chunk.updated_at = _utcnow()
+                    task.state_json = {
+                        "stage": "publishing_chunks",
+                        "source_id": source.id,
+                        "chunk_count": len(normalized_chunks),
+                        "published_chunk_count": draft.sequence,
+                        "last_openai_file_id": chunk.openai_file_id,
+                    }
+                    task.updated_at = _utcnow()
+                    await session.commit()
+                logger.info(
+                    "source_ingest_chunks_published clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(normalized_chunks),
+                    (perf_counter() - publish_started_at) * 1000,
+                )
 
                 source.status = "ready"
                 source.error_message = None
                 source.updated_at = _utcnow()
                 library.updated_at = _utcnow()
+                task.status = "completed"
+                task.state_json = {
+                    "stage": "completed",
+                    "source_id": source.id,
+                    "chunk_count": len(normalized_chunks),
+                    "tag_count": len(merged_tags),
+                }
+                task.result_json = {"source_id": source.id, "chunk_count": len(normalized_chunks)}
+                task.error_message = None
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
                 await session.commit()
-                await session.refresh(source)
+                logger.info(
+                    "source_ingested clerk_user_id=%s source_id=%s task_id=%s kind=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    source.source_kind,
+                    len(normalized_chunks),
+                    (perf_counter() - ingest_started_at) * 1000,
+                )
             except Exception as exc:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+                try:
+                    cleanup_result = await self._delete_openai_files_for_source(source=source)
+                except Exception as cleanup_error:
+                    cleanup_result = {"chunk_file_count": 0, "original_file_deleted": False}
+                    logger.warning(
+                        "source_ingest_cleanup_failed clerk_user_id=%s source_id=%s cleanup_error=%s",
+                        clerk_user_id,
+                        source.id,
+                        cleanup_error,
+                    )
+                else:
+                    source.openai_original_file_id = None
+                    for chunk in source.chunks:
+                        chunk.openai_file_id = None
                 source.status = "failed"
                 source.error_message = str(exc)
                 source.updated_at = _utcnow()
+                task.status = "failed"
+                task.state_json = {
+                    "stage": "failed",
+                    "source_id": source.id,
+                    "cleanup": cleanup_result,
+                }
+                task.error_message = str(exc)
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
                 await session.commit()
-                raise
+                logger.error(
+                    "source_ingest_failed clerk_user_id=%s source_id=%s task_id=%s error=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    exc,
+                    (perf_counter() - ingest_started_at) * 1000,
+                )
 
-            logger.info(
-                "source_ingested clerk_user_id=%s source_id=%s kind=%s chunks=%s",
+    async def _cancel_ingest_job(self, *, clerk_user_id: str, source_id: str, task_id: str) -> None:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            try:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+            except FileNotFoundError:
+                logger.warning(
+                    "source_ingest_cancel_missing_record clerk_user_id=%s source_id=%s task_id=%s",
+                    clerk_user_id,
+                    source_id,
+                    task_id,
+                )
+                return
+
+            try:
+                cleanup_result = await self._delete_openai_files_for_source(source=source)
+            except Exception as cleanup_error:
+                cleanup_result = {"chunk_file_count": 0, "original_file_deleted": False}
+                logger.warning(
+                    "source_ingest_cancel_cleanup_failed clerk_user_id=%s source_id=%s cleanup_error=%s",
+                    clerk_user_id,
+                    source.id,
+                    cleanup_error,
+                )
+            else:
+                source.openai_original_file_id = None
+                for chunk in source.chunks:
+                    chunk.openai_file_id = None
+            source.status = "failed"
+            source.error_message = "Ingest cancelled during shutdown."
+            source.updated_at = _utcnow()
+            task.status = "cancelled"
+            task.state_json = {
+                "stage": "cancelled",
+                "source_id": source.id,
+                "cleanup": cleanup_result,
+            }
+            task.error_message = "Ingest cancelled during shutdown."
+            task.completed_at = _utcnow()
+            task.updated_at = _utcnow()
+            await session.commit()
+            logger.warning(
+                "source_ingest_cancelled clerk_user_id=%s source_id=%s task_id=%s",
                 clerk_user_id,
                 source.id,
-                source.source_kind,
-                len(source.chunks),
+                task.id,
             )
-            return IngestFinalizeResponse(source=self._source_summary(source), task=None)
 
     async def search(self, *, clerk_user_id: str, request: SearchRequest) -> SearchResponse:
         hits = await self.search_chunks(clerk_user_id=clerk_user_id, request=request)
@@ -365,16 +753,20 @@ class SourceService:
             if not chunk_ids:
                 return []
             chunks = (
-                await session.execute(
-                    select(SemanticChunk)
-                    .options(
-                        selectinload(SemanticChunk.source_file)
-                        .selectinload(SourceFile.tag_links)
-                        .selectinload(SourceTagLink.tag)
+                (
+                    await session.execute(
+                        select(SemanticChunk)
+                        .options(
+                            selectinload(SemanticChunk.source_file)
+                            .selectinload(SourceFile.tag_links)
+                            .selectinload(SourceTagLink.tag)
+                        )
+                        .where(SemanticChunk.id.in_(chunk_ids))
                     )
-                    .where(SemanticChunk.id.in_(chunk_ids))
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             chunk_map = {chunk.id: chunk for chunk in chunks}
             candidates_by_chunk_id = {str(candidate.attributes.get("chunk_id")): candidate for candidate in candidates}
             output: list[ChunkHit] = []
@@ -482,6 +874,7 @@ class SourceService:
             .where(SourceFile.id == source_id, UserLibrary.user_id == app_user.id)
             .options(
                 selectinload(SourceFile.chunks),
+                selectinload(SourceFile.library),
                 selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
             )
         )
@@ -489,12 +882,67 @@ class SourceService:
             raise FileNotFoundError("Source not found.")
         return source
 
+    async def _source_by_id(
+        self,
+        session: Any,
+        *,
+        source_id: str,
+        populate_existing: bool = False,
+    ) -> SourceFile:
+        query = (
+            select(SourceFile)
+            .where(SourceFile.id == source_id)
+            .options(
+                selectinload(SourceFile.chunks),
+                selectinload(SourceFile.library),
+                selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
+            )
+        )
+        if populate_existing:
+            query = query.execution_options(populate_existing=True)
+        source = await session.scalar(query)
+        if source is None:
+            raise FileNotFoundError("Source not found.")
+        return source
+
+    async def _task_by_id(self, session: Any, *, task_id: str) -> AppTask:
+        task = await session.get(AppTask, task_id)
+        if task is None:
+            raise FileNotFoundError("Task not found.")
+        return task
+
+    async def _delete_openai_files_for_source(self, *, source: SourceFile) -> dict[str, object]:
+        cleanup_started_at = perf_counter()
+        vector_store_id = source.library.openai_vector_store_id
+        chunk_file_ids = [
+            chunk.openai_file_id
+            for chunk in sorted(source.chunks, key=lambda item: item.sequence)
+            if chunk.openai_file_id is not None
+        ]
+        for file_id in chunk_file_ids:
+            if vector_store_id is not None:
+                await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=file_id)
+            await self._openai.delete_file(file_id=file_id)
+        original_file_deleted = source.openai_original_file_id is not None
+        if source.openai_original_file_id is not None:
+            await self._openai.delete_file(file_id=source.openai_original_file_id)
+        logger.info(
+            "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_original_file=%s duration_ms=%.1f",
+            source.id,
+            len(chunk_file_ids),
+            original_file_deleted,
+            (perf_counter() - cleanup_started_at) * 1000,
+        )
+        return {"chunk_file_count": len(chunk_file_ids), "original_file_deleted": original_file_deleted}
+
     async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[Tag]:
         if not tag_ids:
             return []
         records = (
-            await session.execute(select(Tag).where(Tag.library_id == library_id, Tag.id.in_(tag_ids)))
-        ).scalars().all()
+            (await session.execute(select(Tag).where(Tag.library_id == library_id, Tag.id.in_(tag_ids))))
+            .scalars()
+            .all()
+        )
         if len(records) != len(set(tag_ids)):
             raise ValueError("One or more tag IDs are invalid for this library.")
         return sorted(records, key=lambda tag: tag.name.casefold())
@@ -550,10 +998,80 @@ class SourceService:
         if source_kind in {"audio", "video", "conversation"}:
             if source_kind == "conversation" and media_type.startswith("text/"):
                 return decode_text(payload), "conversation_text_semantic"
-            transcript, transcript_payload = await self._openai.transcribe_audio_bytes(filename=filename, payload=payload)
+            transcript, transcript_payload = await self._openai.transcribe_audio_bytes(
+                filename=filename, payload=payload
+            )
             del transcript_payload
             return transcript, "conversation_transcript_semantic"
-        return decode_text(payload) if media_type.startswith("text/") else f"{filename}\n\nNo text extraction is available.", "basic_metadata"
+        return decode_text(payload) if media_type.startswith(
+            "text/"
+        ) else f"{filename}\n\nNo text extraction is available.", "basic_metadata"
+
+    async def _split_semantically(
+        self,
+        *,
+        source: SourceFile,
+        extracted_text: str,
+        user_guidance: str | None,
+    ) -> SemanticSplitResult:
+        return await self._split_semantic_text(
+            source_id=source.id,
+            source_title=source.display_title,
+            source_kind=cast(SourceKind, source.source_kind),
+            extracted_text=extracted_text,
+            user_guidance=user_guidance,
+        )
+
+    async def _split_semantic_text(
+        self,
+        *,
+        source_id: str | None,
+        source_title: str,
+        source_kind: SourceKind,
+        extracted_text: str,
+        user_guidance: str | None,
+    ) -> SemanticSplitResult:
+        if source_kind != "pdf":
+            return await self._openai.split_semantically(
+                source_title=source_title,
+                source_kind=source_kind,
+                text=extracted_text,
+                user_guidance=user_guidance,
+            )
+
+        batches = build_pdf_text_batches(
+            extracted_text,
+            pages_per_batch=max(1, self._settings.semantic_split_pdf_batch_pages),
+        )
+        if len(batches) <= 1:
+            return await self._openai.split_semantically(
+                source_title=source_title,
+                source_kind=source_kind,
+                text=extracted_text,
+                user_guidance=user_guidance,
+            )
+
+        tags: list[str] = []
+        chunks: list[SemanticChunkDraft] = []
+        for batch in batches:
+            result = await self._openai.split_semantically(
+                source_title=f"{source_title} ({batch.label})",
+                source_kind=source_kind,
+                text=batch.text,
+                user_guidance=user_guidance,
+            )
+            tags.extend(result.tags)
+            chunks.extend(result.chunks)
+        logger.info(
+            "source_pdf_split_batched source_id=%s batches=%s pages_per_batch=%s chunks=%s",
+            source_id or "preview",
+            len(batches),
+            self._settings.semantic_split_pdf_batch_pages,
+            len(chunks),
+        )
+        return SemanticSplitResult(
+            strategy_label="pdf_page_batched_semantic", tags=_dedupe_text_values(tags), chunks=chunks
+        )
 
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
         return LibrarySourceSummary(
@@ -568,7 +1086,10 @@ class SourceService:
             error_message=source.error_message,
             created_at=source.created_at,
             updated_at=source.updated_at,
-            tags=[self._tag_summary(link.tag) for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())],
+            tags=[
+                self._tag_summary(link.tag)
+                for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
+            ],
             openai_original_file_id=source.openai_original_file_id,
         )
 
@@ -718,6 +1239,31 @@ def extract_pdf_text(*, filename: str, payload: bytes) -> str:
         temp_path.unlink(missing_ok=True)
 
 
+def build_pdf_text_batches(extracted_text: str, *, pages_per_batch: int) -> list[PdfTextBatch]:
+    normalized_batch_size = max(1, pages_per_batch)
+    pages: list[tuple[int, str]] = []
+    for match in PDF_PAGE_BLOCK_RE.finditer(extracted_text):
+        page_number = int(match.group("page"))
+        page_text = match.group("text").strip()
+        if page_text:
+            pages.append((page_number, f"[page {page_number}]\n{page_text}"))
+    if not pages:
+        stripped_text = extracted_text.strip()
+        return [PdfTextBatch(start_page=None, end_page=None, text=stripped_text)] if stripped_text else []
+
+    batches: list[PdfTextBatch] = []
+    for start in range(0, len(pages), normalized_batch_size):
+        page_batch = pages[start : start + normalized_batch_size]
+        batches.append(
+            PdfTextBatch(
+                start_page=page_batch[0][0],
+                end_page=page_batch[-1][0],
+                text="\n\n".join(page_text for _page_number, page_text in page_batch),
+            )
+        )
+    return batches
+
+
 def decode_text(payload: bytes) -> str:
     for encoding in ("utf-8", "utf-8-sig", "latin-1"):
         try:
@@ -771,6 +1317,19 @@ def _merge_tags(tags: list[Tag]) -> list[Tag]:
     return output[:TAG_SLOT_COUNT]
 
 
+def _dedupe_text_values(values: Sequence[str]) -> list[str]:
+    output: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = _clean_tag_name(value)
+        key = cleaned.casefold()
+        if not cleaned or key in seen:
+            continue
+        seen.add(key)
+        output.append(cleaned)
+    return output
+
+
 def _normalize_chunk_drafts(chunks: list[SemanticChunkDraft], *, fallback_text: str) -> list[SemanticChunkDraft]:
     if not chunks:
         return [
@@ -817,6 +1376,25 @@ def _openai_file_purpose(*, source_kind: str) -> FilePurpose:
     if source_kind == "image":
         return "vision"
     return "assistants"
+
+
+def _task_summary(task: AppTask) -> TaskSummary:
+    return TaskSummary(
+        id=task.id,
+        kind=cast(Any, task.kind),
+        status=cast(TaskStatus, task.status),
+        title=task.title,
+        origin_surface=cast(Any, task.origin_surface),
+        origin_thread_id=task.origin_thread_id,
+        source_file_id=task.source_file_id,
+        input_json=task.input_json,
+        result_json=task.result_json,
+        error_message=task.error_message,
+        started_at=task.started_at,
+        completed_at=task.completed_at,
+        created_at=task.created_at,
+        updated_at=task.updated_at,
+    )
 
 
 def _utcnow() -> datetime:

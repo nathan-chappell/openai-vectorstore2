@@ -1,6 +1,8 @@
 export type SourceKind = "pdf" | "text" | "conversation" | "image" | "audio" | "video" | "other";
 export type SourceStatus = "processing" | "ready" | "failed";
 export type TagMatchMode = "all" | "any";
+export type StructuredPayload = Record<string, unknown> | unknown[] | null;
+export type OpenAIAttributes = Record<string, string | number | boolean>;
 
 export type AuthUser = {
   clerk_user_id: string;
@@ -60,6 +62,33 @@ export type ChunkSummary = {
   updated_at: string;
 };
 
+export type SemanticChunkDraft = {
+  sequence: number;
+  title: string;
+  summary: string;
+  text: string;
+  keywords: string[];
+  locator: ChunkLocator;
+  strategy_label: string;
+};
+
+export type SemanticSplitResult = {
+  strategy_label: string;
+  tags: string[];
+  chunks: SemanticChunkDraft[];
+};
+
+export type SplitPreviewResponse = {
+  filename: string;
+  media_type: string;
+  source_kind: SourceKind;
+  byte_size: number;
+  ingest_strategy: string;
+  extracted_character_count: number;
+  split: SemanticSplitResult;
+  previewed_at: string;
+};
+
 export type SourceDetail = SourceSummary & {
   storage_provider: string;
   storage_key: string;
@@ -87,6 +116,7 @@ export type ChunkHit = {
   tags: string[];
   locator: ChunkLocator;
   openai_file_id: string | null;
+  attributes: OpenAIAttributes | null;
 };
 
 export type SearchResponse = {
@@ -118,6 +148,11 @@ export type ActionResponse = {
   asset: GeneratedAsset | null;
 };
 
+export type IngestFinalizeResponse = {
+  source: SourceSummary;
+  task: TaskSummary | null;
+};
+
 export type TaskSummary = {
   id: string;
   kind: "ingest" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
@@ -126,9 +161,17 @@ export type TaskSummary = {
   origin_surface: "web" | "mcp" | "chatkit" | "system";
   origin_thread_id: string | null;
   source_file_id: string | null;
+  input_json: StructuredPayload;
+  result_json: StructuredPayload;
   error_message: string | null;
+  started_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TaskDetail = TaskSummary & {
+  state_json: StructuredPayload;
 };
 
 export type TaskListResponse = {

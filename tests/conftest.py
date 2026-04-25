@@ -17,6 +17,9 @@ class FakeOpenAIGateway:
         self.vector_store_id = "vs_fake"
         self._chunks: dict[str, VectorSearchCandidate] = {}
         self._counter = 0
+        self.deleted_file_ids: list[str] = []
+        self.detached_vector_store_file_ids: list[tuple[str, str]] = []
+        self.fail_during_split = False
 
     async def close(self) -> None:
         return None
@@ -43,6 +46,8 @@ class FakeOpenAIGateway:
         user_guidance: str | None,
     ) -> SemanticSplitResult:
         del source_kind, user_guidance
+        if self.fail_during_split:
+            raise RuntimeError("Fake semantic split failure.")
         midpoint = max(1, len(text) // 2)
         first = text[:midpoint].strip() or text.strip()
         second = text[midpoint:].strip()
@@ -90,6 +95,12 @@ class FakeOpenAIGateway:
         )
         return file_id
 
+    async def detach_file_from_vector_store(self, *, vector_store_id: str, file_id: str) -> None:
+        self.detached_vector_store_file_ids.append((vector_store_id, file_id))
+
+    async def delete_file(self, *, file_id: str) -> None:
+        self.deleted_file_ids.append(file_id)
+
     async def search_vector_store(
         self,
         *,
@@ -111,7 +122,9 @@ class FakeOpenAIGateway:
         del prompt, size
         return base64.b64decode("iVBORw0KGgo="), {"model": "fake-image"}
 
-    async def generate_voice_bytes(self, *, text: str, voice: str, response_format: str) -> tuple[bytes, dict[str, object]]:
+    async def generate_voice_bytes(
+        self, *, text: str, voice: str, response_format: str
+    ) -> tuple[bytes, dict[str, object]]:
         del text
         return b"fake-audio", {"voice": voice, "response_format": response_format}
 

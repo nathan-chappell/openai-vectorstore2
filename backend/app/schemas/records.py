@@ -56,7 +56,11 @@ class ChunkLocator(BaseModel):
                 return f"line {self.start_line}"
             return f"lines {self.start_line}-{self.end_line}"
         if self.type == "time_range":
-            return f"{self.start_seconds:.1f}s-{self.end_seconds:.1f}s" if self.start_seconds is not None and self.end_seconds is not None else "time range"
+            return (
+                f"{self.start_seconds:.1f}s-{self.end_seconds:.1f}s"
+                if self.start_seconds is not None and self.end_seconds is not None
+                else "time range"
+            )
         return "generated"
 
 
@@ -125,6 +129,25 @@ class FileListResponse(BaseModel):
 class IngestFinalizeResponse(BaseModel):
     source: LibrarySourceSummary
     task: "TaskSummary | None" = None
+
+
+class SplitPreviewRequest(BaseModel):
+    filename: str = Field(min_length=1)
+    text: str | None = None
+    payload_base64: str | None = None
+    media_type: str | None = None
+    user_guidance: str | None = None
+
+
+class SplitPreviewResponse(BaseModel):
+    filename: str
+    media_type: str
+    source_kind: SourceKind
+    byte_size: int
+    ingest_strategy: str
+    extracted_character_count: int
+    split: SemanticSplitResult
+    previewed_at: datetime
 
 
 class SearchRequest(BaseModel):

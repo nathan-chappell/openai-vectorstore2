@@ -214,6 +214,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
         ]
 
+    def tool_names(self) -> set[str]:
+        return {tool.name for tool in self._build_tools()}
+
     def _build_tools(self) -> list[Tool]:
         @function_tool(name_override="list_sources")
         async def list_sources_tool(
@@ -289,6 +292,26 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     descend=max(0, min(descend, 4)),
                     max_width=max(1, min(max_width, 8)),
                 ),
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="preview_semantic_split")
+        async def preview_semantic_split_tool(
+            ctx: ChatKitToolContext,
+            filename: str,
+            text: str,
+            media_type: str | None = "text/plain",
+            user_guidance: str | None = None,
+        ) -> dict[str, object]:
+            """Preview semantic chunks and auto-tags for text without creating a source or publishing vectors."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Previewing semantic split without publishing chunks."))
+            response = await self._sources.preview_semantic_split(
+                clerk_user_id=request_context.clerk_user_id,
+                filename=filename,
+                declared_media_type=media_type,
+                payload=text.encode("utf-8"),
+                user_guidance=user_guidance,
             )
             return response.model_dump(mode="json")
 
@@ -405,6 +428,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             list_tags_tool,
             search_chunks_tool,
             branch_search_tool,
+            preview_semantic_split_tool,
             answer_from_library_tool,
             freeform_from_library_tool,
             generate_image_from_library_tool,
@@ -422,7 +446,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         return (
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
             "Use the direct app tools to list sources, inspect tags, search chunks, branch through related "
-            "semantic chunks, answer questions, and create image or voice assets. Prefer the user's selected "
+            "semantic chunks, preview proposed text splits without publishing them, answer questions, and create image or voice assets. "
+            "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance. Prefer the user's selected "
             "sources when present. Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."
         )
@@ -451,11 +476,7 @@ def _selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | N
 
 
 def _title_from_user_message(item: UserMessageItem) -> str | None:
-    text_parts = [
-        part.text.strip()
-        for part in item.content
-        if getattr(part, "type", None) == "text"
-    ]
+    text_parts = [part.text.strip() for part in item.content if getattr(part, "type", None) == "text"]
     combined = " ".join(part for part in text_parts if part).strip()
     if not combined:
         return None
