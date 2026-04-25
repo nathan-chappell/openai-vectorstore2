@@ -156,6 +156,7 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
 def _register_tools(*, server: FastMCP, services: AppServices) -> None:
     read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
     mutating = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+    destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
     @server.tool(name="list_sources", description="List sources in the user's semantic library.", annotations=read_only)
     async def list_sources_tool(
@@ -327,11 +328,40 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(
+        name="resplit_source",
+        description="Replace one source's semantic chunks and vector-store files after explicit confirmation.",
+        annotations=destructive,
+    )
+    async def resplit_source_tool(
+        source_id: Annotated[str, Field(min_length=1)],
+        tag_ids: list[str] | None = None,
+        user_guidance: str | None = None,
+        confirm: bool = False,
+    ) -> IngestFinalizeResponse | dict[str, object]:
+        clerk_user_id = current_mcp_clerk_user_id()
+        if not confirm:
+            return {
+                "confirmation_required": True,
+                "source_id": source_id,
+                "message": "Ask the user to confirm replacing this source's published chunks, then call resplit_source again with confirm=true.",
+            }
+        return await _run_logged_tool(
+            tool_name="resplit_source",
+            clerk_user_id=clerk_user_id,
+            arguments={"source_id": source_id, "tag_ids": tag_ids or [], "confirm": confirm},
+            operation=services.sources.resplit_source(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids,
+                user_guidance=user_guidance,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
         name="delete_source",
         description="Delete one source after explicit confirmation.",
-        annotations=ToolAnnotations(
-            readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False
-        ),
+        annotations=destructive,
     )
     async def delete_source_tool(
         source_id: Annotated[str, Field(min_length=1)],
@@ -627,6 +657,13 @@ def _summarize_result(result: object) -> object:
             "chunks": len(result.split.chunks),
             "tags": len(result.split.tags),
             "extracted_character_count": result.extracted_character_count,
+        }
+    if isinstance(result, IngestFinalizeResponse):
+        return {
+            "source_id": result.source.id,
+            "source_status": result.source.status,
+            "task_id": result.task.id if result.task is not None else None,
+            "task_status": result.task.status if result.task is not None else None,
         }
     if isinstance(result, ActionResponse):
         return {

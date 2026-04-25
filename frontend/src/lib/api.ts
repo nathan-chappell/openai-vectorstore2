@@ -3,6 +3,7 @@ import type {
   AuthUser,
   BranchSearchResponse,
   IngestFinalizeResponse,
+  ResplitSourceRequest,
   SearchResponse,
   SplitPreviewResponse,
   SourceDetail,
@@ -111,6 +112,13 @@ export async function previewSemanticSplit(file: File, userGuidance: string): Pr
   return apiRequest<SplitPreviewResponse>("/sources/split-preview", {
     method: "POST",
     body: formData,
+  });
+}
+
+export async function resplitSource(sourceId: string, payload: ResplitSourceRequest): Promise<IngestFinalizeResponse> {
+  return apiRequest<IngestFinalizeResponse>(`/sources/${encodeURIComponent(sourceId)}/resplit`, {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

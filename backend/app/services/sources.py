@@ -160,6 +160,30 @@ class SourceService:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    def _schedule_resplit_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("Source service is closed.")
+        task = asyncio.create_task(
+            self._run_resplit_job(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                task_id=task_id,
+                tag_ids=list(tag_ids),
+                user_guidance=user_guidance,
+            ),
+            name=f"resplit-source-{source_id}",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     async def _run_ingest_job(
         self,
         *,
@@ -184,6 +208,35 @@ class SourceService:
         except Exception:
             logger.exception(
                 "source_ingest_background_task_crashed clerk_user_id=%s source_id=%s task_id=%s",
+                clerk_user_id,
+                source_id,
+                task_id,
+            )
+
+    async def _run_resplit_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        try:
+            async with self._ingest_runner_semaphore():
+                await self._execute_resplit_job(
+                    clerk_user_id=clerk_user_id,
+                    source_id=source_id,
+                    task_id=task_id,
+                    tag_ids=tag_ids,
+                    user_guidance=user_guidance,
+                )
+        except asyncio.CancelledError:
+            await self._cancel_resplit_job(clerk_user_id=clerk_user_id, source_id=source_id, task_id=task_id)
+            raise
+        except Exception:
+            logger.exception(
+                "source_resplit_background_task_crashed clerk_user_id=%s source_id=%s task_id=%s",
                 clerk_user_id,
                 source_id,
                 task_id,
@@ -447,6 +500,80 @@ class SourceService:
             split=normalized_split,
             previewed_at=_utcnow(),
         )
+
+    async def resplit_source(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        tag_ids: list[str] | None,
+        user_guidance: str | None,
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> IngestFinalizeResponse:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to re-split sources.")
+            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            if source.status == "processing":
+                raise ValueError("Wait for the current source processing task to finish before re-splitting.")
+            library = source.library
+            await self._ensure_vector_store(session, library=library, app_user=app_user)
+
+            raw_tag_ids = list(tag_ids) if tag_ids is not None else [link.tag_id for link in source.tag_links]
+            selected_tag_ids = list(dict.fromkeys(raw_tag_ids))
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
+            replaced_chunk_count = len(source.chunks)
+            source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+            previous_status = source.status
+            previous_error_message = source.error_message
+            source.status = "processing"
+            source.error_message = None
+            source.updated_at = _utcnow()
+            task = AppTask(
+                user_id=app_user.id,
+                library_id=library.id,
+                kind="resplit",
+                status="queued",
+                title=f"Re-split: {source.display_title}",
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+                source_file_id=source.id,
+                input_json={
+                    "source_id": source.id,
+                    "filename": source.original_filename,
+                    "media_type": source.media_type,
+                    "tag_ids": selected_tag_ids,
+                    "user_guidance": user_guidance,
+                    "replaced_chunk_count": replaced_chunk_count,
+                    "previous_status": previous_status,
+                    "previous_error_message": previous_error_message,
+                },
+                state_json={"stage": "queued", "source_id": source.id},
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+            session.add(task)
+            await session.commit()
+            await session.refresh(source)
+            await session.refresh(task)
+            logger.info(
+                "source_resplit_queued clerk_user_id=%s source_id=%s task_id=%s replaced_chunks=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                replaced_chunk_count,
+            )
+            self._schedule_resplit_job(
+                clerk_user_id=clerk_user_id,
+                source_id=source.id,
+                task_id=task.id,
+                tag_ids=selected_tag_ids,
+                user_guidance=user_guidance,
+            )
+            return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
 
     async def _execute_ingest_job(
         self,
@@ -718,6 +845,312 @@ class SourceService:
                 task.id,
             )
 
+    async def _execute_resplit_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+        tag_ids: list[str],
+        user_guidance: str | None,
+    ) -> None:
+        resplit_started_at = perf_counter()
+        old_chunks_replaced = False
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            source = await self._source_by_id(session, source_id=source_id)
+            task = await self._task_by_id(session, task_id=task_id)
+            library = source.library
+            task_input = _dict_payload(task.input_json)
+            previous_status = str(task_input.get("previous_status") or "failed")
+            previous_error_raw = task_input.get("previous_error_message")
+            previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
+            now = _utcnow()
+            task.status = "running"
+            task.started_at = task.started_at or now
+            task.state_json = {"stage": "reading_source_payload", "source_id": source.id}
+            task.updated_at = now
+            await session.commit()
+            logger.info(
+                "source_resplit_started clerk_user_id=%s source_id=%s task_id=%s kind=%s old_chunks=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                source.source_kind,
+                len(source.chunks),
+            )
+
+            try:
+                selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+                payload = await self._storage.get_bytes(key=source.storage_key)
+                source_kind = cast(SourceKind, source.source_kind)
+                extracted_text, strategy_hint = await self._extract_searchable_text(
+                    filename=source.original_filename,
+                    source_kind=source_kind,
+                    media_type=source.media_type,
+                    payload=payload,
+                )
+                task.state_json = {
+                    "stage": "splitting_semantically",
+                    "source_id": source.id,
+                    "strategy_hint": strategy_hint,
+                    "extracted_character_count": len(extracted_text),
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
+                split_started_at = perf_counter()
+                split_result = await self._split_semantically(
+                    source=source,
+                    extracted_text=extracted_text,
+                    user_guidance=user_guidance,
+                )
+                logger.info(
+                    "source_resplit_split_completed clerk_user_id=%s source_id=%s task_id=%s tags=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(split_result.tags),
+                    len(split_result.chunks),
+                    (perf_counter() - split_started_at) * 1000,
+                )
+                auto_tags = await self._ensure_auto_tags(session, library=library, tag_names=split_result.tags)
+                merged_tags = _merge_tags([*selected_tags, *auto_tags])
+                normalized_chunks = _normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text)
+
+                if source.openai_original_file_id is None:
+                    task.state_json = {"stage": "uploading_original_file", "source_id": source.id}
+                    task.updated_at = _utcnow()
+                    await session.commit()
+                    source.openai_original_file_id = await self._openai.upload_file_bytes(
+                        filename=source.original_filename,
+                        payload=payload,
+                        purpose=_openai_file_purpose(source_kind=source_kind),
+                    )
+                    task.state_json = {
+                        "stage": "replacing_old_chunks",
+                        "source_id": source.id,
+                        "openai_original_file_id": source.openai_original_file_id,
+                    }
+                    task.updated_at = _utcnow()
+                    await session.commit()
+                else:
+                    task.state_json = {"stage": "replacing_old_chunks", "source_id": source.id}
+                    task.updated_at = _utcnow()
+                    await session.commit()
+
+                replaced_chunk_count = len(source.chunks)
+                cleanup_result = await self._delete_openai_chunk_files_for_source(source=source)
+                for chunk in source.chunks:
+                    chunk.openai_file_id = None
+                source.chunks.clear()
+                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in merged_tags]
+                source.ingest_strategy = strategy_hint
+                source.updated_at = _utcnow()
+                old_chunks_replaced = True
+                task.state_json = {
+                    "stage": "publishing_chunks",
+                    "source_id": source.id,
+                    "chunk_count": len(normalized_chunks),
+                    "published_chunk_count": 0,
+                    "cleanup": cleanup_result,
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
+
+                publish_started_at = perf_counter()
+                for draft in normalized_chunks:
+                    chunk = SemanticChunk(
+                        source_file_id=source.id,
+                        sequence=draft.sequence,
+                        title=draft.title,
+                        summary=draft.summary,
+                        text_content=draft.text,
+                        keywords_json=draft.keywords,
+                        locator_type=draft.locator.type,
+                        start_page=draft.locator.start_page,
+                        end_page=draft.locator.end_page,
+                        start_line=draft.locator.start_line,
+                        end_line=draft.locator.end_line,
+                        start_seconds=draft.locator.start_seconds,
+                        end_seconds=draft.locator.end_seconds,
+                        strategy_label=draft.strategy_label,
+                        status="processing",
+                        created_at=_utcnow(),
+                        updated_at=_utcnow(),
+                    )
+                    session.add(chunk)
+                    await session.flush()
+                    attributes = build_vector_attributes(
+                        library_id=library.id,
+                        source_id=source.id,
+                        chunk_id=chunk.id,
+                        source_kind=source.source_kind,
+                        content_kind="semantic_chunk",
+                        title=chunk.title,
+                        tag_slugs=[tag.slug for tag in merged_tags],
+                    )
+                    chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
+                    chunk.openai_file_id = await self._openai.attach_chunk_to_vector_store(
+                        vector_store_id=library.openai_vector_store_id or "",
+                        filename=f"{source.original_filename}.chunk-{chunk.sequence}.md",
+                        text_content=render_chunk_markdown(source=source, chunk=chunk),
+                        attributes=attributes,
+                    )
+                    chunk.status = "ready"
+                    chunk.updated_at = _utcnow()
+                    task.state_json = {
+                        "stage": "publishing_chunks",
+                        "source_id": source.id,
+                        "chunk_count": len(normalized_chunks),
+                        "published_chunk_count": draft.sequence,
+                        "last_openai_file_id": chunk.openai_file_id,
+                    }
+                    task.updated_at = _utcnow()
+                    await session.commit()
+                logger.info(
+                    "source_resplit_chunks_published clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(normalized_chunks),
+                    (perf_counter() - publish_started_at) * 1000,
+                )
+
+                source.status = "ready"
+                source.error_message = None
+                source.updated_at = _utcnow()
+                library.updated_at = _utcnow()
+                task.status = "completed"
+                task.state_json = {
+                    "stage": "completed",
+                    "source_id": source.id,
+                    "chunk_count": len(normalized_chunks),
+                    "replaced_chunk_count": replaced_chunk_count,
+                    "tag_count": len(merged_tags),
+                }
+                task.result_json = {
+                    "source_id": source.id,
+                    "chunk_count": len(normalized_chunks),
+                    "replaced_chunk_count": replaced_chunk_count,
+                }
+                task.error_message = None
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
+                await session.commit()
+                logger.info(
+                    "source_resplit_completed clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(normalized_chunks),
+                    (perf_counter() - resplit_started_at) * 1000,
+                )
+            except Exception as exc:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+                if old_chunks_replaced:
+                    try:
+                        cleanup_result = await self._delete_openai_chunk_files_for_source(source=source)
+                    except Exception as cleanup_error:
+                        cleanup_result = {"chunk_file_count": 0}
+                        logger.warning(
+                            "source_resplit_cleanup_failed clerk_user_id=%s source_id=%s cleanup_error=%s",
+                            clerk_user_id,
+                            source.id,
+                            cleanup_error,
+                        )
+                    else:
+                        for chunk in source.chunks:
+                            chunk.openai_file_id = None
+                    source.status = "failed"
+                    source.error_message = str(exc)
+                else:
+                    cleanup_result = {"chunk_file_count": 0}
+                    source.status = previous_status
+                    source.error_message = previous_error_message
+                source.updated_at = _utcnow()
+                task.status = "failed"
+                task.state_json = {
+                    "stage": "failed",
+                    "source_id": source.id,
+                    "old_chunks_replaced": old_chunks_replaced,
+                    "cleanup": cleanup_result,
+                }
+                task.error_message = str(exc)
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
+                await session.commit()
+                logger.error(
+                    "source_resplit_failed clerk_user_id=%s source_id=%s task_id=%s old_chunks_replaced=%s error=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    old_chunks_replaced,
+                    exc,
+                    (perf_counter() - resplit_started_at) * 1000,
+                )
+
+    async def _cancel_resplit_job(self, *, clerk_user_id: str, source_id: str, task_id: str) -> None:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            try:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+            except FileNotFoundError:
+                logger.warning(
+                    "source_resplit_cancel_missing_record clerk_user_id=%s source_id=%s task_id=%s",
+                    clerk_user_id,
+                    source_id,
+                    task_id,
+                )
+                return
+
+            task_input = _dict_payload(task.input_json)
+            previous_status = str(task_input.get("previous_status") or "failed")
+            previous_error_raw = task_input.get("previous_error_message")
+            previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
+            state = _dict_payload(task.state_json)
+            old_chunks_replaced = state.get("stage") in {"replacing_old_chunks", "publishing_chunks"}
+            if old_chunks_replaced:
+                try:
+                    cleanup_result = await self._delete_openai_chunk_files_for_source(source=source)
+                except Exception as cleanup_error:
+                    cleanup_result = {"chunk_file_count": 0}
+                    logger.warning(
+                        "source_resplit_cancel_cleanup_failed clerk_user_id=%s source_id=%s cleanup_error=%s",
+                        clerk_user_id,
+                        source.id,
+                        cleanup_error,
+                    )
+                else:
+                    for chunk in source.chunks:
+                        chunk.openai_file_id = None
+                source.status = "failed"
+                source.error_message = "Re-split cancelled during shutdown after replacement started."
+            else:
+                cleanup_result = {"chunk_file_count": 0}
+                source.status = previous_status
+                source.error_message = previous_error_message
+            source.updated_at = _utcnow()
+            task.status = "cancelled"
+            task.state_json = {
+                "stage": "cancelled",
+                "source_id": source.id,
+                "old_chunks_replaced": old_chunks_replaced,
+                "cleanup": cleanup_result,
+            }
+            task.error_message = "Re-split cancelled during shutdown."
+            task.completed_at = _utcnow()
+            task.updated_at = _utcnow()
+            await session.commit()
+            logger.warning(
+                "source_resplit_cancelled clerk_user_id=%s source_id=%s task_id=%s old_chunks_replaced=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                old_chunks_replaced,
+            )
+
     async def search(self, *, clerk_user_id: str, request: SearchRequest) -> SearchResponse:
         hits = await self.search_chunks(clerk_user_id=clerk_user_id, request=request)
         return SearchResponse(query=request.query, hits=hits)
@@ -913,6 +1346,21 @@ class SourceService:
 
     async def _delete_openai_files_for_source(self, *, source: SourceFile) -> dict[str, object]:
         cleanup_started_at = perf_counter()
+        chunk_cleanup = await self._delete_openai_chunk_files_for_source(source=source)
+        original_file_deleted = source.openai_original_file_id is not None
+        if source.openai_original_file_id is not None:
+            await self._openai.delete_file(file_id=source.openai_original_file_id)
+        logger.info(
+            "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_original_file=%s duration_ms=%.1f",
+            source.id,
+            chunk_cleanup["chunk_file_count"],
+            original_file_deleted,
+            (perf_counter() - cleanup_started_at) * 1000,
+        )
+        return {"chunk_file_count": chunk_cleanup["chunk_file_count"], "original_file_deleted": original_file_deleted}
+
+    async def _delete_openai_chunk_files_for_source(self, *, source: SourceFile) -> dict[str, int]:
+        cleanup_started_at = perf_counter()
         vector_store_id = source.library.openai_vector_store_id
         chunk_file_ids = [
             chunk.openai_file_id
@@ -923,17 +1371,13 @@ class SourceService:
             if vector_store_id is not None:
                 await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=file_id)
             await self._openai.delete_file(file_id=file_id)
-        original_file_deleted = source.openai_original_file_id is not None
-        if source.openai_original_file_id is not None:
-            await self._openai.delete_file(file_id=source.openai_original_file_id)
         logger.info(
-            "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_original_file=%s duration_ms=%.1f",
+            "source_openai_chunk_files_cleaned source_id=%s openai_chunk_files=%s duration_ms=%.1f",
             source.id,
             len(chunk_file_ids),
-            original_file_deleted,
             (perf_counter() - cleanup_started_at) * 1000,
         )
-        return {"chunk_file_count": len(chunk_file_ids), "original_file_deleted": original_file_deleted}
+        return {"chunk_file_count": len(chunk_file_ids)}
 
     async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[Tag]:
         if not tag_ids:
@@ -1328,6 +1772,10 @@ def _dedupe_text_values(values: Sequence[str]) -> list[str]:
         seen.add(key)
         output.append(cleaned)
     return output
+
+
+def _dict_payload(value: object) -> dict[str, object]:
+    return value if isinstance(value, dict) else {}
 
 
 def _normalize_chunk_drafts(chunks: list[SemanticChunkDraft], *, fallback_text: str) -> list[SemanticChunkDraft]:

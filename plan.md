@@ -157,7 +157,7 @@ Tasks:
 - [x] Add a page-batched smart split strategy that can handle large PDFs without overflowing model input.
 - [x] Add a split-preview model that includes proposed chunks, titles, summaries, keywords, locators, and auto-tags before vector-store publication.
 - [x] Decide whether split preview is persisted as task `state_json`, a new table, or only a transient response. Prefer task state first unless preview editing becomes complex.
-- Add a re-split operation for a failed or ready source that invalidates/replaces chunks and vector-store files safely.
+- [x] Add a re-split operation for a failed or ready source that invalidates/replaces chunks and vector-store files safely.
 - Expose PDF smart split through:
   - [x] Web ChatKit tool.
   - [x] REST endpoint for upload/preview/finalize if needed by the UI.
@@ -174,7 +174,10 @@ Implementation notes:
 - Added `POST /api/sources/split-preview`, ChatKit `preview_semantic_split`, MCP `preview_text_split`, and MCP `preview_file_split`. These run extraction and semantic/PDF batching but do not create sources, tasks, chunks, OpenAI files, or vector-store attachments.
 - Added frontend TypeScript/API contracts for split previews so a UI can call the REST preview path later.
 - Added integration tests that prove REST and MCP previews return chunk/tag drafts while leaving source/task state empty.
-- Remaining Phase 3 work: user-visible re-split, MCP Apps UI controls, richer PDF fixture coverage, and optional direct frontend preview UI.
+- Added a task-backed `resplit_source` operation exposed through REST, ChatKit, and MCP. It computes the new split before deleting old chunk/vector files so pre-replacement failures preserve existing ready chunks.
+- Re-split preserves the original OpenAI file when present, replaces old semantic chunk rows after successful split, detaches/deletes old chunk vector files, and records replacement progress in `AppTask(kind="resplit")`.
+- Added frontend TypeScript/API contracts for re-split and integration tests for successful replacement plus failed pre-replacement preservation.
+- Remaining Phase 3 work: MCP Apps UI controls, richer PDF fixture coverage, and optional direct frontend preview/re-split UI.
 
 Decision updates:
 

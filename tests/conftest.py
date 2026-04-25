@@ -100,6 +100,7 @@ class FakeOpenAIGateway:
 
     async def delete_file(self, *, file_id: str) -> None:
         self.deleted_file_ids.append(file_id)
+        self._chunks.pop(file_id, None)
 
     async def search_vector_store(
         self,

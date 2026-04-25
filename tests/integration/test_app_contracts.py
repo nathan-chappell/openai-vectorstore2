@@ -31,6 +31,7 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "IngestFinalizeResponse": ("IngestFinalizeResponse", {"source", "task"}),
     "LibrarySourceDetail": ("SourceDetail", {"chunks", "ingest_strategy", "storage_key", "storage_provider"}),
     "LibrarySourceSummary": ("SourceSummary", {"chunk_count", "display_title", "id", "source_kind", "status", "tags"}),
+    "ResplitSourceRequest": ("ResplitSourceRequest", {"tag_ids", "user_guidance"}),
     "SearchResponse": ("SearchResponse", {"hits", "query"}),
     "SemanticChunkDraft": (
         "SemanticChunkDraft",
@@ -86,6 +87,7 @@ def test_frontend_types_cover_public_schema_contracts(
     for backend_schema, (frontend_type, expected_fields) in FRONTEND_SCHEMA_CONTRACT.items():
         assert backend_schema in backend_schemas
         assert expected_fields <= _exported_type_fields(frontend_source, frontend_type)
+    assert '"resplit"' in frontend_source
 
 
 @pytest.mark.asyncio
@@ -231,6 +233,147 @@ async def test_http_split_preview_is_inspect_only(
 
 
 @pytest.mark.asyncio
+async def test_http_resplit_replaces_chunks_after_successful_split(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={
+                    "file": ("resplit-note.txt", b"First split. Then split again with safer replacement.", "text/plain")
+                },
+            )
+            assert upload.status_code == 200
+            upload_payload = upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=upload_payload["task"]["id"],
+                expected_status="completed",
+            )
+
+            source_id = upload_payload["source"]["id"]
+            before = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert before.status_code == 200
+            before_payload = before.json()
+            original_file_id = before_payload["openai_original_file_id"]
+            old_chunk_file_ids = [
+                chunk["openai_file_id"] for chunk in before_payload["chunks"] if chunk["openai_file_id"] is not None
+            ]
+            assert original_file_id is not None
+            assert old_chunk_file_ids
+
+            resplit = await client.post(
+                f"/api/sources/{source_id}/resplit",
+                headers=auth_headers,
+                json={"user_guidance": "Use a fresh compact split."},
+            )
+            assert resplit.status_code == 200
+            resplit_payload = resplit.json()
+            assert resplit_payload["source"]["status"] == "processing"
+            assert resplit_payload["task"]["kind"] == "resplit"
+            assert resplit_payload["task"]["origin_surface"] == "web"
+            completed_task = await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=resplit_payload["task"]["id"],
+                expected_status="completed",
+            )
+            result_json = completed_task["result_json"]
+            assert isinstance(result_json, dict)
+            assert result_json["replaced_chunk_count"] == len(old_chunk_file_ids)
+
+            after = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert after.status_code == 200
+            after_payload = after.json()
+            assert after_payload["status"] == "ready"
+            assert after_payload["openai_original_file_id"] == original_file_id
+            new_chunk_file_ids = [
+                chunk["openai_file_id"] for chunk in after_payload["chunks"] if chunk["openai_file_id"] is not None
+            ]
+            assert new_chunk_file_ids
+            assert not set(old_chunk_file_ids) & set(new_chunk_file_ids)
+
+            openai_gateway = app.state.services.openai
+            assert set(old_chunk_file_ids) <= set(openai_gateway.deleted_file_ids)
+            assert original_file_id not in openai_gateway.deleted_file_ids
+            assert {("vs_fake", file_id) for file_id in old_chunk_file_ids} <= set(
+                openai_gateway.detached_vector_store_file_ids
+            )
+
+
+@pytest.mark.asyncio
+async def test_failed_resplit_preserves_ready_chunks_before_replacement(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("stable-note.txt", b"Keep these chunks when a re-split fails.", "text/plain")},
+            )
+            assert upload.status_code == 200
+            upload_payload = upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=upload_payload["task"]["id"],
+                expected_status="completed",
+            )
+            source_id = upload_payload["source"]["id"]
+            before = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert before.status_code == 200
+            before_payload = before.json()
+            old_chunk_ids = [chunk["id"] for chunk in before_payload["chunks"]]
+            old_chunk_file_ids = [
+                chunk["openai_file_id"] for chunk in before_payload["chunks"] if chunk["openai_file_id"] is not None
+            ]
+            app.state.services.openai.deleted_file_ids.clear()
+            app.state.services.openai.detached_vector_store_file_ids.clear()
+            app.state.services.openai.fail_during_split = True
+
+            resplit = await client.post(
+                f"/api/sources/{source_id}/resplit",
+                headers=auth_headers,
+                json={"user_guidance": "This split will fail before replacement."},
+            )
+            assert resplit.status_code == 200
+            failed_task = await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=resplit.json()["task"]["id"],
+                expected_status="failed",
+            )
+
+            after = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert after.status_code == 200
+            after_payload = after.json()
+            assert after_payload["status"] == "ready"
+            assert [chunk["id"] for chunk in after_payload["chunks"]] == old_chunk_ids
+            assert [
+                chunk["openai_file_id"] for chunk in after_payload["chunks"] if chunk["openai_file_id"] is not None
+            ] == old_chunk_file_ids
+            assert app.state.services.openai.deleted_file_ids == []
+            assert app.state.services.openai.detached_vector_store_file_ids == []
+            state_json = failed_task["state_json"]
+            assert isinstance(state_json, dict)
+            assert state_json["old_chunks_replaced"] is False
+
+
+@pytest.mark.asyncio
 async def test_failed_ingest_cleans_up_tracked_openai_files(
     configured_settings: AppSettings,
     fake_openai: None,
@@ -286,6 +429,8 @@ async def test_mcp_server_exposes_app_first_tools(
     assert set(tools) == mcp_tool_names()
     assert tools["delete_source"].annotations is not None
     assert tools["delete_source"].annotations.destructiveHint is True
+    assert tools["resplit_source"].annotations is not None
+    assert tools["resplit_source"].annotations.destructiveHint is True
     assert set(tools["ingest_file_source"].parameters["required"]) == {"filename", "payload_base64"}
     assert set(tools["preview_file_split"].parameters["required"]) == {"filename", "payload_base64"}
     assert tools["search_chunks"].parameters["required"] == ["query"]

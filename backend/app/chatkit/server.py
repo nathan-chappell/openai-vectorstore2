@@ -315,6 +315,26 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return response.model_dump(mode="json")
 
+        @function_tool(name_override="resplit_source")
+        async def resplit_source_tool(
+            ctx: ChatKitToolContext,
+            source_id: str,
+            tag_ids: list[str] | None = None,
+            user_guidance: str | None = None,
+        ) -> dict[str, object]:
+            """Queue a re-split that replaces one source's published chunks using its stored payload."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Queuing a safe re-split for the selected source."))
+            response = await self._sources.resplit_source(
+                clerk_user_id=request_context.clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids,
+                user_guidance=user_guidance,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="answer_from_library")
         async def answer_from_library_tool(
             ctx: ChatKitToolContext,
@@ -429,6 +449,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             search_chunks_tool,
             branch_search_tool,
             preview_semantic_split_tool,
+            resplit_source_tool,
             answer_from_library_tool,
             freeform_from_library_tool,
             generate_image_from_library_tool,
@@ -446,8 +467,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         return (
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
             "Use the direct app tools to list sources, inspect tags, search chunks, branch through related "
-            "semantic chunks, preview proposed text splits without publishing them, answer questions, and create image or voice assets. "
-            "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance. Prefer the user's selected "
+            "semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
+            "to replace its published chunks, answer questions, and create image or voice assets. "
+            "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. Prefer the user's selected "
             "sources when present. Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."
         )

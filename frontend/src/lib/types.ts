@@ -89,6 +89,11 @@ export type SplitPreviewResponse = {
   previewed_at: string;
 };
 
+export type ResplitSourceRequest = {
+  tag_ids?: string[] | null;
+  user_guidance?: string | null;
+};
+
 export type SourceDetail = SourceSummary & {
   storage_provider: string;
   storage_key: string;
@@ -155,7 +160,7 @@ export type IngestFinalizeResponse = {
 
 export type TaskSummary = {
   id: string;
-  kind: "ingest" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
+  kind: "ingest" | "resplit" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   title: string;
   origin_surface: "web" | "mcp" | "chatkit" | "system";

@@ -11,7 +11,7 @@ OpenAIAttributes: TypeAlias = dict[str, OpenAIAttributeValue]
 
 SourceKind: TypeAlias = Literal["pdf", "text", "conversation", "image", "audio", "video", "other"]
 SourceStatus: TypeAlias = Literal["processing", "ready", "failed"]
-TaskKind: TypeAlias = Literal["ingest", "qa", "freeform", "branch_search", "image_gen", "voice_gen"]
+TaskKind: TypeAlias = Literal["ingest", "resplit", "qa", "freeform", "branch_search", "image_gen", "voice_gen"]
 ActionKind: TypeAlias = Literal["qa", "freeform", "image_gen", "voice_gen"]
 TaskStatus: TypeAlias = Literal["queued", "running", "completed", "failed", "cancelled"]
 TaskOriginSurface: TypeAlias = Literal["web", "mcp", "chatkit", "system"]
@@ -129,6 +129,11 @@ class FileListResponse(BaseModel):
 class IngestFinalizeResponse(BaseModel):
     source: LibrarySourceSummary
     task: "TaskSummary | None" = None
+
+
+class ResplitSourceRequest(BaseModel):
+    tag_ids: list[str] | None = None
+    user_guidance: str | None = None
 
 
 class SplitPreviewRequest(BaseModel):

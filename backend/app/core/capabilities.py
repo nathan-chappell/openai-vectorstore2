@@ -9,6 +9,7 @@ AppOperation: TypeAlias = Literal[
     "get_source_detail",
     "preview_semantic_split",
     "ingest_source",
+    "resplit_source",
     "delete_source",
     "search_chunks",
     "branch_search",
@@ -69,6 +70,14 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("POST /api/sources",),
         mcp_tools=("ingest_text_source", "ingest_file_source"),
         notes="MCP file ingest currently accepts base64 payloads; richer Apps file inputs are planned.",
+    ),
+    AppCapability(
+        operation="resplit_source",
+        summary="Replace one source's semantic chunks and vector-store files using the stored source payload.",
+        rest_routes=("POST /api/sources/{source_id}/resplit",),
+        chatkit_tool="resplit_source",
+        mcp_tools=("resplit_source",),
+        notes="Re-split runs as a queued app task and preserves existing tags unless explicit tag IDs are supplied.",
     ),
     AppCapability(
         operation="delete_source",
