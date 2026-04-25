@@ -4,12 +4,14 @@ import asyncio
 from pathlib import Path
 from typing import Any
 
+from alembic import command
+from alembic.config import Config
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from backend.app.core.config import AppSettings
+from backend.app.core.config import PROJECT_ROOT, AppSettings
 from backend.app.models import Base
 
 _INITIALIZED_DATABASES: set[str] = set()
@@ -109,7 +111,9 @@ class DatabaseManager:
             if database_url in _INITIALIZED_DATABASES:
                 return
             ensure_database_directory(database_url)
-            if self._use_sync_sqlite:
+            if self._settings.database_schema_mode == "migrations":
+                await asyncio.to_thread(self._upgrade_to_head)
+            elif self._use_sync_sqlite:
                 if self._sync_engine is None:
                     raise RuntimeError("Synchronous SQLite engine is not configured.")
                 with self._sync_engine.begin() as connection:
@@ -120,6 +124,12 @@ class DatabaseManager:
                 async with self._async_engine.begin() as connection:
                     await connection.run_sync(Base.metadata.create_all)
             _INITIALIZED_DATABASES.add(database_url)
+
+    def _upgrade_to_head(self) -> None:
+        config = Config(str(PROJECT_ROOT / "alembic.ini"))
+        config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+        config.set_main_option("sqlalchemy.url", self._settings.sync_database_url)
+        command.upgrade(config, "head")
 
     def session(self) -> AsyncSession | AsyncSessionAdapter:
         if self._use_sync_sqlite:

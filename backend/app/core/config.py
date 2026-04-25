@@ -22,6 +22,7 @@ class AppSettings(BaseSettings):
     app_base_url: AnyHttpUrl = cast(AnyHttpUrl, "http://localhost:8000")
     app_name: str = "openai-vectorstore2"
     database_url: str = "sqlite+aiosqlite:///./.local/openai-vectorstore2.db"
+    database_schema_mode: Literal["create_all", "migrations"] = "create_all"
     static_dir: str = "frontend/dist"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [

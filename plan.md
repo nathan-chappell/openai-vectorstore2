@@ -137,8 +137,22 @@ Tasks:
 - [x] Add Alembic configuration and migration environment bound to the app ORM metadata.
 - [x] Create an initial migration from the current ORM state, including app-core, ChatKit, task, asset, tag, source, and chunk tables.
 - [x] Add a schema drift test that upgrades a temporary database to Alembic head and compares migrated tables/columns against `Base.metadata`.
+- [x] Add `DATABASE_SCHEMA_MODE` so local dev can keep `create_all` while production/test environments can bootstrap with Alembic `upgrade head`.
 - [x] Run pyright and migration tests.
 - [x] Commit this migration baseline once verified.
+
+## Current Implementation Pass: Migration Runtime Mode
+
+Status: completed.
+
+Tasks:
+
+- [x] Add `DATABASE_SCHEMA_MODE=create_all|migrations` with a local-dev default of `create_all`.
+- [x] Let `DatabaseManager.ensure_ready()` run Alembic `upgrade head` when migration mode is enabled.
+- [x] Keep `.env.example` explicit about the schema mode while preserving the current local default.
+- [x] Add a focused test proving the app database manager can bootstrap a temp SQLite database through Alembic.
+- [x] Run pyright and migration/backend integration tests.
+- [x] Commit this runtime migration mode once verified.
 
 ## Goal
 
@@ -493,6 +507,7 @@ Tasks:
   - OAuth/client/linking state if Clerk does not own it fully.
   - Any app-core operation audit tables, if needed.
 - [x] Add a schema check in CI that detects model drift from migrations.
+- [x] Add a runtime schema mode that can use Alembic migrations instead of `create_all`.
 - Keep ChatKit tables and app-core tables intentionally related:
   - `AppChatThread` and `AppTask.origin_thread_id`.
   - `AppChatAttachment` and source ingestion, if attachments become sources.
