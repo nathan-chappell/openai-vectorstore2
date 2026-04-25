@@ -4,6 +4,7 @@ import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import {
   authenticatedFetch,
   branchSearch,
+  createTag,
   deleteSource,
   freeformAction,
   getAuthenticatedUser,
@@ -88,6 +89,7 @@ export function App({ authMode }: AppProps) {
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
   const [sourceQuery, setSourceQuery] = useState("");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
+  const [newTagName, setNewTagName] = useState("");
   const [searchQuery, setSearchQuery] = useState("What matters most in this library?");
   const [actionPrompt, setActionPrompt] = useState("Answer from the selected sources with citations.");
   const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
@@ -277,6 +279,24 @@ export function App({ authMode }: AppProps) {
     setSelectedExplorerTagIds([]);
   }, []);
 
+  const createExplorerTag = useCallback(async (): Promise<void> => {
+    const name = newTagName.trim();
+    if (!name) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await createTag({ name });
+      setTags(await listTags());
+      setNewTagName("");
+      setStatus(`Tag ready: ${response.tag?.name ?? name}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tag create failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [newTagName]);
+
   const resplitSelectedSource = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
@@ -413,6 +433,7 @@ export function App({ authMode }: AppProps) {
   const deleteSourceFromExplorer = useCallback((sourceId: string): void => void removeSource(sourceId), [removeSource]);
   const previewSplitFromExplorer = useCallback((): void => void previewPendingSplit(), [previewPendingSplit]);
   const uploadFromExplorer = useCallback((): void => void handleUpload(), [handleUpload]);
+  const createTagFromExplorer = useCallback((): void => void createExplorerTag(), [createExplorerTag]);
   const refreshWorkspace = useCallback((): void => void refreshAll(), [refreshAll]);
   const runSearchFromWorkbench = useCallback((): void => void runSearch(), [runSearch]);
   const runBranchSearchFromWorkbench = useCallback((): void => void runBranchSearch(), [runBranchSearch]);
@@ -439,6 +460,7 @@ export function App({ authMode }: AppProps) {
         <SourceExplorer
           activeSourceId={activeSourceId}
           busy={busy}
+          newTagName={newTagName}
           pendingFiles={pendingFiles}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
           selectedSourceIdSet={selectedSourceIdSet}
@@ -452,7 +474,9 @@ export function App({ authMode }: AppProps) {
           onChooseFiles={chooseFiles}
           onClearChatSelection={clearChatSourceSelection}
           onClearExplorerFilters={clearExplorerFilters}
+          onCreateTag={createTagFromExplorer}
           onDeleteSource={deleteSourceFromExplorer}
+          onNewTagNameChange={setNewTagName}
           onOpenSource={openSourceFromExplorer}
           onPreviewSplit={previewSplitFromExplorer}
           onSelectVisibleSources={selectVisibleSourcesForChat}
@@ -535,6 +559,7 @@ function WorkspaceHeader({
 const SourceExplorer = memo(function SourceExplorer({
   activeSourceId,
   busy,
+  newTagName,
   pendingFiles,
   selectedExplorerTagIdSet,
   selectedSourceIdSet,
@@ -548,7 +573,9 @@ const SourceExplorer = memo(function SourceExplorer({
   onChooseFiles,
   onClearChatSelection,
   onClearExplorerFilters,
+  onCreateTag,
   onDeleteSource,
+  onNewTagNameChange,
   onOpenSource,
   onPreviewSplit,
   onSelectVisibleSources,
@@ -560,6 +587,7 @@ const SourceExplorer = memo(function SourceExplorer({
 }: {
   activeSourceId: string | null;
   busy: boolean;
+  newTagName: string;
   pendingFiles: File[];
   selectedExplorerTagIdSet: Set<string>;
   selectedSourceIdSet: Set<string>;
@@ -573,7 +601,9 @@ const SourceExplorer = memo(function SourceExplorer({
   onChooseFiles: (files: FileList | null) => void;
   onClearChatSelection: () => void;
   onClearExplorerFilters: () => void;
+  onCreateTag: () => void;
   onDeleteSource: (sourceId: string) => void;
+  onNewTagNameChange: (value: string) => void;
   onOpenSource: (sourceId: string) => void;
   onPreviewSplit: () => void;
   onSelectVisibleSources: () => void;
@@ -626,6 +656,23 @@ const SourceExplorer = memo(function SourceExplorer({
             </button>
           ))}
           {!tags.length ? <span>No tags</span> : null}
+        </div>
+        <div className="tag-create-row">
+          <input
+            aria-label="New tag name"
+            value={newTagName}
+            onChange={(event) => onNewTagNameChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onCreateTag();
+              }
+            }}
+            placeholder="New tag"
+          />
+          <button type="button" className="secondary-button" onClick={onCreateTag} disabled={busy || !newTagName.trim()}>
+            Add
+          </button>
         </div>
       </section>
 

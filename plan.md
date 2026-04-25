@@ -300,13 +300,13 @@ Acceptance criteria:
 
 ## Phase 4: Tag Model And Vector-Store Filter Correctness
 
-Status: in progress; vector filter correctness and source tag reindexing are implemented, while manual tag CRUD remains planned.
+Status: completed for the current baseline.
 
 Tag-filtered access already works through vector attributes. Harden it so tag edits and app metadata remain synchronized with OpenAI vector-store filters.
 
 Tasks:
 
-- Add manual tag create/update/delete operations if users need editable tags.
+- [x] Add manual tag create/update/delete operations if users need editable tags.
 - [x] Decide whether tags attach only to sources or can also attach to chunks. Current model attaches tags to sources.
 - [x] Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
 - [x] Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
@@ -323,7 +323,10 @@ Implementation notes:
 - Added DB-side post-filtering after vector search hydration so stale or overly broad vector-store results cannot escape app-owned source/tag/kind constraints.
 - Added `update_source_tags` across REST, ChatKit, MCP, frontend API/types, and the direct webapp inspector. It queues `AppTask(kind="reindex")`, updates source tag links, republishes existing chunk files with refreshed vector attributes, and best-effort deletes old chunk vector files.
 - Added integration coverage proving a source can move from one tag to another, old vector files are detached/deleted, and tag-filtered search follows the new app-owned tags.
-- Remaining Phase 4 work: manual tag create/update/delete operations and optional retry/reconcile affordances for failed tag reindex tasks.
+- Added manual tag create/update/delete operations across REST, ChatKit, and MCP. Tag rename/delete returns affected reindex tasks so vector-store tag slots stay aligned with app-owned tag names and slugs.
+- Added a small explorer affordance for creating manual tags without leaving the file browser. Rename/delete remain agent/tool operations for now to avoid crowding the explorer.
+- Added integration coverage for manual tag creation, tag rename reindexing, deleted-tag reindexing, and continued tag-filtered search after the slug changes.
+- Remaining Phase 4 work: optional retry/reconcile affordances for failed tag reindex tasks.
 
 Acceptance criteria:
 

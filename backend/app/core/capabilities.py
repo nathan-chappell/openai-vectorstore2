@@ -6,6 +6,9 @@ from typing import Literal, TypeAlias
 AppOperation: TypeAlias = Literal[
     "list_sources",
     "list_tags",
+    "create_tag",
+    "update_tag",
+    "delete_tag",
     "get_source_detail",
     "preview_semantic_split",
     "ingest_source",
@@ -49,6 +52,27 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("GET /api/tags",),
         chatkit_tool="list_tags",
         mcp_tools=("list_tags",),
+    ),
+    AppCapability(
+        operation="create_tag",
+        summary="Create or promote a manual tag for source organization and retrieval filtering.",
+        rest_routes=("POST /api/tags",),
+        chatkit_tool="create_tag",
+        mcp_tools=("create_tag",),
+    ),
+    AppCapability(
+        operation="update_tag",
+        summary="Rename or recolor a tag and reindex affected vector-store metadata when its slug changes.",
+        rest_routes=("PATCH /api/tags/{tag_id}",),
+        chatkit_tool="update_tag",
+        mcp_tools=("update_tag",),
+    ),
+    AppCapability(
+        operation="delete_tag",
+        summary="Delete a tag and queue reindexing for affected sources.",
+        rest_routes=("DELETE /api/tags/{tag_id}",),
+        chatkit_tool="delete_tag",
+        mcp_tools=("delete_tag",),
     ),
     AppCapability(
         operation="get_source_detail",

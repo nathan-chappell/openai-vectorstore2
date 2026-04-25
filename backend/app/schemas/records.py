@@ -142,6 +142,21 @@ class SourceTagsUpdateRequest(BaseModel):
     tag_ids: list[str] = Field(default_factory=list)
 
 
+class TagCreateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=32)
+
+
+class TagUpdateRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=80)
+    color: str | None = Field(default=None, max_length=32)
+
+
+class TagMutationResponse(BaseModel):
+    tag: TagSummary | None = None
+    tasks: list["TaskSummary"] = Field(default_factory=list)
+
+
 class SplitPreviewRequest(BaseModel):
     filename: str = Field(min_length=1)
     text: str | None = None
@@ -289,3 +304,4 @@ class TaskListResponse(BaseModel):
 
 
 IngestFinalizeResponse.model_rebuild()
+TagMutationResponse.model_rebuild()

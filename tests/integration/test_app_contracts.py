@@ -55,7 +55,10 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
             "split",
         },
     ),
+    "TagCreateRequest": ("TagCreateRequest", {"name", "color"}),
+    "TagMutationResponse": ("TagMutationResponse", {"tag", "tasks"}),
     "TagSummary": ("TagSummary", {"id", "name", "slug", "source", "source_count"}),
+    "TagUpdateRequest": ("TagUpdateRequest", {"name", "color"}),
     "TaskDetail": ("TaskDetail", {"state_json"}),
     "TaskListResponse": ("TaskListResponse", {"tasks"}),
     "TaskSummary": ("TaskSummary", {"id", "input_json", "kind", "origin_surface", "result_json", "status"}),
@@ -604,6 +607,99 @@ async def test_http_source_tag_update_reindexes_vector_attributes(
                 alpha_source_id,
                 bravo_source_id,
             }
+
+
+@pytest.mark.asyncio
+async def test_http_manual_tag_crud_reindexes_affected_sources(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+            )
+            assert upload.status_code == 200
+            upload_payload = upload.json()
+            source_id = upload_payload["source"]["id"]
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=upload_payload["task"]["id"],
+                expected_status="completed",
+            )
+
+            tags = await client.get("/api/tags", headers=auth_headers)
+            assert tags.status_code == 200
+            alpha_tag_id = {tag["name"].casefold(): tag["id"] for tag in tags.json()}["alpha"]
+
+            renamed = await client.patch(
+                f"/api/tags/{alpha_tag_id}",
+                headers=auth_headers,
+                json={"name": "alpha-renamed"},
+            )
+            assert renamed.status_code == 200
+            renamed_payload = renamed.json()
+            assert renamed_payload["tag"]["slug"] == "alpha-renamed"
+            assert [task["kind"] for task in renamed_payload["tasks"]] == ["reindex"]
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=renamed_payload["tasks"][0]["id"],
+                expected_status="completed",
+            )
+
+            renamed_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "tag_ids": [alpha_tag_id], "max_results": 8},
+            )
+            assert renamed_search.status_code == 200
+            assert {hit["source_file_id"] for hit in renamed_search.json()["hits"]} == {source_id}
+
+            manual_tag = await client.post(
+                "/api/tags",
+                headers=auth_headers,
+                json={"name": "review-needed", "color": "#2563eb"},
+            )
+            assert manual_tag.status_code == 200
+            manual_tag_id = manual_tag.json()["tag"]["id"]
+            assert manual_tag.json()["tag"]["source"] == "manual"
+
+            tag_update = await client.post(
+                f"/api/sources/{source_id}/tags",
+                headers=auth_headers,
+                json={"tag_ids": [alpha_tag_id, manual_tag_id]},
+            )
+            assert tag_update.status_code == 200
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=tag_update.json()["task"]["id"],
+                expected_status="completed",
+            )
+
+            deleted = await client.delete(f"/api/tags/{manual_tag_id}", headers=auth_headers)
+            assert deleted.status_code == 200
+            deleted_payload = deleted.json()
+            assert deleted_payload["tag"] is None
+            assert [task["kind"] for task in deleted_payload["tasks"]] == ["reindex"]
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=deleted_payload["tasks"][0]["id"],
+                expected_status="completed",
+            )
+
+            after_detail = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert after_detail.status_code == 200
+            assert [tag["id"] for tag in after_detail.json()["tags"]] == [alpha_tag_id]
 
 
 @pytest.mark.asyncio

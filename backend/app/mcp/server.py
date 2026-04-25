@@ -55,6 +55,7 @@ from backend.app.schemas import (
     SearchResponse,
     SplitPreviewResponse,
     SourceKind,
+    TagMutationResponse,
     TagSummary,
     TaskDetail,
     TaskKind,
@@ -143,8 +144,8 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
         instructions=(
             "You are the MCP adapter for an app-first semantic RAG workspace. The app owns ingestion, "
             "semantic chunks, storage, retrieval, and generation. Use sources for a visual library UI; "
-            "use list_sources, list_tags, search_chunks, branch_search, qa, freeform, generate_image, "
-            "generate_voice, update_source_tags, list_tasks, and get_task to operate on the current user's library. "
+            "use list_sources, list_tags, create_tag, update_tag, delete_tag, search_chunks, branch_search, qa, "
+            "freeform, generate_image, generate_voice, update_source_tags, list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
         ),
         auth=auth,
@@ -197,6 +198,70 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             clerk_user_id=clerk_user_id,
             arguments={},
             operation=_list_tags(services=services, clerk_user_id=clerk_user_id),
+        )
+
+    @server.tool(name="create_tag", description="Create a manual source tag.", annotations=mutating)
+    async def create_tag_tool(
+        name: Annotated[str, Field(min_length=1, max_length=80)],
+        color: Annotated[str | None, Field(max_length=32)] = None,
+    ) -> TagMutationResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="create_tag",
+            clerk_user_id=clerk_user_id,
+            arguments={"name": name, "color": color},
+            operation=services.sources.create_tag(clerk_user_id=clerk_user_id, name=name, color=color),
+        )
+
+    @server.tool(
+        name="update_tag",
+        description="Rename or recolor a tag and queue reindexing if its filter slug changes.",
+        annotations=mutating,
+    )
+    async def update_tag_tool(
+        tag_id: Annotated[str, Field(min_length=1)],
+        name: Annotated[str | None, Field(min_length=1, max_length=80)] = None,
+        color: Annotated[str | None, Field(max_length=32)] = None,
+    ) -> TagMutationResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="update_tag",
+            clerk_user_id=clerk_user_id,
+            arguments={"tag_id": tag_id, "name": name, "color": color},
+            operation=services.sources.update_tag(
+                clerk_user_id=clerk_user_id,
+                tag_id=tag_id,
+                name=name,
+                color=color,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="delete_tag",
+        description="Delete a tag after explicit confirmation and queue affected source reindexing.",
+        annotations=destructive,
+    )
+    async def delete_tag_tool(
+        tag_id: Annotated[str, Field(min_length=1)],
+        confirm: bool = False,
+    ) -> TagMutationResponse | dict[str, object]:
+        clerk_user_id = current_mcp_clerk_user_id()
+        if not confirm:
+            return {
+                "confirmation_required": True,
+                "tag_id": tag_id,
+                "message": "Ask the user to confirm deleting this tag, then call delete_tag again with confirm=true.",
+            }
+        return await _run_logged_tool(
+            tool_name="delete_tag",
+            clerk_user_id=clerk_user_id,
+            arguments={"tag_id": tag_id, "confirm": confirm},
+            operation=services.sources.delete_tag(
+                clerk_user_id=clerk_user_id,
+                tag_id=tag_id,
+                origin_surface="mcp",
+            ),
         )
 
     @server.tool(
@@ -745,6 +810,8 @@ def _summarize_result(result: object) -> object:
             "tags": len(result.split.tags),
             "extracted_character_count": result.extracted_character_count,
         }
+    if isinstance(result, TagMutationResponse):
+        return {"tag_id": result.tag.id if result.tag is not None else None, "tasks": len(result.tasks)}
     if isinstance(result, IngestFinalizeResponse):
         return {
             "source_id": result.source.id,

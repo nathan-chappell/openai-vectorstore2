@@ -10,8 +10,11 @@ import type {
   SourceDetail,
   SourceListResponse,
   SourceTagsUpdateRequest,
+  TagCreateRequest,
   TagMatchMode,
+  TagMutationResponse,
   TagSummary,
+  TagUpdateRequest,
   TaskListResponse,
 } from "./types";
 
@@ -144,6 +147,24 @@ export async function deleteSource(sourceId: string): Promise<void> {
 
 export async function listTags(): Promise<TagSummary[]> {
   return apiRequest<TagSummary[]>("/tags");
+}
+
+export async function createTag(payload: TagCreateRequest): Promise<TagMutationResponse> {
+  return apiRequest<TagMutationResponse>("/tags", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateTag(tagId: string, payload: TagUpdateRequest): Promise<TagMutationResponse> {
+  return apiRequest<TagMutationResponse>(`/tags/${encodeURIComponent(tagId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteTag(tagId: string): Promise<TagMutationResponse> {
+  return apiRequest<TagMutationResponse>(`/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
 }
 
 export async function searchChunks(payload: {

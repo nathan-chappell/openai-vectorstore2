@@ -15,7 +15,7 @@ from typing import Any, Literal, cast
 from openai.types.file_purpose import FilePurpose
 from openai.types.shared_params.comparison_filter import ComparisonFilter
 from openai.types.shared_params.compound_filter import CompoundFilter
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import AppSettings
@@ -41,6 +41,7 @@ from backend.app.schemas import (
     SourceKind,
     SourceStatus,
     TagMatchMode,
+    TagMutationResponse,
     TagSummary,
     TaskStatus,
     TaskSummary,
@@ -377,6 +378,179 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             library = await self._library_for_user(session, app_user=app_user)
             return [self._tag_summary(tag) for tag in sorted(library.tags, key=lambda item: item.name.casefold())]
+
+    async def create_tag(
+        self,
+        *,
+        clerk_user_id: str,
+        name: str,
+        color: str | None = None,
+    ) -> TagMutationResponse:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to create tags.")
+            library = await self._library_for_user(session, app_user=app_user)
+            cleaned_name = _clean_tag_name(name)
+            if not cleaned_name:
+                raise ValueError("Tag name is required.")
+            slug = slugify(cleaned_name)
+            tag = await session.scalar(
+                select(Tag).where(Tag.library_id == library.id, Tag.slug == slug).options(selectinload(Tag.source_links))
+            )
+            if tag is None:
+                tag = Tag(
+                    library_id=library.id,
+                    name=cleaned_name,
+                    slug=slug,
+                    color=_clean_tag_color(color),
+                    source="manual",
+                    created_at=_utcnow(),
+                )
+                session.add(tag)
+            else:
+                tag.source = "manual"
+                if color is not None:
+                    tag.color = _clean_tag_color(color)
+            await session.commit()
+            await session.refresh(tag)
+            logger.info("tag_created clerk_user_id=%s tag_id=%s slug=%s", clerk_user_id, tag.id, tag.slug)
+            return TagMutationResponse(tag=self._tag_summary(tag), tasks=[])
+
+    async def update_tag(
+        self,
+        *,
+        clerk_user_id: str,
+        tag_id: str,
+        name: str | None,
+        color: str | None,
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> TagMutationResponse:
+        await self._database.ensure_ready()
+        reindex_inputs: list[tuple[str, list[str]]] = []
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to update tags.")
+            tag = await self._tag_for_user(session, clerk_user_id=clerk_user_id, tag_id=tag_id)
+            library = tag.library
+            new_name = _clean_tag_name(name) if name is not None else tag.name
+            if not new_name:
+                raise ValueError("Tag name is required.")
+            new_slug = slugify(new_name)
+            duplicate = await session.scalar(
+                select(Tag).where(
+                    Tag.library_id == library.id,
+                    Tag.id != tag.id,
+                    or_(Tag.slug == new_slug, func.lower(Tag.name) == new_name.casefold()),
+                )
+            )
+            if duplicate is not None:
+                raise ValueError("Another tag already uses that name.")
+            linked_sources = sorted(
+                [link.source_file for link in tag.source_links],
+                key=lambda source: source.created_at,
+                reverse=True,
+            )
+            processing_sources = [source.display_title for source in linked_sources if source.status == "processing"]
+            if processing_sources:
+                raise ValueError("Wait for current source processing tasks to finish before updating this tag.")
+            slug_changed = new_slug != tag.slug
+            if slug_changed:
+                reindex_inputs = [
+                    (
+                        source.id,
+                        [link.tag_id for link in sorted(source.tag_links, key=lambda item: item.tag.name.casefold())],
+                    )
+                    for source in linked_sources
+                ]
+            tag.name = new_name
+            tag.slug = new_slug
+            if color is not None:
+                tag.color = _clean_tag_color(color)
+            tag.source = "manual"
+            await session.commit()
+            await session.refresh(tag)
+            tag_summary = self._tag_summary(tag)
+
+        tasks: list[TaskSummary] = []
+        for source_id, tag_ids in reindex_inputs:
+            response = await self.update_source_tags(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids,
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+            )
+            if response.task is not None:
+                tasks.append(response.task)
+        logger.info(
+            "tag_updated clerk_user_id=%s tag_id=%s reindex_tasks=%s",
+            clerk_user_id,
+            tag_id,
+            len(tasks),
+        )
+        return TagMutationResponse(tag=tag_summary, tasks=tasks)
+
+    async def delete_tag(
+        self,
+        *,
+        clerk_user_id: str,
+        tag_id: str,
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> TagMutationResponse:
+        await self._database.ensure_ready()
+        reindex_inputs: list[tuple[str, list[str]]] = []
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to delete tags.")
+            tag = await self._tag_for_user(session, clerk_user_id=clerk_user_id, tag_id=tag_id)
+            linked_sources = sorted(
+                [link.source_file for link in tag.source_links],
+                key=lambda source: source.created_at,
+                reverse=True,
+            )
+            processing_sources = [source.display_title for source in linked_sources if source.status == "processing"]
+            if processing_sources:
+                raise ValueError("Wait for current source processing tasks to finish before deleting this tag.")
+            reindex_inputs = [
+                (
+                    source.id,
+                    [
+                        link.tag_id
+                        for link in sorted(source.tag_links, key=lambda item: item.tag.name.casefold())
+                        if link.tag_id != tag.id
+                    ],
+                )
+                for source in linked_sources
+            ]
+            deleted_slug = tag.slug
+            await session.delete(tag)
+            await session.commit()
+
+        tasks: list[TaskSummary] = []
+        for source_id, tag_ids in reindex_inputs:
+            response = await self.update_source_tags(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids,
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+            )
+            if response.task is not None:
+                tasks.append(response.task)
+        logger.info(
+            "tag_deleted clerk_user_id=%s tag_id=%s slug=%s reindex_tasks=%s",
+            clerk_user_id,
+            tag_id,
+            deleted_slug,
+            len(tasks),
+        )
+        return TagMutationResponse(tag=None, tasks=tasks)
 
     async def get_source(self, *, clerk_user_id: str, source_id: str) -> LibrarySourceDetail:
         await self._database.ensure_ready()
@@ -1664,6 +1838,27 @@ class SourceService:
             raise FileNotFoundError("Source not found.")
         return source
 
+    async def _tag_for_user(self, session: Any, *, clerk_user_id: str, tag_id: str) -> Tag:
+        app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+        tag = await session.scalar(
+            select(Tag)
+            .join(UserLibrary, UserLibrary.id == Tag.library_id)
+            .where(Tag.id == tag_id, UserLibrary.user_id == app_user.id)
+            .options(
+                selectinload(Tag.library),
+                selectinload(Tag.source_links)
+                .selectinload(SourceTagLink.source_file)
+                .selectinload(SourceFile.tag_links)
+                .selectinload(SourceTagLink.tag),
+                selectinload(Tag.source_links)
+                .selectinload(SourceTagLink.source_file)
+                .selectinload(SourceFile.chunks),
+            )
+        )
+        if tag is None:
+            raise FileNotFoundError("Tag not found.")
+        return tag
+
     async def _source_by_id(
         self,
         session: Any,
@@ -2106,6 +2301,13 @@ def slugify(value: str) -> str:
 
 def _clean_tag_name(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip())[:80]
+
+
+def _clean_tag_color(value: str | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = value.strip()
+    return cleaned[:32] or None
 
 
 def _merge_tags(tags: list[Tag]) -> list[Tag]:

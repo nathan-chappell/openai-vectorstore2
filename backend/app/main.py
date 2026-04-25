@@ -30,7 +30,10 @@ from backend.app.schemas import (
     SearchRequest,
     SearchResponse,
     SplitPreviewResponse,
+    TagCreateRequest,
+    TagMutationResponse,
     TagSummary,
+    TagUpdateRequest,
     TaskDetail,
     TaskKind,
     TaskListResponse,
@@ -249,6 +252,61 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/tags")
     async def list_tags_api(user: AuthenticatedUser = Depends(require_active_web_user)) -> list[TagSummary]:
         return await services.sources.list_tags(clerk_user_id=user.clerk_user_id)
+
+    @app.post("/api/tags")
+    async def create_tag_api(
+        payload: TagCreateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> TagMutationResponse:
+        try:
+            return await services.sources.create_tag(
+                clerk_user_id=user.clerk_user_id,
+                name=payload.name,
+                color=payload.color,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.patch("/api/tags/{tag_id}")
+    async def update_tag_api(
+        tag_id: str,
+        payload: TagUpdateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> TagMutationResponse:
+        try:
+            return await services.sources.update_tag(
+                clerk_user_id=user.clerk_user_id,
+                tag_id=tag_id,
+                name=payload.name,
+                color=payload.color,
+                origin_surface="web",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.delete("/api/tags/{tag_id}")
+    async def delete_tag_api(
+        tag_id: str,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> TagMutationResponse:
+        try:
+            return await services.sources.delete_tag(
+                clerk_user_id=user.clerk_user_id,
+                tag_id=tag_id,
+                origin_surface="web",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     @app.post("/api/search")
     async def search_api(

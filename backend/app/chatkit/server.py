@@ -296,6 +296,56 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tags = await self._sources.list_tags(clerk_user_id=request_context.clerk_user_id)
             return [tag.model_dump(mode="json") for tag in tags]
 
+        @function_tool(name_override="create_tag")
+        async def create_tag_tool(ctx: ChatKitToolContext, name: str, color: str | None = None) -> dict[str, object]:
+            """Create a manual tag for organizing files and filtering retrieval."""
+            request_context = ctx.context.request_context
+            response = await self._sources.create_tag(
+                clerk_user_id=request_context.clerk_user_id,
+                name=name,
+                color=color,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="update_tag")
+        async def update_tag_tool(
+            ctx: ChatKitToolContext,
+            tag_id: str,
+            name: str | None = None,
+            color: str | None = None,
+        ) -> dict[str, object]:
+            """Rename or recolor a tag, queuing reindex tasks when filter slugs change."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Updating tag metadata and queuing affected reindex tasks."))
+            response = await self._sources.update_tag(
+                clerk_user_id=request_context.clerk_user_id,
+                tag_id=tag_id,
+                name=name,
+                color=color,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="delete_tag")
+        async def delete_tag_tool(ctx: ChatKitToolContext, tag_id: str, confirm: bool = False) -> dict[str, object]:
+            """Delete a tag only after explicit user confirmation."""
+            if not confirm:
+                return {
+                    "confirmation_required": True,
+                    "tag_id": tag_id,
+                    "message": "Ask the user to confirm tag deletion, then call delete_tag again with confirm=true.",
+                }
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Deleting tag and queuing affected reindex tasks."))
+            response = await self._sources.delete_tag(
+                clerk_user_id=request_context.clerk_user_id,
+                tag_id=tag_id,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="get_source_detail")
         async def get_source_detail_tool(ctx: ChatKitToolContext, source_id: str) -> dict[str, object]:
             """Load one source with its stored metadata and semantic chunks."""
@@ -606,6 +656,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         return [
             list_sources_tool,
             list_tags_tool,
+            create_tag_tool,
+            update_tag_tool,
+            delete_tag_tool,
             get_source_detail_tool,
             ingest_text_source_tool,
             search_chunks_tool,

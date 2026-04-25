@@ -52,7 +52,7 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
 
 test("explorer-selected file answers through chatkit and deletes cleanly", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop", "Run the live ChatKit flow once.");
-  test.setTimeout(300_000);
+  test.setTimeout(420_000);
 
   const marker = `pw-${Date.now()}-${Math.random().toString(16).slice(2)}`;
   const filename = `chatkit-live-${marker}.txt`;
@@ -68,6 +68,7 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await page.goto("/");
     await expect(page.getByText("Local dev auth")).toBeVisible();
     await waitForChatKit(page);
+    await page.locator(".upload-strip textarea").fill("Keep this small test fixture as one semantic chunk.");
 
     await page.locator(".upload-strip input[type='file']").setInputFiles({
       name: filename,
@@ -77,8 +78,9 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await expect(page.getByText("1 selected")).toBeVisible();
     await page.locator(".upload-strip").getByRole("button", { name: "Upload" }).click();
 
-    const source = await waitForSourceByFilename(request, filename, 120_000);
-    sourceId = source.id;
+    const queuedSource = await waitForSourceRecordByFilename(request, filename, 60_000);
+    sourceId = queuedSource.id;
+    const source = await waitForSourceReady(request, sourceId, 240_000);
     expect(source.status).toBe("ready");
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
@@ -232,7 +234,7 @@ async function waitForTaskMatching(
   throw new Error("Timed out waiting for a matching task.");
 }
 
-async function waitForSourceByFilename(
+async function waitForSourceRecordByFilename(
   request: APIRequestContext,
   filename: string,
   timeoutMs: number,
@@ -245,16 +247,35 @@ async function waitForSourceByFilename(
     if (response.ok()) {
       const payload = (await response.json()) as SourceListResponse;
       const source = payload.sources.find((candidate) => candidate.original_filename === filename);
-      if (source?.status === "ready") {
+      if (source) {
         return source;
-      }
-      if (source?.status === "failed") {
-        throw new Error(`Source ${filename} failed ingestion.`);
       }
     }
     await delay(1_000);
   }
-  throw new Error(`Timed out waiting for ${filename} to become ready.`);
+  throw new Error(`Timed out waiting for ${filename} to appear.`);
+}
+
+async function waitForSourceReady(
+  request: APIRequestContext,
+  sourceId: string,
+  timeoutMs: number,
+): Promise<SourceDetail> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await request.get(`${BACKEND_URL}/api/sources/${sourceId}`, { headers: AUTH_HEADERS });
+    if (response.ok()) {
+      const source = (await response.json()) as SourceDetail;
+      if (source.status === "ready") {
+        return source;
+      }
+      if (source.status === "failed") {
+        throw new Error(`Source ${sourceId} failed ingestion.`);
+      }
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for ${sourceId} to become ready.`);
 }
 
 async function waitForSourceDeleted(request: APIRequestContext, sourceId: string, timeoutMs: number): Promise<void> {

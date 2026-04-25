@@ -107,6 +107,21 @@ export type SourceTagsUpdateRequest = {
   tag_ids: string[];
 };
 
+export type TagCreateRequest = {
+  name: string;
+  color?: string | null;
+};
+
+export type TagUpdateRequest = {
+  name?: string | null;
+  color?: string | null;
+};
+
+export type TagMutationResponse = {
+  tag: TagSummary | null;
+  tasks: TaskSummary[];
+};
+
 export type SourceDetail = SourceSummary & {
   storage_provider: string;
   storage_key: string;
