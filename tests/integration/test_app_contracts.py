@@ -374,6 +374,103 @@ async def test_failed_resplit_preserves_ready_chunks_before_replacement(
 
 
 @pytest.mark.asyncio
+async def test_http_search_honors_tag_source_and_kind_filters(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            alpha_upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+            )
+            assert alpha_upload.status_code == 200
+            alpha_payload = alpha_upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=alpha_payload["task"]["id"],
+                expected_status="completed",
+            )
+            bravo_upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("bravo.txt", b"Bravo topic for semantic retrieval.", "text/plain")},
+            )
+            assert bravo_upload.status_code == 200
+            bravo_payload = bravo_upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=bravo_payload["task"]["id"],
+                expected_status="completed",
+            )
+
+            tags = await client.get("/api/tags", headers=auth_headers)
+            assert tags.status_code == 200
+            tag_ids_by_name = {tag["name"].casefold(): tag["id"] for tag in tags.json()}
+            alpha_tag_id = tag_ids_by_name["alpha"]
+            bravo_tag_id = tag_ids_by_name["bravo"]
+            alpha_source_id = alpha_payload["source"]["id"]
+            bravo_source_id = bravo_payload["source"]["id"]
+
+            alpha_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "tag_ids": [alpha_tag_id], "max_results": 8},
+            )
+            assert alpha_search.status_code == 200
+            assert {hit["source_file_id"] for hit in alpha_search.json()["hits"]} == {alpha_source_id}
+
+            any_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={
+                    "query": "retrieval",
+                    "tag_ids": [alpha_tag_id, bravo_tag_id],
+                    "tag_match_mode": "any",
+                    "max_results": 8,
+                },
+            )
+            assert any_search.status_code == 200
+            assert {hit["source_file_id"] for hit in any_search.json()["hits"]} == {alpha_source_id, bravo_source_id}
+
+            all_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={
+                    "query": "retrieval",
+                    "tag_ids": [alpha_tag_id, bravo_tag_id],
+                    "tag_match_mode": "all",
+                    "max_results": 8,
+                },
+            )
+            assert all_search.status_code == 200
+            assert all_search.json()["hits"] == []
+
+            source_scoped_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "selected_source_ids": [bravo_source_id], "max_results": 8},
+            )
+            assert source_scoped_search.status_code == 200
+            assert {hit["source_file_id"] for hit in source_scoped_search.json()["hits"]} == {bravo_source_id}
+
+            kind_scoped_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "source_kinds": ["pdf"], "max_results": 8},
+            )
+            assert kind_scoped_search.status_code == 200
+            assert kind_scoped_search.json()["hits"] == []
+
+
+@pytest.mark.asyncio
 async def test_failed_ingest_cleans_up_tracked_openai_files(
     configured_settings: AppSettings,
     fake_openai: None,

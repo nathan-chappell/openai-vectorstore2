@@ -83,6 +83,7 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
+VECTOR_ATTRIBUTES_VERSION = 1
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
 
 
@@ -1609,6 +1610,7 @@ def build_vector_attributes(
     tag_slugs: list[str],
 ) -> dict[str, str | float | bool]:
     attributes: dict[str, str | float | bool] = {
+        "attributes_version": float(VECTOR_ATTRIBUTES_VERSION),
         "library_id": library_id,
         "source_id": source_id,
         "chunk_id": chunk_id,

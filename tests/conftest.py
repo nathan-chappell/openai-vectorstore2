@@ -74,7 +74,13 @@ class FakeOpenAIGateway:
                     strategy_label="fake_semantic",
                 )
             )
-        return SemanticSplitResult(strategy_label="fake_semantic", tags=["semantic", "retrieval"], chunks=chunks)
+        tags = ["semantic", "retrieval"]
+        normalized_text = text.casefold()
+        if "alpha" in normalized_text:
+            tags.append("alpha")
+        if "bravo" in normalized_text:
+            tags.append("bravo")
+        return SemanticSplitResult(strategy_label="fake_semantic", tags=tags, chunks=chunks)
 
     async def attach_chunk_to_vector_store(
         self,
@@ -110,8 +116,10 @@ class FakeOpenAIGateway:
         max_results: int,
         filters: object,
     ) -> list[VectorSearchCandidate]:
-        del vector_store_id, query, filters
-        return list(self._chunks.values())[:max_results]
+        del vector_store_id, query
+        return [candidate for candidate in self._chunks.values() if _matches_filter(filters, candidate.attributes)][
+            :max_results
+        ]
 
     async def answer_with_chunks(self, *, prompt: str, hits: list[ChunkHit]) -> str:
         return f"Fake grounded answer to '{prompt}' using {len(hits)} chunks."
@@ -149,3 +157,25 @@ def fake_openai(monkeypatch: pytest.MonkeyPatch) -> None:
 @pytest.fixture
 def auth_headers() -> dict[str, str]:
     return {"Authorization": "Bearer local-dev"}
+
+
+def _matches_filter(filters: object, attributes: dict[str, str | float | bool]) -> bool:
+    if filters is None:
+        return True
+    if not isinstance(filters, dict):
+        return True
+    filter_type = filters.get("type")
+    if filter_type == "eq":
+        key = filters.get("key")
+        return isinstance(key, str) and attributes.get(key) == filters.get("value")
+    if filter_type == "and":
+        nested_filters = filters.get("filters")
+        return isinstance(nested_filters, list) and all(
+            _matches_filter(nested, attributes) for nested in nested_filters
+        )
+    if filter_type == "or":
+        nested_filters = filters.get("filters")
+        return isinstance(nested_filters, list) and any(
+            _matches_filter(nested, attributes) for nested in nested_filters
+        )
+    return True

@@ -195,19 +195,27 @@ Acceptance criteria:
 
 ## Phase 4: Tag Model And Vector-Store Filter Correctness
 
-Status: planned.
+Status: in progress.
 
 Tag-filtered access already works through vector attributes. Harden it so tag edits and app metadata remain synchronized with OpenAI vector-store filters.
 
 Tasks:
 
 - Add manual tag create/update/delete operations if users need editable tags.
-- Decide whether tags attach only to sources or can also attach to chunks. Current model attaches tags to sources.
-- Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
+- [x] Decide whether tags attach only to sources or can also attach to chunks. Current model attaches tags to sources.
+- [x] Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
 - Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
-- Add a `vector_attributes_version` concept, either in chunk metadata or in settings, so future reindexing can detect stale chunks.
+- [x] Add a `vector_attributes_version` concept, either in chunk metadata or in settings, so future reindexing can detect stale chunks.
 - Add DB post-filtering fallback only if OpenAI vector-store filters cannot express a future tag model.
-- Add tests for all/any tag matching and source-kind/source-id combinations.
+- [x] Add tests for all/any tag matching and source-kind/source-id combinations.
+
+Implementation notes:
+
+- Confirmed the current baseline keeps tags source-scoped. Chunk-level tags remain a future schema/product change, not an accidental parallel model.
+- Kept `TAG_SLOT_COUNT=8` as an explicit vector-attribute limit and added `VECTOR_ATTRIBUTES_VERSION=1` to chunk vector attributes.
+- Added vector attribute/filter construction tests for versioning, bounded tag slots, all/any tag groups, source IDs, and source kind filters.
+- Updated the fake OpenAI gateway to evaluate the same OpenAI vector-store filter shape used by app search, then added HTTP integration coverage for tag all/any, selected source, and source-kind filters.
+- Remaining Phase 4 work: manual tag management, reindex tasks when tags change, and a fallback strategy if future OpenAI filters cannot express the chosen tag model.
 
 Acceptance criteria:
 
