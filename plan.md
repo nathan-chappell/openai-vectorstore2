@@ -344,10 +344,10 @@ Tasks:
 
 - Keep the current custom ChatKit backend pattern. Official docs describe this as implementing `ChatKitServer`, persisting threads/messages/files with a `Store`, forwarding requests to the server, and passing custom context into `server.process`.
 - [x] Expand ChatKit tool coverage so the agent can directly list sources/tags, inspect source details, ingest text snippets, preview splits, re-split, update source tags, guarded-delete sources, search, branch, run actions, and inspect task progress.
-- Move selected source scope from only request metadata toward explicit thread/app state:
-  - Continue sending current selections from the frontend.
-  - Store meaningful scope decisions in thread metadata or app task input when the agent acts.
-  - Make the scope visible in the UI and in task history.
+- [x] Move selected source scope from only request metadata toward explicit thread/app state:
+  - [x] Continue sending current selections from the frontend.
+  - [x] Store meaningful scope decisions in thread metadata or app task input when the agent acts.
+  - [x] Make the scope visible in the UI and in task history.
 - Add ChatKit widgets or structured outputs for:
   - Search hits with citations and locators.
   - Branch search levels.
@@ -355,10 +355,10 @@ Tasks:
   - Generated asset links/previews.
   - Ingest progress and split preview.
 - [x] Decide whether ChatKit attachments should become source ingestion inputs. The backend has ChatKit attachment storage, while the composer currently disables attachments.
-- Add ChatKit attachment ingestion:
-  - direct upload endpoint receives composer files through authenticated app fetch.
-  - uploaded files are immediately queued through `SourceService.ingest_source(origin_surface="chatkit")`.
-  - `AppChatAttachment` metadata links attachment IDs to source and task IDs so chat history and app-core task history stay related.
+- [x] Keep ChatKit attachment ingestion as backend compatibility plumbing, but do not expose composer attachments in the current web UX:
+  - [x] direct upload endpoint receives authenticated app fetches if an older host uses it.
+  - [x] uploaded files are immediately queued through `SourceService.ingest_source(origin_surface="chatkit")`.
+  - [x] `AppChatAttachment` metadata links attachment IDs to source and task IDs so chat history and app-core task history stay related.
 - Replace the standalone action buttons with agent-friendly controls where useful, but keep direct controls for repeatable workflows like upload, source selection, and filter editing.
 - Add helpful progress events for all long-running tools, not only search/branch/image.
 - Tighten layout and styling after functionality is stable. The current UI works, but it uses a hero-like layout and broad cards; for an operational RAG workspace, move toward denser, quieter controls.
@@ -368,7 +368,8 @@ Implementation notes:
 - Added ChatKit tools for `get_source_detail`, `ingest_text_source`, `delete_source` with explicit confirmation, `list_tasks`, and `get_task`.
 - Updated ingest tasks so ChatKit-origin text ingest can carry `origin_thread_id`, matching the task/thread linkage planned for ChatKit and app-core drift control.
 - Added a compact recent-task strip to the webapp shell so queued/running/completed work is visible outside chat.
-- Decision update: ChatKit attachments should become source ingestion inputs, not a separate chat-only file model.
+- Persisted selected-file scope into ChatKit thread metadata (`selected_source_ids`, count, origin, timestamp) whenever threads are saved, and the live ChatKit QA test now asserts task input contains the selected source scope.
+- Decision update: the web ChatKit composer should not expose attachments for the current product direction; file input belongs to the explorer. The attachment endpoint remains compatibility plumbing, and attachments still become normal app-core sources if used by an older host.
 
 Acceptance criteria:
 

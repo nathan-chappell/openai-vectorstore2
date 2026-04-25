@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -52,13 +53,14 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
             record = await session.scalar(select(AppChatThread).where(AppChatThread.id == thread.id, AppChatThread.user_id == app_user.id))
             next_sequence = await self._next_thread_sequence(session)
+            metadata_json = thread_metadata_with_scope(thread.metadata, context)
             if record is None:
                 session.add(
                     AppChatThread(
                         id=thread.id,
                         user_id=app_user.id,
                         title=thread.title,
-                        metadata_json=dict(thread.metadata or {}),
+                        metadata_json=metadata_json,
                         status_json=thread.status.model_dump(mode="json"),
                         allowed_image_domains_json=thread.allowed_image_domains,
                         updated_sequence=next_sequence,
@@ -68,7 +70,7 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
                 )
             else:
                 record.title = thread.title
-                record.metadata_json = dict(thread.metadata or {})
+                record.metadata_json = metadata_json
                 record.status_json = thread.status.model_dump(mode="json")
                 record.allowed_image_domains_json = thread.allowed_image_domains
                 record.updated_sequence = next_sequence
@@ -324,3 +326,15 @@ def _metadata_dict(value: object) -> dict[str, object]:
     if isinstance(value, dict):
         return {str(key): item for key, item in value.items()}
     return {}
+
+
+def thread_metadata_with_scope(
+    metadata: Mapping[str, Any] | None,
+    context: VectorstoreChatContext,
+) -> dict[str, object]:
+    output: dict[str, object] = dict(metadata or {})
+    output["selected_source_ids"] = list(context.selected_source_ids)
+    output["selected_source_count"] = len(context.selected_source_ids)
+    output["scope_origin"] = context.thread_origin or "web"
+    output["scope_updated_at"] = datetime.now(UTC).isoformat()
+    return output

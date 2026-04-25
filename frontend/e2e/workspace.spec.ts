@@ -107,6 +107,7 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
         jsonText(task.input_json).toLowerCase().includes("cobalt maple"),
     );
     expect(jsonText(qaTask.result_json)).toContain("seven years");
+    expect(jsonText(qaTask.input_json)).toContain(source.id);
 
     await sendChatKitMessage(
       page,

@@ -18,7 +18,7 @@ from openai.types.responses import ResponseInputContentParam, ResponseInputTextP
 from openai.types.shared import Reasoning
 from pydantic import TypeAdapter
 
-from backend.app.chatkit.store import VectorstoreChatContext, VectorstoreChatStore
+from backend.app.chatkit.store import VectorstoreChatContext, VectorstoreChatStore, thread_metadata_with_scope
 from backend.app.core.config import AppSettings
 from backend.app.schemas import (
     BranchSearchRequest,
@@ -151,6 +151,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         requested_model = self._resolve_requested_model(input_user_message=input_user_message)
         if thread.title is None and input_user_message is not None:
             thread.title = _title_from_user_message(input_user_message)
+        thread.metadata = thread_metadata_with_scope(thread.metadata, context)
+        await self.store.save_thread(thread, context)
 
         agent_input = await self._agent_input_for_turn(
             thread=thread,
