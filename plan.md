@@ -27,21 +27,36 @@ Tasks:
 
 ## Current Implementation Pass: Explorer Workspace And Scroll Performance
 
-Status: in progress.
+Status: completed.
 
 Tasks:
 
 - [x] Run parallel read-only reviews of the React/CSS workspace for obvious scroll and render issues.
 - [x] Record the main findings: the current hero/card layout creates a large full-page scroll surface, repeated translucent cards use expensive blur/shadow effects, collapsed search chunks still render full text, and ChatKit rerenders with unrelated workspace state changes.
-- [ ] Replace the massive hero with a compact app bar that keeps only useful status, auth, task, and refresh signals.
-- [ ] Reshape the workspace into a dense left file explorer, center file preview/workbench, and right ChatKit pane.
-- [ ] Make the file explorer Windows-like: simple rows, tight metadata, clear file icons, fast selection, and direct delete/upload affordances.
-- [ ] Add source previews by media type: PDF/object preview, image/audio/video native previews, text/chunk preview, and metadata fallback.
-- [ ] Apply reasonable React optimizations: memoized ChatKit pane, memoized file rows, set-based selection lookups, lazy rendering for full hit text, and bounded chunk preview rendering.
-- [ ] Replace expensive backdrop blur and large repeated shadows with mostly opaque, low-cost operational surfaces.
-- [ ] Update Playwright shell checks and screenshots for the new explorer/preview/chat layout.
-- [ ] Run typecheck, build, and Playwright smoke coverage.
-- [ ] Commit this UI/performance pass once verified.
+- [x] Replace the massive hero with a compact app bar that keeps only useful status, auth, task, and refresh signals.
+- [x] Reshape the workspace into a dense left file explorer, center file preview/workbench, and right ChatKit pane.
+- [x] Make the file explorer Windows-like: simple rows, tight metadata, clear file icons, fast selection, and direct delete/upload affordances.
+- [x] Add source previews by media type: PDF/object preview, image/audio/video native previews, text/chunk preview, and metadata fallback.
+- [x] Apply reasonable React optimizations: memoized ChatKit pane, memoized file rows, set-based selection lookups, lazy rendering for full hit text, and bounded chunk preview rendering.
+- [x] Replace expensive backdrop blur and large repeated shadows with mostly opaque, low-cost operational surfaces.
+- [x] Update Playwright shell checks and screenshots for the new explorer/preview/chat layout.
+- [x] Run typecheck, build, and Playwright smoke coverage.
+- [x] Commit this UI/performance pass once verified.
+
+Implementation notes:
+
+- Replaced the hero/status card with a compact app bar and a full-height workspace grid.
+- Added a dense file-table explorer with upload, split preview, tags, open-preview, and delete actions.
+- Added authenticated source-content preview support in the frontend API and rendered PDF, image, audio, video, text, and chunk fallback previews.
+- Kept direct search/action tools available in the preview pane while leaving ChatKit as the main right-side agentic surface.
+- Memoized ChatKit, file rows, chunk rows, and hit cards; derived selection sets with `useMemo`; rendered full search-hit text only after expansion.
+- Removed Google font loading, translucent backdrop blur, large repeated shadows, and the beige/orange marketing palette from the operational UI.
+- Verification completed:
+  - `npm run typecheck`
+  - `npm run build`
+  - `npm run test:e2e -- --project=chromium-desktop`
+  - `npm run test:e2e -- --project=chromium-mobile`
+  - `npm run test:e2e -- --grep "workspace shell"` for refreshed desktop/mobile screenshots.
 
 ## Goal
 

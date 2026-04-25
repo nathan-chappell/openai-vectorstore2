@@ -1,7 +1,8 @@
 import { ChatKit, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
-import { useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
+  authenticatedFetch,
   branchSearch,
   deleteSource,
   freeformAction,
@@ -9,24 +10,25 @@ import {
   getChatKitConfig,
   getSource,
   imageAction,
-  listTasks,
   listSources,
   listTags,
-  qaAction,
+  listTasks,
   previewSemanticSplit,
+  qaAction,
+  readSourceContentBlob,
   resplitSource,
   searchChunks,
   setChatKitMetadataGetter,
   updateSourceTags,
   uploadSource,
   voiceAction,
-  authenticatedFetch,
 } from "./lib/api";
 import type {
   ActionResponse,
   AuthUser,
   BranchSearchResponse,
   ChunkHit,
+  ChunkSummary,
   SourceDetail,
   SourceSummary,
   SplitPreviewResponse,
@@ -38,11 +40,28 @@ type AppProps = {
   authMode: "clerk" | "local-dev";
 };
 
+type PreviewResource =
+  | { state: "idle" }
+  | { state: "loading" }
+  | { state: "text"; text: string; truncated: boolean; mediaType: string }
+  | { state: "file"; url: string; mediaType: string }
+  | { state: "error"; message: string };
+
 const MODEL_CHOICES = [
   { id: "balanced", label: "Balanced", description: "Everyday retrieval and synthesis" },
   { id: "powerful", label: "Powerful", description: "Best reasoning pass" },
   { id: "lightweight", label: "Lightweight", description: "Fast exploratory pass" },
 ] as const;
+
+const TEXT_PREVIEW_LIMIT = 40_000;
+const CHUNK_PREVIEW_LIMIT = 40;
+
+const dateFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "short",
+  day: "numeric",
+  hour: "2-digit",
+  minute: "2-digit",
+});
 
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -63,23 +82,15 @@ export function App({ authMode }: AppProps) {
   const [status, setStatus] = useState("Booting the semantic library.");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    setChatKitMetadataGetter(() => ({
-      origin: "web",
-      selected_source_ids: selectedSourceIds,
-    }));
-    return () => setChatKitMetadataGetter(null);
-  }, [selectedSourceIds]);
+  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
+  const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
+  const sortedSources = useMemo(
+    () => [...sources].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at)),
+    [sources],
+  );
+  const activeSourceId = selectedSource?.id ?? selectedSourceIds[0] ?? null;
 
-  useEffect(() => {
-    void refreshAll();
-  }, []);
-
-  useEffect(() => {
-    setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
-  }, [selectedSource]);
-
-  async function refreshAll(): Promise<void> {
+  const refreshAll = useCallback(async (): Promise<void> => {
     setBusy(true);
     try {
       const [me, sourceList, tagList, taskList] = await Promise.all([
@@ -98,18 +109,34 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, []);
 
-  function chooseFiles(files: FileList | null): void {
+  useEffect(() => {
+    setChatKitMetadataGetter(() => ({
+      origin: "web",
+      selected_source_ids: selectedSourceIds,
+    }));
+    return () => setChatKitMetadataGetter(null);
+  }, [selectedSourceIds]);
+
+  useEffect(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  useEffect(() => {
+    setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
+  }, [selectedSource]);
+
+  const chooseFiles = useCallback((files: FileList | null): void => {
     const nextFiles = Array.from(files ?? []);
     setPendingFiles(nextFiles);
     setSplitPreview(null);
     if (nextFiles.length) {
       setStatus(`Selected ${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} for preview or upload.`);
     }
-  }
+  }, []);
 
-  async function previewPendingSplit(): Promise<void> {
+  const previewPendingSplit = useCallback(async (): Promise<void> => {
     const [file] = pendingFiles;
     if (!file) {
       return;
@@ -124,9 +151,9 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [pendingFiles, uploadGuidance]);
 
-  async function handleUpload(): Promise<void> {
+  const handleUpload = useCallback(async (): Promise<void> => {
     if (!pendingFiles.length) {
       return;
     }
@@ -148,9 +175,22 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [pendingFiles, uploadGuidance]);
 
-  async function resplitSelectedSource(): Promise<void> {
+  const openSource = useCallback(async (sourceId: string): Promise<void> => {
+    setSelectedSourceIds([sourceId]);
+    setStatus("Loading source preview.");
+    try {
+      const detail = await getSource(sourceId);
+      setSelectedSource(detail);
+      setStatus(`Previewing ${detail.display_title}.`);
+    } catch (error) {
+      setSelectedSource(null);
+      setStatus(error instanceof Error ? error.message : "Could not load source detail.");
+    }
+  }, []);
+
+  const resplitSelectedSource = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
     }
@@ -171,9 +211,9 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [selectedSource, uploadGuidance]);
 
-  async function saveSelectedSourceTags(): Promise<void> {
+  const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
     }
@@ -196,29 +236,15 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [selectedSource, selectedSourceTagDraftIds]);
 
-  function toggleSelectedSourceTagDraft(tagId: string): void {
+  const toggleSelectedSourceTagDraft = useCallback((tagId: string): void => {
     setSelectedSourceTagDraftIds((current) =>
       current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
     );
-  }
+  }, []);
 
-  async function toggleSource(sourceId: string): Promise<void> {
-    const next = selectedSourceIds.includes(sourceId)
-      ? selectedSourceIds.filter((id) => id !== sourceId)
-      : [...selectedSourceIds, sourceId];
-    setSelectedSourceIds(next);
-    if (!selectedSource || selectedSource.id !== sourceId) {
-      try {
-        setSelectedSource(await getSource(sourceId));
-      } catch {
-        setSelectedSource(null);
-      }
-    }
-  }
-
-  async function runSearch(): Promise<void> {
+  const runSearch = useCallback(async (): Promise<void> => {
     if (!searchQuery.trim()) {
       return;
     }
@@ -233,9 +259,9 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [searchQuery, selectedSourceIds]);
 
-  async function runBranchSearch(): Promise<void> {
+  const runBranchSearch = useCallback(async (): Promise<void> => {
     if (!searchQuery.trim()) {
       return;
     }
@@ -250,46 +276,52 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }
+  }, [searchQuery, selectedSourceIds]);
 
-  async function runAction(kind: "qa" | "freeform" | "image" | "voice"): Promise<void> {
-    if (!actionPrompt.trim()) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const response =
-        kind === "qa"
-          ? await qaAction({ prompt: actionPrompt, selectedSourceIds })
-          : kind === "freeform"
-            ? await freeformAction({ prompt: actionPrompt, mode: "grounded", selectedSourceIds })
-            : kind === "image"
-              ? await imageAction({ prompt: actionPrompt, selectedSourceIds })
-              : await voiceAction({ prompt: actionPrompt, selectedSourceIds });
-      setActionResult(response);
-      setHits(response.hits);
-      setTasks((await listTasks()).tasks);
-      setStatus(`${response.kind} completed as task ${response.task_id.slice(0, 8)}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Action failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const runAction = useCallback(
+    async (kind: "qa" | "freeform" | "image" | "voice"): Promise<void> => {
+      if (!actionPrompt.trim()) {
+        return;
+      }
+      setBusy(true);
+      try {
+        const response =
+          kind === "qa"
+            ? await qaAction({ prompt: actionPrompt, selectedSourceIds })
+            : kind === "freeform"
+              ? await freeformAction({ prompt: actionPrompt, mode: "grounded", selectedSourceIds })
+              : kind === "image"
+                ? await imageAction({ prompt: actionPrompt, selectedSourceIds })
+                : await voiceAction({ prompt: actionPrompt, selectedSourceIds });
+        setActionResult(response);
+        setHits(response.hits);
+        setTasks((await listTasks()).tasks);
+        setStatus(`${response.kind} completed as task ${response.task_id.slice(0, 8)}.`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Action failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [actionPrompt, selectedSourceIds],
+  );
 
-  async function removeSource(sourceId: string): Promise<void> {
-    setBusy(true);
-    try {
-      await deleteSource(sourceId);
-      setSelectedSourceIds((current) => current.filter((id) => id !== sourceId));
-      setSelectedSource((current) => (current?.id === sourceId ? null : current));
-      await refreshAll();
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Delete failed.");
-    } finally {
-      setBusy(false);
-    }
-  }
+  const removeSource = useCallback(
+    async (sourceId: string): Promise<void> => {
+      setBusy(true);
+      try {
+        await deleteSource(sourceId);
+        setSelectedSourceIds((current) => current.filter((id) => id !== sourceId));
+        setSelectedSource((current) => (current?.id === sourceId ? null : current));
+        await refreshAll();
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Delete failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshAll],
+  );
 
   const selectedSourceTagChanged = selectedSource
     ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
@@ -297,113 +329,337 @@ export function App({ authMode }: AppProps) {
 
   return (
     <main className="app-shell">
-      <section className="hero-panel">
+      <WorkspaceHeader
+        authMode={authMode}
+        busy={busy}
+        status={status}
+        tasks={tasks}
+        user={user}
+        onRefresh={() => void refreshAll()}
+      />
+
+      <section className="workspace-grid" aria-label="Semantic workspace">
+        <SourceExplorer
+          activeSourceId={activeSourceId}
+          busy={busy}
+          pendingFiles={pendingFiles}
+          selectedSourceIdSet={selectedSourceIdSet}
+          sources={sortedSources}
+          splitPreview={splitPreview}
+          tags={tags}
+          uploadGuidance={uploadGuidance}
+          onChooseFiles={chooseFiles}
+          onDeleteSource={(sourceId) => void removeSource(sourceId)}
+          onOpenSource={(sourceId) => void openSource(sourceId)}
+          onPreviewSplit={() => void previewPendingSplit()}
+          onUpload={() => void handleUpload()}
+          onUploadGuidanceChange={setUploadGuidance}
+        />
+
+        <PreviewWorkbench
+          actionPrompt={actionPrompt}
+          actionResult={actionResult}
+          branchResult={branchResult}
+          busy={busy}
+          hits={hits}
+          searchQuery={searchQuery}
+          selectedSource={selectedSource}
+          selectedSourceIds={selectedSourceIds}
+          selectedSourceTagChanged={selectedSourceTagChanged}
+          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          tags={tags}
+          uploadGuidance={uploadGuidance}
+          onActionPromptChange={setActionPrompt}
+          onRunAction={(kind) => void runAction(kind)}
+          onRunBranchSearch={() => void runBranchSearch()}
+          onRunSearch={() => void runSearch()}
+          onSaveTags={() => void saveSelectedSourceTags()}
+          onSearchQueryChange={setSearchQuery}
+          onTagToggle={toggleSelectedSourceTagDraft}
+          onUploadGuidanceChange={setUploadGuidance}
+          onResplit={() => void resplitSelectedSource()}
+        />
+
+        <aside className="chat-panel" aria-label="Semantic copilot">
+          <ChatPane selectedSourceIds={selectedSourceIds} />
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function WorkspaceHeader({
+  authMode,
+  busy,
+  status,
+  tasks,
+  user,
+  onRefresh,
+}: {
+  authMode: "clerk" | "local-dev";
+  busy: boolean;
+  status: string;
+  tasks: TaskSummary[];
+  user: AuthUser | null;
+  onRefresh: () => void;
+}) {
+  const latestTask = tasks[0] ?? null;
+  return (
+    <header className="app-bar">
+      <div className="app-identity">
+        <strong>Report Foundry</strong>
+        <span>{authMode === "local-dev" ? "Local dev auth" : "Clerk auth"}</span>
+      </div>
+      <div className="app-status" title={status}>
+        <span>{user?.display_name ?? "Connecting"}</span>
+        <strong>{status}</strong>
+      </div>
+      <div className="task-summary" title={latestTask ? `${latestTask.kind}: ${latestTask.status}` : "No tasks yet"}>
+        <span>Recent Tasks</span>
+        <strong>{latestTask ? `${latestTask.kind} | ${latestTask.status}` : "No tasks yet"}</strong>
+      </div>
+      <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
+        Refresh
+      </button>
+    </header>
+  );
+}
+
+const SourceExplorer = memo(function SourceExplorer({
+  activeSourceId,
+  busy,
+  pendingFiles,
+  selectedSourceIdSet,
+  sources,
+  splitPreview,
+  tags,
+  uploadGuidance,
+  onChooseFiles,
+  onDeleteSource,
+  onOpenSource,
+  onPreviewSplit,
+  onUpload,
+  onUploadGuidanceChange,
+}: {
+  activeSourceId: string | null;
+  busy: boolean;
+  pendingFiles: File[];
+  selectedSourceIdSet: Set<string>;
+  sources: SourceSummary[];
+  splitPreview: SplitPreviewResponse | null;
+  tags: TagSummary[];
+  uploadGuidance: string;
+  onChooseFiles: (files: FileList | null) => void;
+  onDeleteSource: (sourceId: string) => void;
+  onOpenSource: (sourceId: string) => void;
+  onPreviewSplit: () => void;
+  onUpload: () => void;
+  onUploadGuidanceChange: (value: string) => void;
+}) {
+  return (
+    <aside className="explorer-pane" aria-label="Files">
+      <div className="pane-header">
         <div>
-          <p className="eyebrow">App-first semantic RAG</p>
-          <h1>Vector stores with a memory palace instead of a junk drawer.</h1>
-          <p className="hero-copy">
-            Upload PDFs, text, and conversations; split them semantically; tag them automatically; then search, branch,
-            answer, image, voice, or chat over full retrieved chunks.
-          </p>
+          <p className="eyebrow">Library</p>
+          <h1>Files</h1>
         </div>
-        <div className="status-card">
-          <span>{authMode === "local-dev" ? "Local dev auth" : "Clerk auth"}</span>
-          <strong>{user?.display_name ?? "Connecting"}</strong>
-          <p>{status}</p>
-          <div className="task-strip">
-            <span>Recent Tasks</span>
-            {tasks.slice(0, 4).map((task) => (
-              <p key={task.id}>
-                {task.kind} · {task.status}
-              </p>
-            ))}
-            {!tasks.length ? <p>No tasks yet</p> : null}
-          </div>
-          <button type="button" onClick={refreshAll} disabled={busy}>
-            Refresh
+        <span className="count-pill">{sources.length}</span>
+      </div>
+
+      <section className="upload-strip" aria-label="Upload source">
+        <label className="file-picker">
+          <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
+          <span>{pendingFiles.length ? `${pendingFiles.length} selected` : "Choose files"}</span>
+        </label>
+        <textarea
+          className="compact-textarea"
+          value={uploadGuidance}
+          onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
+          placeholder="Semantic splitting guidance"
+        />
+        <div className="button-row">
+          <button type="button" className="secondary-button" onClick={onPreviewSplit} disabled={busy || !pendingFiles.length}>
+            Preview
+          </button>
+          <button type="button" onClick={onUpload} disabled={busy || !pendingFiles.length}>
+            Upload
           </button>
         </div>
+        {pendingFiles.length ? <p className="pending-file-list">{pendingFiles.map((file) => file.name).join(", ")}</p> : null}
+        {splitPreview ? (
+          <div className="split-preview-summary">
+            <strong>{splitPreview.split.chunks.length} proposed chunks</strong>
+            <span>{splitPreview.split.tags.join(", ") || "no tags"}</span>
+          </div>
+        ) : null}
       </section>
 
-      <section className="workspace-grid">
-        <aside className="library-panel">
-          <div className="panel-heading">
-            <div>
-              <p className="eyebrow">Sources</p>
-              <h2>Semantic Library</h2>
-            </div>
-            <span>{selectedSourceIds.length} selected</span>
-          </div>
+      <div className="tag-strip" aria-label="Tags">
+        {tags.slice(0, 8).map((tag) => (
+          <span key={tag.id}>{tag.name}</span>
+        ))}
+        {!tags.length ? <span>No tags</span> : null}
+      </div>
 
-          <label className="drop-card">
-            <input type="file" multiple onChange={(event) => chooseFiles(event.currentTarget.files)} />
-            <strong>{pendingFiles.length ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose raw material"}</strong>
-            <span>{pendingFiles.length ? pendingFiles.map((file) => file.name).join(", ") : "PDF, text, transcript, audio, or video"}</span>
-          </label>
-          <textarea
-            value={uploadGuidance}
-            onChange={(event) => setUploadGuidance(event.currentTarget.value)}
-            placeholder="Semantic splitting guidance"
-          />
-          <div className="button-row compact">
-            <button type="button" onClick={() => void previewPendingSplit()} disabled={busy || !pendingFiles.length}>
-              Preview Split
-            </button>
-            <button type="button" onClick={() => void handleUpload()} disabled={busy || !pendingFiles.length}>
-              Upload
-            </button>
-          </div>
-          {splitPreview ? (
-            <div className="preview-card">
-              <p className="eyebrow">Split Preview</p>
-              <strong>
-                {splitPreview.source_kind} · {splitPreview.split.chunks.length} chunks · {splitPreview.split.tags.join(", ") || "no tags"}
-              </strong>
-              <div className="mini-list">
-                {splitPreview.split.chunks.slice(0, 6).map((chunk) => (
-                  <span key={chunk.sequence}>{chunk.title}</span>
-                ))}
-              </div>
-            </div>
-          ) : null}
-
-          <div className="tag-row">
-            {tags.slice(0, 10).map((tag) => (
-              <span key={tag.id}>{tag.name}</span>
-            ))}
-          </div>
-
-          <div className="source-list">
+      <div className="file-table-wrap">
+        <table className="file-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Status</th>
+              <th>Size</th>
+              <th aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
             {sources.map((source) => (
-              <article key={source.id} className={selectedSourceIds.includes(source.id) ? "source-card selected" : "source-card"}>
-                <button type="button" onClick={() => void toggleSource(source.id)}>
-                  <strong>{source.display_title}</strong>
-                  <span>
-                    {source.source_kind} · {source.chunk_count} chunks · {source.status}
-                  </span>
-                </button>
-                <button type="button" className="ghost danger" onClick={() => void removeSource(source.id)}>
-                  Delete
-                </button>
-              </article>
+              <SourceRow
+                key={source.id}
+                active={activeSourceId === source.id}
+                selected={selectedSourceIdSet.has(source.id)}
+                source={source}
+                onDelete={onDeleteSource}
+                onOpen={onOpenSource}
+              />
             ))}
-          </div>
-        </aside>
+            {!sources.length ? (
+              <tr>
+                <td colSpan={4} className="empty-cell">
+                  No files yet.
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
+      </div>
+    </aside>
+  );
+});
 
-        <section className="workbench-panel">
-          <div className="tool-card search-card">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Retrieve</p>
-                <h2>Search And Branch</h2>
-              </div>
-              <button type="button" onClick={() => void runBranchSearch()} disabled={busy}>
+const SourceRow = memo(function SourceRow({
+  active,
+  selected,
+  source,
+  onDelete,
+  onOpen,
+}: {
+  active: boolean;
+  selected: boolean;
+  source: SourceSummary;
+  onDelete: (sourceId: string) => void;
+  onOpen: (sourceId: string) => void;
+}) {
+  return (
+    <tr className={active ? "active-file-row" : selected ? "selected-file-row" : undefined} onClick={() => onOpen(source.id)}>
+      <td>
+        <button type="button" className="file-name-button" onClick={() => onOpen(source.id)}>
+          <span className="file-type-badge">{sourceExtension(source)}</span>
+          <span>
+            <strong>{source.display_title}</strong>
+            <small>{source.original_filename}</small>
+          </span>
+        </button>
+      </td>
+      <td>
+        <span className={`status-badge status-${source.status}`}>{source.status}</span>
+      </td>
+      <td>{formatBytes(source.byte_size)}</td>
+      <td>
+        <button
+          type="button"
+          className="icon-text-button danger-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete(source.id);
+          }}
+        >
+          Delete
+        </button>
+      </td>
+    </tr>
+  );
+});
+
+function PreviewWorkbench({
+  actionPrompt,
+  actionResult,
+  branchResult,
+  busy,
+  hits,
+  searchQuery,
+  selectedSource,
+  selectedSourceIds,
+  selectedSourceTagChanged,
+  selectedSourceTagDraftIdSet,
+  tags,
+  uploadGuidance,
+  onActionPromptChange,
+  onRunAction,
+  onRunBranchSearch,
+  onRunSearch,
+  onSaveTags,
+  onSearchQueryChange,
+  onTagToggle,
+  onUploadGuidanceChange,
+  onResplit,
+}: {
+  actionPrompt: string;
+  actionResult: ActionResponse | null;
+  branchResult: BranchSearchResponse | null;
+  busy: boolean;
+  hits: ChunkHit[];
+  searchQuery: string;
+  selectedSource: SourceDetail | null;
+  selectedSourceIds: string[];
+  selectedSourceTagChanged: boolean;
+  selectedSourceTagDraftIdSet: Set<string>;
+  tags: TagSummary[];
+  uploadGuidance: string;
+  onActionPromptChange: (value: string) => void;
+  onRunAction: (kind: "qa" | "freeform" | "image" | "voice") => void;
+  onRunBranchSearch: () => void;
+  onRunSearch: () => void;
+  onSaveTags: () => void;
+  onSearchQueryChange: (value: string) => void;
+  onTagToggle: (tagId: string) => void;
+  onUploadGuidanceChange: (value: string) => void;
+  onResplit: () => void;
+}) {
+  return (
+    <section className="preview-pane" aria-label="Preview">
+      <div className="pane-header">
+        <div>
+          <p className="eyebrow">{selectedSourceIds.length ? `${selectedSourceIds.length} selected` : "No selection"}</p>
+          <h1>Preview</h1>
+        </div>
+        {selectedSource ? <span className={`status-badge status-${selectedSource.status}`}>{selectedSource.status}</span> : null}
+      </div>
+
+      <div className="preview-scroll">
+        <SourcePreview
+          busy={busy}
+          selectedSource={selectedSource}
+          selectedSourceTagChanged={selectedSourceTagChanged}
+          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          tags={tags}
+          uploadGuidance={uploadGuidance}
+          onSaveTags={onSaveTags}
+          onTagToggle={onTagToggle}
+          onUploadGuidanceChange={onUploadGuidanceChange}
+          onResplit={onResplit}
+        />
+
+        <section className="tool-strip" aria-label="Direct tools">
+          <div className="tool-panel">
+            <div className="tool-heading">
+              <h2>Search</h2>
+              <button type="button" className="secondary-button" onClick={onRunBranchSearch} disabled={busy}>
                 Branch
               </button>
             </div>
             <div className="input-row">
-              <input value={searchQuery} onChange={(event) => setSearchQuery(event.currentTarget.value)} />
-              <button type="button" onClick={() => void runSearch()} disabled={busy}>
+              <input value={searchQuery} onChange={(event) => onSearchQueryChange(event.currentTarget.value)} />
+              <button type="button" onClick={onRunSearch} disabled={busy}>
                 Search
               </button>
             </div>
@@ -412,83 +668,22 @@ export function App({ authMode }: AppProps) {
             ) : null}
           </div>
 
-          <div className="results-grid">
-            <div className="chunk-stack">
-              {hits.slice(0, 8).map((hit) => (
-                <article key={hit.chunk_id} className="hit-card">
-                  <p className="eyebrow">{hit.source_title}</p>
-                  <h3>{hit.title}</h3>
-                  <p>{hit.summary}</p>
-                  <details>
-                    <summary>Full chunk</summary>
-                    <pre>{hit.text}</pre>
-                  </details>
-                </article>
-              ))}
+          <div className="tool-panel">
+            <div className="tool-heading">
+              <h2>Actions</h2>
             </div>
-            <div className="detail-card">
-              <p className="eyebrow">Selected Source</p>
-              {selectedSource ? (
-                <>
-                  <h3>{selectedSource.display_title}</h3>
-                  <p>{selectedSource.original_filename}</p>
-                  <button type="button" className="ghost" onClick={() => void resplitSelectedSource()} disabled={busy}>
-                    Re-split
-                  </button>
-                  <div className="source-tag-editor">
-                    <div className="tag-picker-list">
-                      {tags.map((tag) => (
-                        <label key={tag.id} className="tag-checkbox">
-                          <input
-                            type="checkbox"
-                            checked={selectedSourceTagDraftIds.includes(tag.id)}
-                            onChange={() => toggleSelectedSourceTagDraft(tag.id)}
-                            disabled={busy || selectedSource.status === "processing"}
-                          />
-                          <span>{tag.name}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <button
-                      type="button"
-                      className="ghost"
-                      onClick={() => void saveSelectedSourceTags()}
-                      disabled={busy || selectedSource.status === "processing" || !selectedSourceTagChanged}
-                    >
-                      Save Tags
-                    </button>
-                  </div>
-                  <div className="mini-list">
-                    {selectedSource.chunks.slice(0, 6).map((chunk) => (
-                      <span key={chunk.id}>{chunk.title}</span>
-                    ))}
-                  </div>
-                </>
-              ) : (
-                <p>Select a source to inspect its semantic chunk map.</p>
-              )}
-            </div>
-          </div>
-
-          <div className="tool-card">
-            <div className="panel-heading">
-              <div>
-                <p className="eyebrow">Act</p>
-                <h2>QA, Freeform, Image, Voice</h2>
-              </div>
-            </div>
-            <textarea value={actionPrompt} onChange={(event) => setActionPrompt(event.currentTarget.value)} />
+            <textarea value={actionPrompt} onChange={(event) => onActionPromptChange(event.currentTarget.value)} />
             <div className="button-row">
-              <button type="button" onClick={() => void runAction("qa")} disabled={busy}>
+              <button type="button" onClick={() => onRunAction("qa")} disabled={busy}>
                 QA
               </button>
-              <button type="button" onClick={() => void runAction("freeform")} disabled={busy}>
+              <button type="button" className="secondary-button" onClick={() => onRunAction("freeform")} disabled={busy}>
                 Freeform
               </button>
-              <button type="button" onClick={() => void runAction("image")} disabled={busy}>
+              <button type="button" className="secondary-button" onClick={() => onRunAction("image")} disabled={busy}>
                 Image
               </button>
-              <button type="button" onClick={() => void runAction("voice")} disabled={busy}>
+              <button type="button" className="secondary-button" onClick={() => onRunAction("voice")} disabled={busy}>
                 Voice
               </button>
             </div>
@@ -505,13 +700,290 @@ export function App({ authMode }: AppProps) {
           </div>
         </section>
 
-        <aside className="chat-panel">
-          <ChatPane selectedSourceIds={selectedSourceIds} />
-        </aside>
-      </section>
-    </main>
+        <section className="results-panel" aria-label="Search results">
+          <div className="tool-heading">
+            <h2>Results</h2>
+            <span className="count-pill">{hits.length}</span>
+          </div>
+          <div className="hit-list">
+            {hits.slice(0, 8).map((hit) => (
+              <HitCard key={hit.chunk_id} hit={hit} />
+            ))}
+            {!hits.length ? <p className="empty-state">Search results and action citations appear here.</p> : null}
+          </div>
+        </section>
+      </div>
+    </section>
   );
 }
+
+function SourcePreview({
+  busy,
+  selectedSource,
+  selectedSourceTagChanged,
+  selectedSourceTagDraftIdSet,
+  tags,
+  uploadGuidance,
+  onSaveTags,
+  onTagToggle,
+  onUploadGuidanceChange,
+  onResplit,
+}: {
+  busy: boolean;
+  selectedSource: SourceDetail | null;
+  selectedSourceTagChanged: boolean;
+  selectedSourceTagDraftIdSet: Set<string>;
+  tags: TagSummary[];
+  uploadGuidance: string;
+  onSaveTags: () => void;
+  onTagToggle: (tagId: string) => void;
+  onUploadGuidanceChange: (value: string) => void;
+  onResplit: () => void;
+}) {
+  const [previewResource, setPreviewResource] = useState<PreviewResource>({ state: "idle" });
+
+  useEffect(() => {
+    let cancelled = false;
+    let objectUrl: string | null = null;
+
+    async function loadPreview(source: SourceDetail): Promise<void> {
+      if (!canPreviewSource(source)) {
+        setPreviewResource({ state: "idle" });
+        return;
+      }
+      setPreviewResource({ state: "loading" });
+      try {
+        const response = await readSourceContentBlob(source.id);
+        const mediaType = response.mediaType ?? source.media_type;
+        if (isTextPreview(source, mediaType)) {
+          const rawText = await response.blob.text();
+          if (!cancelled) {
+            setPreviewResource({
+              state: "text",
+              mediaType,
+              text: rawText.slice(0, TEXT_PREVIEW_LIMIT),
+              truncated: rawText.length > TEXT_PREVIEW_LIMIT,
+            });
+          }
+          return;
+        }
+        objectUrl = URL.createObjectURL(response.blob);
+        if (!cancelled) {
+          setPreviewResource({ state: "file", url: objectUrl, mediaType });
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setPreviewResource({ state: "error", message: error instanceof Error ? error.message : "Preview failed." });
+        }
+      }
+    }
+
+    if (!selectedSource) {
+      setPreviewResource({ state: "idle" });
+      return undefined;
+    }
+
+    void loadPreview(selectedSource);
+    return () => {
+      cancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [selectedSource]);
+
+  if (!selectedSource) {
+    return (
+      <section className="source-preview empty-preview">
+        <h2>Select a file to preview it.</h2>
+        <p>The left pane opens source details here and scopes ChatKit to the selected file.</p>
+      </section>
+    );
+  }
+
+  const visibleChunks = selectedSource.chunks.slice(0, CHUNK_PREVIEW_LIMIT);
+
+  return (
+    <section className="source-preview">
+      <div className="preview-layout">
+        <div className="preview-main">
+          <div className="source-title-row">
+            <div>
+              <h2>{selectedSource.display_title}</h2>
+              <p>{selectedSource.original_filename}</p>
+            </div>
+            <span className="file-type-large">{sourceExtension(selectedSource)}</span>
+          </div>
+          <RawPreview source={selectedSource} resource={previewResource} />
+          <div className="chunk-section">
+            <div className="tool-heading">
+              <h3>Chunk Map</h3>
+              <span>
+                {visibleChunks.length}
+                {selectedSource.chunks.length > visibleChunks.length ? ` of ${selectedSource.chunks.length}` : ""}
+              </span>
+            </div>
+            <div className="chunk-list">
+              {visibleChunks.map((chunk) => (
+                <ChunkRow key={chunk.id} chunk={chunk} />
+              ))}
+              {!visibleChunks.length ? <p className="empty-state">No semantic chunks yet.</p> : null}
+            </div>
+          </div>
+        </div>
+
+        <aside className="metadata-panel">
+          <dl>
+            <div>
+              <dt>Kind</dt>
+              <dd>{selectedSource.source_kind}</dd>
+            </div>
+            <div>
+              <dt>Size</dt>
+              <dd>{formatBytes(selectedSource.byte_size)}</dd>
+            </div>
+            <div>
+              <dt>Chunks</dt>
+              <dd>{selectedSource.chunk_count}</dd>
+            </div>
+            <div>
+              <dt>Updated</dt>
+              <dd>{formatDate(selectedSource.updated_at)}</dd>
+            </div>
+          </dl>
+          {selectedSource.error_message ? <p className="error-message">{selectedSource.error_message}</p> : null}
+          <label className="field-label">
+            Split guidance
+            <textarea
+              className="compact-textarea"
+              value={uploadGuidance}
+              onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
+            />
+          </label>
+          <button type="button" className="secondary-button" onClick={onResplit} disabled={busy}>
+            Re-split
+          </button>
+          <div className="tag-editor">
+            <strong>Tags</strong>
+            <div className="tag-picker-list">
+              {tags.map((tag) => (
+                <label key={tag.id} className="tag-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={selectedSourceTagDraftIdSet.has(tag.id)}
+                    onChange={() => onTagToggle(tag.id)}
+                    disabled={busy || selectedSource.status === "processing"}
+                  />
+                  <span>{tag.name}</span>
+                </label>
+              ))}
+              {!tags.length ? <span className="subtle">No tags yet</span> : null}
+            </div>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={onSaveTags}
+              disabled={busy || selectedSource.status === "processing" || !selectedSourceTagChanged}
+            >
+              Save Tags
+            </button>
+          </div>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function RawPreview({ resource, source }: { resource: PreviewResource; source: SourceDetail }) {
+  if (resource.state === "loading") {
+    return <div className="raw-preview preview-loading">Loading preview...</div>;
+  }
+  if (resource.state === "error") {
+    return (
+      <div className="raw-preview preview-unavailable">
+        <strong>Preview unavailable</strong>
+        <span>{resource.message}</span>
+      </div>
+    );
+  }
+  if (resource.state === "text") {
+    return (
+      <div className="raw-preview text-preview">
+        <pre>{resource.text}</pre>
+        {resource.truncated ? <p className="subtle">Showing the first {formatNumber(TEXT_PREVIEW_LIMIT)} characters.</p> : null}
+      </div>
+    );
+  }
+  if (resource.state === "file") {
+    const mediaType = resource.mediaType.toLowerCase();
+    if (source.source_kind === "pdf" || mediaType.includes("pdf")) {
+      return (
+        <div className="raw-preview document-preview">
+          <object data={resource.url} type="application/pdf">
+            <a href={resource.url} target="_blank" rel="noreferrer">
+              Open PDF preview
+            </a>
+          </object>
+        </div>
+      );
+    }
+    if (source.source_kind === "image" || mediaType.startsWith("image/")) {
+      return (
+        <div className="raw-preview image-preview">
+          <img src={resource.url} alt={source.display_title} />
+        </div>
+      );
+    }
+    if (source.source_kind === "audio" || mediaType.startsWith("audio/")) {
+      return (
+        <div className="raw-preview media-preview">
+          <audio src={resource.url} controls />
+        </div>
+      );
+    }
+    if (source.source_kind === "video" || mediaType.startsWith("video/")) {
+      return (
+        <div className="raw-preview media-preview">
+          <video src={resource.url} controls />
+        </div>
+      );
+    }
+  }
+  return (
+    <div className="raw-preview preview-unavailable">
+      <strong>{source.source_kind} source</strong>
+      <span>Semantic chunk preview is available below.</span>
+    </div>
+  );
+}
+
+const ChunkRow = memo(function ChunkRow({ chunk }: { chunk: ChunkSummary }) {
+  return (
+    <article className="chunk-row">
+      <span>{chunk.sequence + 1}</span>
+      <div>
+        <strong>{chunk.title}</strong>
+        <p>{chunk.summary}</p>
+      </div>
+      <small>{formatLocator(chunk)}</small>
+    </article>
+  );
+});
+
+const HitCard = memo(function HitCard({ hit }: { hit: ChunkHit }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <article className="hit-card">
+      <p className="eyebrow">{hit.source_title}</p>
+      <h3>{hit.title}</h3>
+      <p>{hit.summary}</p>
+      <button type="button" className="link-button" aria-expanded={expanded} onClick={() => setExpanded((current) => !current)}>
+        {expanded ? "Hide full chunk" : "Show full chunk"}
+      </button>
+      {expanded ? <pre>{hit.text}</pre> : null}
+    </article>
+  );
+});
 
 function sameStringSet(left: string[], right: string[]): boolean {
   if (left.length !== right.length) {
@@ -521,7 +993,71 @@ function sameStringSet(left: string[], right: string[]): boolean {
   return left.every((item) => rightSet.has(item));
 }
 
-function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
+function canPreviewSource(source: SourceDetail): boolean {
+  return ["pdf", "text", "conversation", "image", "audio", "video"].includes(source.source_kind);
+}
+
+function isTextPreview(source: SourceDetail, mediaType: string): boolean {
+  const normalized = mediaType.toLowerCase();
+  return (
+    source.source_kind === "text" ||
+    source.source_kind === "conversation" ||
+    normalized.startsWith("text/") ||
+    normalized.includes("json") ||
+    normalized.includes("csv") ||
+    normalized.includes("xml")
+  );
+}
+
+function sourceExtension(source: Pick<SourceSummary, "original_filename" | "source_kind">): string {
+  const extension = source.original_filename.split(".").pop()?.slice(0, 4).toUpperCase();
+  return extension && extension !== source.original_filename.toUpperCase() ? extension : source.source_kind.slice(0, 4).toUpperCase();
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const units = ["KB", "MB", "GB"];
+  let value = bytes / 1024;
+  let unit = units[0];
+  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
+    value /= 1024;
+    unit = units[index];
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
+}
+
+function formatDate(value: string): string {
+  const parsed = Date.parse(value);
+  return Number.isNaN(parsed) ? value : dateFormatter.format(parsed);
+}
+
+function formatNumber(value: number): string {
+  return new Intl.NumberFormat().format(value);
+}
+
+function formatLocator(chunk: ChunkSummary): string {
+  const locator = chunk.locator;
+  if (locator.type === "page_range" && locator.start_page !== null) {
+    return locator.end_page && locator.end_page !== locator.start_page
+      ? `pp. ${locator.start_page}-${locator.end_page}`
+      : `p. ${locator.start_page}`;
+  }
+  if (locator.type === "line_range" && locator.start_line !== null) {
+    return locator.end_line && locator.end_line !== locator.start_line
+      ? `lines ${locator.start_line}-${locator.end_line}`
+      : `line ${locator.start_line}`;
+  }
+  if (locator.type === "time_range" && locator.start_seconds !== null) {
+    return locator.end_seconds && locator.end_seconds !== locator.start_seconds
+      ? `${Math.round(locator.start_seconds)}-${Math.round(locator.end_seconds)}s`
+      : `${Math.round(locator.start_seconds)}s`;
+  }
+  return chunk.strategy_label;
+}
+
+const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
   const chatKitConfig = getChatKitConfig();
   const options = useMemo<UseChatKitOptions>(
     () => ({
@@ -580,4 +1116,4 @@ function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;
-}
+});

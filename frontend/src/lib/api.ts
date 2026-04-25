@@ -90,6 +90,14 @@ export async function getSource(sourceId: string): Promise<SourceDetail> {
   return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}`);
 }
 
+export async function readSourceContentBlob(sourceId: string): Promise<{ blob: Blob; mediaType: string | null }> {
+  const response = await authenticatedFetch(`${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/content`);
+  if (!response.ok) {
+    throw await buildApiError(response);
+  }
+  return { blob: await response.blob(), mediaType: response.headers.get("Content-Type") };
+}
+
 export async function uploadSource(file: File, userGuidance: string, tagIds: string[]): Promise<IngestFinalizeResponse> {
   const formData = new FormData();
   formData.set("file", file, file.name);

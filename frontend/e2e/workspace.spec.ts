@@ -37,11 +37,15 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await page.goto("/");
 
   await expect(page.getByText("Local dev auth")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Semantic Library" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Search And Branch" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "QA, Freeform, Image, Voice" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Preview", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Search", exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Actions", exact: true })).toBeVisible();
   await expect(page.getByText("Recent Tasks")).toBeVisible();
+  await expect(page.locator(".explorer-pane")).toBeVisible();
+  await expect(page.locator(".preview-pane")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
+  await expect(page.getByText("Choose files")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
