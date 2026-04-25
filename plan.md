@@ -277,6 +277,7 @@ Implementation notes:
 
 - Added ChatKit tools for `get_source_detail`, `ingest_text_source`, `delete_source` with explicit confirmation, `list_tasks`, and `get_task`.
 - Updated ingest tasks so ChatKit-origin text ingest can carry `origin_thread_id`, matching the task/thread linkage planned for ChatKit and app-core drift control.
+- Added a compact recent-task strip to the webapp shell so queued/running/completed work is visible outside chat.
 
 Acceptance criteria:
 

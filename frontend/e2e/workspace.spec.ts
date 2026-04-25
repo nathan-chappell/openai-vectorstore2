@@ -7,6 +7,7 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.getByRole("heading", { name: "Semantic Library" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Search And Branch" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "QA, Freeform, Image, Voice" })).toBeVisible();
+  await expect(page.getByText("Recent Tasks")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
 

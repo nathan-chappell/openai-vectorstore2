@@ -9,6 +9,7 @@ import {
   getChatKitConfig,
   getSource,
   imageAction,
+  listTasks,
   listSources,
   listTags,
   qaAction,
@@ -30,6 +31,7 @@ import type {
   SourceSummary,
   SplitPreviewResponse,
   TagSummary,
+  TaskSummary,
 } from "./lib/types";
 
 type AppProps = {
@@ -54,6 +56,7 @@ export function App({ authMode }: AppProps) {
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
   const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [hits, setHits] = useState<ChunkHit[]>([]);
   const [branchResult, setBranchResult] = useState<BranchSearchResponse | null>(null);
   const [actionResult, setActionResult] = useState<ActionResponse | null>(null);
@@ -79,14 +82,16 @@ export function App({ authMode }: AppProps) {
   async function refreshAll(): Promise<void> {
     setBusy(true);
     try {
-      const [me, sourceList, tagList] = await Promise.all([
+      const [me, sourceList, tagList, taskList] = await Promise.all([
         getAuthenticatedUser(),
         listSources({ pageSize: 50 }),
         listTags(),
+        listTasks(),
       ]);
       setUser(me);
       setSources(sourceList.sources);
       setTags(tagList);
+      setTasks(taskList.tasks);
       setStatus(`Ready with ${sourceList.total_count} source${sourceList.total_count === 1 ? "" : "s"}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load the workspace.");
@@ -133,9 +138,10 @@ export function App({ authMode }: AppProps) {
       }
       setPendingFiles([]);
       setSplitPreview(null);
-      const [sourceList, tagList] = await Promise.all([listSources({ pageSize: 50 }), listTags()]);
+      const [sourceList, tagList, taskList] = await Promise.all([listSources({ pageSize: 50 }), listTags(), listTasks()]);
       setSources(sourceList.sources);
       setTags(tagList);
+      setTasks(taskList.tasks);
       setStatus("Upload queued. Semantic chunks will publish in the background.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
@@ -151,12 +157,14 @@ export function App({ authMode }: AppProps) {
     setBusy(true);
     try {
       const response = await resplitSource(selectedSource.id, { user_guidance: uploadGuidance });
-      const [sourceList, detail] = await Promise.all([
+      const [sourceList, detail, taskList] = await Promise.all([
         listSources({ pageSize: 50 }),
         getSource(selectedSource.id),
+        listTasks(),
       ]);
       setSources(sourceList.sources);
       setSelectedSource(detail);
+      setTasks(taskList.tasks);
       setStatus(`Queued re-split for ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "pending"}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Re-split failed.");
@@ -172,14 +180,16 @@ export function App({ authMode }: AppProps) {
     setBusy(true);
     try {
       const response = await updateSourceTags(selectedSource.id, { tag_ids: selectedSourceTagDraftIds });
-      const [sourceList, detail, tagList] = await Promise.all([
+      const [sourceList, detail, tagList, taskList] = await Promise.all([
         listSources({ pageSize: 50 }),
         getSource(selectedSource.id),
         listTags(),
+        listTasks(),
       ]);
       setSources(sourceList.sources);
       setSelectedSource(detail);
       setTags(tagList);
+      setTasks(taskList.tasks);
       setStatus(`Queued tag reindex for ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "pending"}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Tag update failed.");
@@ -258,6 +268,7 @@ export function App({ authMode }: AppProps) {
               : await voiceAction({ prompt: actionPrompt, selectedSourceIds });
       setActionResult(response);
       setHits(response.hits);
+      setTasks((await listTasks()).tasks);
       setStatus(`${response.kind} completed as task ${response.task_id.slice(0, 8)}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Action failed.");
@@ -299,6 +310,15 @@ export function App({ authMode }: AppProps) {
           <span>{authMode === "local-dev" ? "Local dev auth" : "Clerk auth"}</span>
           <strong>{user?.display_name ?? "Connecting"}</strong>
           <p>{status}</p>
+          <div className="task-strip">
+            <span>Recent Tasks</span>
+            {tasks.slice(0, 4).map((task) => (
+              <p key={task.id}>
+                {task.kind} · {task.status}
+              </p>
+            ))}
+            {!tasks.length ? <p>No tasks yet</p> : null}
+          </div>
           <button type="button" onClick={refreshAll} disabled={busy}>
             Refresh
           </button>
