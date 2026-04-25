@@ -127,6 +127,19 @@ Tasks:
 - [x] Run pyright, backend integration tests, and MCP contract checks.
 - [x] Commit this MCP Apps UI pass once verified.
 
+## Current Implementation Pass: Migration Discipline Baseline
+
+Status: completed.
+
+Tasks:
+
+- [x] Add Alembic as the schema migration tool.
+- [x] Add Alembic configuration and migration environment bound to the app ORM metadata.
+- [x] Create an initial migration from the current ORM state, including app-core, ChatKit, task, asset, tag, source, and chunk tables.
+- [x] Add a schema drift test that upgrades a temporary database to Alembic head and compares migrated tables/columns against `Base.metadata`.
+- [x] Run pyright and migration tests.
+- [x] Commit this migration baseline once verified.
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:
@@ -465,21 +478,21 @@ Decision updates:
 
 ## Phase 7: Data Model And Migration Discipline
 
-Status: planned.
+Status: in progress.
 
 The backend tables are "probably setup fine" for local development, but production needs migration discipline before more tables and fields are added.
 
 Tasks:
 
-- Add Alembic or an equivalent migration path before changing schema heavily.
-- Create an initial migration from the current ORM state.
+- [x] Add Alembic or an equivalent migration path before changing schema heavily.
+- [x] Create an initial migration from the current ORM state.
 - Add migrations for:
   - Ingest task state refinements.
   - Any split preview persistence.
   - Vector attribute versioning or reindex metadata.
   - OAuth/client/linking state if Clerk does not own it fully.
   - Any app-core operation audit tables, if needed.
-- Add a schema check in CI that detects model drift from migrations.
+- [x] Add a schema check in CI that detects model drift from migrations.
 - Keep ChatKit tables and app-core tables intentionally related:
   - `AppChatThread` and `AppTask.origin_thread_id`.
   - `AppChatAttachment` and source ingestion, if attachments become sources.
@@ -487,8 +500,8 @@ Tasks:
 
 Acceptance criteria:
 
-- New database state is introduced through migrations, not only `create_all`.
-- The relationship between ChatKit state and app-core state is documented and tested.
+- [x] New database state has an initial migration baseline and a drift check instead of relying only on `create_all`.
+- [x] The relationship between ChatKit state and app-core state is documented in this plan and covered by integration tests for thread/task/attachment linkage.
 
 ## Phase 8: Automated Tests And Codex-Driven UI Checks
 

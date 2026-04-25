@@ -9,6 +9,7 @@ description = "App-first OpenAI vector-store backed semantic RAG workspace with 
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
+    "alembic",
     "aiosqlite",
     "asyncpg",
     "clerk-backend-api",
