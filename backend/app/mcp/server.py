@@ -29,6 +29,7 @@ from prefab_ui.components import (
     Column,
     ForEach,
     H3 as PrefabH3,
+    If,
     Muted,
     Row,
     Separator,
@@ -72,6 +73,7 @@ CardTitle: Any = CardTitle
 Column: Any = Column
 ForEach: Any = ForEach
 h3: Any = PrefabH3
+If: Any = If
 Muted: Any = Muted
 Row: Any = Row
 Separator: Any = Separator
@@ -602,6 +604,27 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
         )
         return response.model_dump(mode="json")
 
+    @sources_app.tool("load_source_for_ui")
+    async def load_source_for_ui_tool(source_id: str, ctx: Context) -> dict[str, Any]:
+        del ctx
+        response = await services.sources.get_source(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            source_id=source_id,
+        )
+        return response.model_dump(mode="json")
+
+    @sources_app.tool("resplit_source_for_ui")
+    async def resplit_source_for_ui_tool(source_id: str, ctx: Context) -> dict[str, Any]:
+        del ctx
+        response = await services.sources.resplit_source(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            source_id=source_id,
+            tag_ids=None,
+            user_guidance=None,
+            origin_surface="mcp",
+        )
+        return response.model_dump(mode="json")
+
     @sources_app.ui(
         name="sources",
         title="Semantic Sources",
@@ -633,9 +656,51 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             Badge(source.status, variant="outline")  # ty:ignore[invalid-argument-type]
                         Small(source.original_filename)  # ty:ignore[invalid-argument-type]
                         Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
+                        with Row(gap=2, align="center"):
+                            Button(
+                                "Inspect",
+                                on_click=CallTool(
+                                    "load_source_for_ui",
+                                    arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
+                                    on_success=SetState("selectedSource", RESULT),
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                            )
+                            Button(
+                                "Re-split",
+                                variant="secondary",
+                                on_click=CallTool(
+                                    "resplit_source_for_ui",
+                                    arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
+                                    on_success=[
+                                        ShowToast("Re-split queued", variant="success"),
+                                        CallTool(
+                                            "refresh_sources",
+                                            on_success=SetState("sources", RESULT),
+                                            on_error=ShowToast(ERROR, variant="error"),
+                                        ),
+                                    ],
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                            )
+                with If(STATE.selectedSource):
+                    Separator()
+                    with Card(css_class="border border-slate-200"):
+                        with CardHeader(), Column(gap=1):
+                            CardTitle(STATE.selectedSource.display_title)  # ty:ignore[invalid-argument-type]
+                            CardDescription(STATE.selectedSource.original_filename)  # ty:ignore[invalid-argument-type]
+                        with CardContent(), Column(gap=2):
+                            with Row(gap=2, align="center"):
+                                Badge(STATE.selectedSource.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Badge(STATE.selectedSource.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                Muted(STATE.selectedSource.chunk_count)  # ty:ignore[invalid-argument-type]
+                            with ForEach(STATE.selectedSource.chunks) as chunk:
+                                Small(chunk.title)  # ty:ignore[invalid-argument-type]
                 Separator()
                 Muted("Use the search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
-        return PrefabApp(title="Semantic Sources", view=view, state={"sources": initial_sources})
+        return PrefabApp(
+            title="Semantic Sources", view=view, state={"sources": initial_sources, "selectedSource": None}
+        )
 
     server.add_provider(sources_app)
 

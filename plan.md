@@ -146,7 +146,7 @@ Acceptance criteria:
 
 ## Phase 3: First-Class PDF Smart Split
 
-Status: in progress.
+Status: completed for the current web, ChatKit, REST, MCP, and MCP Apps baseline.
 
 PDF smart split already exists as a hidden path inside upload. Make it first-class so the app can preview, tune, re-run, and expose it through ChatKit and MCP.
 
@@ -162,7 +162,7 @@ Tasks:
   - [x] Web ChatKit tool.
   - [x] REST endpoint for upload/preview/finalize if needed by the UI.
   - [x] MCP file/PDF ingest tool.
-  - MCP Apps UI controls.
+  - [x] MCP Apps UI controls.
 
 Implementation notes:
 
@@ -178,7 +178,9 @@ Implementation notes:
 - Re-split preserves the original OpenAI file when present, replaces old semantic chunk rows after successful split, detaches/deletes old chunk vector files, and records replacement progress in `AppTask(kind="resplit")`.
 - Added frontend TypeScript/API contracts for re-split and integration tests for successful replacement plus failed pre-replacement preservation.
 - Added direct webapp controls to stage selected files, run inspect-only split preview before upload, enqueue upload, and queue a safe re-split for the selected source.
-- Remaining Phase 3 work: MCP Apps UI controls and richer PDF fixture coverage.
+- Added MCP Apps UI controls to inspect a source from the rendered source browser and queue a re-split from the app UI.
+- Added a generated two-page PDF fixture test that exercises real PDF extraction, page markers, and page-range batching.
+- Remaining Phase 3 work: none for the current baseline. Future polish can add editable preview history, richer per-page offsets, and native host file inputs where available.
 
 Decision updates:
 

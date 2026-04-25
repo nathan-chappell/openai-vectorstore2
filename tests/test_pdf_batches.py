@@ -1,6 +1,13 @@
 from __future__ import annotations
 
-from backend.app.services.sources import build_pdf_text_batches
+from collections.abc import Callable
+from io import BytesIO
+from typing import Any, cast
+
+from pypdf import PdfWriter
+from pypdf.generic import DictionaryObject, NameObject, StreamObject
+
+from backend.app.services.sources import build_pdf_text_batches, extract_pdf_text
 
 
 def test_build_pdf_text_batches_preserves_page_markers_and_ranges() -> None:
@@ -33,3 +40,41 @@ def test_build_pdf_text_batches_falls_back_to_single_text_batch_without_markers(
     assert batches[0].end_page is None
     assert batches[0].label == "PDF text"
     assert batches[0].text == "Loose extracted text"
+
+
+def test_extract_pdf_text_marks_pages_from_fixture_pdf() -> None:
+    extracted_text = extract_pdf_text(
+        filename="fixture.pdf", payload=_pdf_with_pages(["Alpha page one", "Bravo page two"])
+    )
+
+    assert "[page 1]\nAlpha page one" in extracted_text
+    assert "[page 2]\nBravo page two" in extracted_text
+    batches = build_pdf_text_batches(extracted_text, pages_per_batch=1)
+    assert [(batch.start_page, batch.end_page, batch.label) for batch in batches] == [
+        (1, 1, "page 1"),
+        (2, 2, "page 2"),
+    ]
+
+
+def _pdf_with_pages(page_texts: list[str]) -> bytes:
+    writer = PdfWriter()
+    add_object = cast(Callable[[object], Any], getattr(writer, "_add_object"))
+    font = DictionaryObject(
+        {
+            NameObject("/Type"): NameObject("/Font"),
+            NameObject("/Subtype"): NameObject("/Type1"),
+            NameObject("/BaseFont"): NameObject("/Helvetica"),
+        }
+    )
+    font_ref = add_object(font)
+    for text in page_texts:
+        page = writer.add_blank_page(width=612, height=792)
+        page[NameObject("/Resources")] = DictionaryObject(
+            {NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})}
+        )
+        stream = StreamObject()
+        stream.set_data(f"BT /F1 12 Tf 72 720 Td ({text}) Tj ET".encode("ascii"))
+        page[NameObject("/Contents")] = add_object(stream)
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
