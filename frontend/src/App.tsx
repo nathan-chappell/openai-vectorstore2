@@ -12,13 +12,24 @@ import {
   listSources,
   listTags,
   qaAction,
+  previewSemanticSplit,
+  resplitSource,
   searchChunks,
   setChatKitMetadataGetter,
   uploadSource,
   voiceAction,
   authenticatedFetch,
 } from "./lib/api";
-import type { ActionResponse, AuthUser, BranchSearchResponse, ChunkHit, SourceDetail, SourceSummary, TagSummary } from "./lib/types";
+import type {
+  ActionResponse,
+  AuthUser,
+  BranchSearchResponse,
+  ChunkHit,
+  SourceDetail,
+  SourceSummary,
+  SplitPreviewResponse,
+  TagSummary,
+} from "./lib/types";
 
 type AppProps = {
   authMode: "clerk" | "local-dev";
@@ -39,6 +50,8 @@ export function App({ authMode }: AppProps) {
   const [searchQuery, setSearchQuery] = useState("What matters most in this library?");
   const [actionPrompt, setActionPrompt] = useState("Answer from the selected sources with citations.");
   const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
   const [hits, setHits] = useState<ChunkHit[]>([]);
   const [branchResult, setBranchResult] = useState<BranchSearchResponse | null>(null);
   const [actionResult, setActionResult] = useState<ActionResponse | null>(null);
@@ -76,22 +89,71 @@ export function App({ authMode }: AppProps) {
     }
   }
 
-  async function handleUpload(files: FileList | null): Promise<void> {
-    if (!files?.length) {
+  function chooseFiles(files: FileList | null): void {
+    const nextFiles = Array.from(files ?? []);
+    setPendingFiles(nextFiles);
+    setSplitPreview(null);
+    if (nextFiles.length) {
+      setStatus(`Selected ${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} for preview or upload.`);
+    }
+  }
+
+  async function previewPendingSplit(): Promise<void> {
+    const [file] = pendingFiles;
+    if (!file) {
       return;
     }
     setBusy(true);
     try {
-      for (const file of Array.from(files)) {
+      const response = await previewSemanticSplit(file, uploadGuidance);
+      setSplitPreview(response);
+      setStatus(`Previewed ${response.split.chunks.length} proposed chunk${response.split.chunks.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Split preview failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpload(): Promise<void> {
+    if (!pendingFiles.length) {
+      return;
+    }
+    setBusy(true);
+    try {
+      for (const file of pendingFiles) {
         const response = await uploadSource(file, uploadGuidance, []);
         setStatus(`Uploaded ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "complete"}.`);
       }
+      setPendingFiles([]);
+      setSplitPreview(null);
       const [sourceList, tagList] = await Promise.all([listSources({ pageSize: 50 }), listTags()]);
       setSources(sourceList.sources);
       setTags(tagList);
-      setStatus("Upload complete. Semantic chunks are published.");
+      setStatus("Upload queued. Semantic chunks will publish in the background.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resplitSelectedSource(): Promise<void> {
+    if (!selectedSource) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await resplitSource(selectedSource.id, { user_guidance: uploadGuidance });
+      const [sourceList, detail] = await Promise.all([
+        listSources({ pageSize: 50 }),
+        getSource(selectedSource.id),
+      ]);
+      setSources(sourceList.sources);
+      setSelectedSource(detail);
+      setStatus(`Queued re-split for ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "pending"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Re-split failed.");
     } finally {
       setBusy(false);
     }
@@ -215,15 +277,36 @@ export function App({ authMode }: AppProps) {
           </div>
 
           <label className="drop-card">
-            <input type="file" multiple onChange={(event) => void handleUpload(event.currentTarget.files)} />
-            <strong>Drop in raw material</strong>
-            <span>PDF, text, transcript, audio, or video</span>
+            <input type="file" multiple onChange={(event) => chooseFiles(event.currentTarget.files)} />
+            <strong>{pendingFiles.length ? `${pendingFiles.length} file${pendingFiles.length === 1 ? "" : "s"} selected` : "Choose raw material"}</strong>
+            <span>{pendingFiles.length ? pendingFiles.map((file) => file.name).join(", ") : "PDF, text, transcript, audio, or video"}</span>
           </label>
           <textarea
             value={uploadGuidance}
             onChange={(event) => setUploadGuidance(event.currentTarget.value)}
             placeholder="Semantic splitting guidance"
           />
+          <div className="button-row compact">
+            <button type="button" onClick={() => void previewPendingSplit()} disabled={busy || !pendingFiles.length}>
+              Preview Split
+            </button>
+            <button type="button" onClick={() => void handleUpload()} disabled={busy || !pendingFiles.length}>
+              Upload
+            </button>
+          </div>
+          {splitPreview ? (
+            <div className="preview-card">
+              <p className="eyebrow">Split Preview</p>
+              <strong>
+                {splitPreview.source_kind} · {splitPreview.split.chunks.length} chunks · {splitPreview.split.tags.join(", ") || "no tags"}
+              </strong>
+              <div className="mini-list">
+                {splitPreview.split.chunks.slice(0, 6).map((chunk) => (
+                  <span key={chunk.sequence}>{chunk.title}</span>
+                ))}
+              </div>
+            </div>
+          ) : null}
 
           <div className="tag-row">
             {tags.slice(0, 10).map((tag) => (
@@ -290,6 +373,9 @@ export function App({ authMode }: AppProps) {
                 <>
                   <h3>{selectedSource.display_title}</h3>
                   <p>{selectedSource.original_filename}</p>
+                  <button type="button" className="ghost" onClick={() => void resplitSelectedSource()} disabled={busy}>
+                    Re-split
+                  </button>
                   <div className="mini-list">
                     {selectedSource.chunks.slice(0, 6).map((chunk) => (
                       <span key={chunk.id}>{chunk.title}</span>

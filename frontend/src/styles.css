@@ -116,6 +116,7 @@ textarea {
 .tool-card,
 .detail-card,
 .hit-card,
+.preview-card,
 .source-card {
   border: 1px solid var(--line);
   background: var(--paper);
@@ -203,6 +204,19 @@ textarea {
   font-size: 0.72rem;
   background: rgba(118, 132, 106, 0.16);
   color: #4c5d43;
+}
+
+.button-row.compact {
+  align-items: stretch;
+  margin-top: 0.75rem;
+}
+
+.preview-card {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+  border-radius: 1.1rem;
+  padding: 0.85rem;
 }
 
 .source-list,

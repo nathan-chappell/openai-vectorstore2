@@ -177,7 +177,8 @@ Implementation notes:
 - Added a task-backed `resplit_source` operation exposed through REST, ChatKit, and MCP. It computes the new split before deleting old chunk/vector files so pre-replacement failures preserve existing ready chunks.
 - Re-split preserves the original OpenAI file when present, replaces old semantic chunk rows after successful split, detaches/deletes old chunk vector files, and records replacement progress in `AppTask(kind="resplit")`.
 - Added frontend TypeScript/API contracts for re-split and integration tests for successful replacement plus failed pre-replacement preservation.
-- Remaining Phase 3 work: MCP Apps UI controls, richer PDF fixture coverage, and optional direct frontend preview/re-split UI.
+- Added direct webapp controls to stage selected files, run inspect-only split preview before upload, enqueue upload, and queue a safe re-split for the selected source.
+- Remaining Phase 3 work: MCP Apps UI controls and richer PDF fixture coverage.
 
 Decision updates:
 
