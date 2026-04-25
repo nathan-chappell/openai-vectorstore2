@@ -474,6 +474,19 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             assert kind_scoped_search.status_code == 200
             assert kind_scoped_search.json()["hits"] == []
 
+            dated_branch_search = await client.post(
+                "/api/search/branch",
+                headers=auth_headers,
+                json={
+                    "query": "retrieval",
+                    "created_before": "2000-01-01T00:00:00Z",
+                    "descend": 1,
+                    "max_width": 3,
+                },
+            )
+            assert dated_branch_search.status_code == 200
+            assert dated_branch_search.json()["levels"] == []
+
             app.state.services.openai.ignore_filters = True
             fallback_search = await client.post(
                 "/api/search",

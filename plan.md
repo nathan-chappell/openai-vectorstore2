@@ -58,6 +58,44 @@ Implementation notes:
   - `npm run test:e2e -- --project=chromium-mobile`
   - `npm run test:e2e -- --grep "workspace shell"` for refreshed desktop/mobile screenshots.
 
+## Current Implementation Pass: Sleek Explorer Scope Controls
+
+Status: completed.
+
+Tasks:
+
+- [x] Reframe the explorer around the primary concepts: query, tags, and files.
+- [x] Keep upload available but visually secondary to browsing and scoping.
+- [x] Add explicit multi-file selection for ChatKit context while preserving row-click preview.
+- [x] Add local query and tag filtering for fast explorer narrowing.
+- [x] Surface the selected-file count as the chat input scope.
+- [x] Disable ChatKit composer attachments in the webapp; files are selected through the explorer instead.
+- [x] Surface source creation time in the explorer and preview metadata.
+- [x] Update Playwright shell expectations and verify desktop/mobile layout.
+- [x] Align vector-store metadata attributes with the clarified field model: creation time, canonical comma-separated `tags`, source kind, filename, and internal membership slots for exact OpenAI pre-filtering.
+- [x] Add typed date-range filters for vector-store search and DB post-filtering.
+- [x] Update attribute/filter tests for the new OpenAI metadata model.
+- [x] Commit this explorer refinement once verified.
+
+Implementation notes:
+
+- Official OpenAI retrieval docs say vector-store files have at most 16 scalar attribute keys and support comparison/compound filters. The current Python SDK comparison filters include `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, and `nin`, but no substring/contains operator for membership inside a comma-separated string.
+- Because of that, `tags` should be the user-visible metadata field, while internal bounded tag slots remain necessary for exact tag membership pre-filtering unless the OpenAI API adds array/contains-style attributes later.
+- The explorer now treats files, query, and tags as the primary interaction model: row click opens preview, checkboxes select the ChatKit scope, "Select all" scopes the visible filtered files, and upload is visually secondary.
+- The explorer now loads all paged source records for the current library so local query/tag filters and visible-file selection do not silently stop at the first page.
+- ChatKit still uses the same backend agent and `selected_source_ids` metadata, but the web composer no longer exposes attachments or an upload strategy. The older attachment backend path can remain as compatibility plumbing until we deliberately remove it.
+- Vector-store attributes are now versioned as `attributes_version=2` and include `source_id`, `chunk_id`, `source_kind`, `filename`, numeric `created_at`, string `created_date`, canonical comma-separated `tags`, and bounded `tag_1` through `tag_8` membership slots.
+- Search requests now accept `created_after` and `created_before`; OpenAI vector-store filters pre-filter with `gte`/`lte` on `created_at` only when every indexed chunk has v2 attributes, and DB-side hydration always applies the same date bounds to avoid legacy v1 false negatives.
+- Source tag assignment is capped at eight filterable tags, matching the available OpenAI metadata slots instead of allowing a ninth tag that the vector-store prefilter could not represent.
+- SQLite local-dev write pressure was reduced by adding a sync connection timeout, avoiding per-request `last_seen_at` writes when identity is unchanged, and updating upload state from the upload response instead of immediately refreshing every list during background ingest.
+- Verification completed:
+  - `./.venv/bin/pyright`
+  - `./.venv/bin/pytest tests/test_vector_attributes.py tests/integration/test_app_contracts.py`
+  - `npm run typecheck`
+  - `npm run build`
+  - `npm run test:e2e -- --project=chromium-desktop`
+  - `npm run test:e2e -- --project=chromium-mobile`
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:

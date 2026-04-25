@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 import logging
 import mimetypes
 from pathlib import Path
@@ -83,7 +83,7 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
-VECTOR_ATTRIBUTES_VERSION = 1
+VECTOR_ATTRIBUTES_VERSION = 2
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
 
 
@@ -303,6 +303,16 @@ class SourceService:
             )
             session.add(existing)
         else:
+            should_update = (
+                existing.primary_email != record.primary_email
+                or existing.display_name != record.display_name
+                or existing.active != record.active
+                or existing.role != record.role
+                or existing.last_seen_at is None
+                or _as_utc(existing.last_seen_at) < now - timedelta(minutes=5)
+            )
+            if not should_update:
+                return existing
             existing.primary_email = record.primary_email
             existing.display_name = record.display_name
             existing.active = record.active
@@ -421,6 +431,7 @@ class SourceService:
             library = await self._library_for_user(session, app_user=app_user)
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
+            selected_tag_ids = bounded_tag_ids(tag_ids)
             media_type = guess_media_type(filename=filename, declared_media_type=declared_media_type)
             source_kind = classify_source_kind(filename=filename, media_type=media_type)
             stored = await self._storage.put_bytes(
@@ -464,7 +475,7 @@ class SourceService:
                     "declared_media_type": declared_media_type,
                     "media_type": media_type,
                     "byte_size": len(payload),
-                    "tag_ids": tag_ids,
+                    "tag_ids": selected_tag_ids,
                     "user_guidance": user_guidance,
                 },
                 state_json={"stage": "queued", "source_id": source.id},
@@ -487,7 +498,7 @@ class SourceService:
                 clerk_user_id=clerk_user_id,
                 source_id=source.id,
                 task_id=task.id,
-                tag_ids=tag_ids,
+                tag_ids=selected_tag_ids,
                 user_guidance=user_guidance,
             )
             return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
@@ -571,7 +582,7 @@ class SourceService:
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
             raw_tag_ids = list(tag_ids) if tag_ids is not None else [link.tag_id for link in source.tag_links]
-            selected_tag_ids = list(dict.fromkeys(raw_tag_ids))
+            selected_tag_ids = bounded_tag_ids(raw_tag_ids)
             selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
             replaced_chunk_count = len(source.chunks)
             source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
@@ -643,7 +654,7 @@ class SourceService:
             library = source.library
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
-            selected_tag_ids = list(dict.fromkeys(tag_ids))
+            selected_tag_ids = bounded_tag_ids(tag_ids)
             selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
             previous_status = source.status
             previous_error_message = source.error_message
@@ -811,12 +822,11 @@ class SourceService:
                         updated_at=_utcnow(),
                     )
                     attributes = build_vector_attributes(
-                        library_id=library.id,
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        content_kind="semantic_chunk",
-                        title=chunk.title,
+                        original_filename=source.original_filename,
+                        source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in merged_tags],
                     )
                     chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
@@ -1095,12 +1105,11 @@ class SourceService:
                         updated_at=_utcnow(),
                     )
                     attributes = build_vector_attributes(
-                        library_id=library.id,
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        content_kind="semantic_chunk",
-                        title=chunk.title,
+                        original_filename=source.original_filename,
+                        source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in merged_tags],
                     )
                     chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
@@ -1323,12 +1332,11 @@ class SourceService:
                 for chunk in chunks:
                     old_file_id = chunk.openai_file_id
                     attributes = build_vector_attributes(
-                        library_id=library.id,
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        content_kind="semantic_chunk",
-                        title=chunk.title,
+                        original_filename=source.original_filename,
+                        source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in selected_tags],
                     )
                     new_file_id = await self._openai.attach_chunk_to_vector_store(
@@ -1489,11 +1497,15 @@ class SourceService:
             if library.openai_vector_store_id is None:
                 return []
             tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=request.tag_ids)
+            include_created_at_filters = _library_supports_vector_created_at_filter(library)
             filters = build_filter_groups(
                 source_ids=request.selected_source_ids,
                 source_kinds=request.source_kinds,
                 tag_slugs=[tag.slug for tag in tags],
                 tag_match_mode=request.tag_match_mode,
+                created_after=request.created_after,
+                created_before=request.created_before,
+                include_created_at_filters=include_created_at_filters,
             )
             candidates = await self._openai.search_vector_store(
                 vector_store_id=library.openai_vector_store_id,
@@ -1537,6 +1549,8 @@ class SourceService:
                     source_kinds=request.source_kinds,
                     tag_ids=[tag.id for tag in tags],
                     tag_match_mode=request.tag_match_mode,
+                    created_after=request.created_after,
+                    created_before=request.created_before,
                 ):
                     continue
                 output.append(self._chunk_hit(chunk, score=candidate.score, attributes=candidate.attributes))
@@ -1552,6 +1566,8 @@ class SourceService:
                 source_kinds=request.source_kinds,
                 tag_ids=request.tag_ids,
                 tag_match_mode=request.tag_match_mode,
+                created_after=request.created_after,
+                created_before=request.created_before,
                 max_results=request.max_width,
             ),
         )
@@ -1570,6 +1586,8 @@ class SourceService:
                         source_kinds=request.source_kinds,
                         tag_ids=request.tag_ids,
                         tag_match_mode=request.tag_match_mode,
+                        created_after=request.created_after,
+                        created_before=request.created_before,
                         max_results=request.max_width,
                     ),
                 )
@@ -1931,22 +1949,23 @@ class SourceService:
 
 def build_vector_attributes(
     *,
-    library_id: str,
     source_id: str,
     chunk_id: str,
     source_kind: str,
-    content_kind: str,
-    title: str,
+    original_filename: str,
+    source_created_at: datetime,
     tag_slugs: list[str],
 ) -> dict[str, str | float | bool]:
+    created_at = _as_utc(source_created_at)
     attributes: dict[str, str | float | bool] = {
         "attributes_version": float(VECTOR_ATTRIBUTES_VERSION),
-        "library_id": library_id,
         "source_id": source_id,
         "chunk_id": chunk_id,
         "source_kind": source_kind,
-        "content_kind": content_kind,
-        "title": title[:256],
+        "filename": original_filename[:256],
+        "created_at": created_at.timestamp(),
+        "created_date": created_at.date().isoformat(),
+        "tags": _tag_metadata_value(tag_slugs),
     }
     for index, slug in enumerate(tag_slugs[:TAG_SLOT_COUNT], start=1):
         attributes[f"tag_{index}"] = slug
@@ -1959,12 +1978,19 @@ def build_filter_groups(
     source_kinds: Sequence[str],
     tag_slugs: Sequence[str],
     tag_match_mode: TagMatchMode,
+    created_after: datetime | None = None,
+    created_before: datetime | None = None,
+    include_created_at_filters: bool = True,
 ) -> ComparisonFilter | CompoundFilter | None:
     filters: list[ComparisonFilter | CompoundFilter] = []
     if source_ids:
         filters.append(_or_filter("source_id", source_ids))
     if source_kinds:
         filters.append(_or_filter("source_kind", source_kinds))
+    if include_created_at_filters and created_after is not None:
+        filters.append({"type": "gte", "key": "created_at", "value": _as_utc(created_after).timestamp()})
+    if include_created_at_filters and created_before is not None:
+        filters.append({"type": "lte", "key": "created_at", "value": _as_utc(created_before).timestamp()})
     if tag_slugs:
         tag_filters: list[CompoundFilter] = [_tag_slug_filter(slug) for slug in tag_slugs]
         if len(tag_filters) == 1:
@@ -2106,6 +2132,13 @@ def _dedupe_text_values(values: Sequence[str]) -> list[str]:
     return output
 
 
+def bounded_tag_ids(tag_ids: Sequence[str]) -> list[str]:
+    output = list(dict.fromkeys(tag_id.strip() for tag_id in tag_ids if tag_id.strip()))
+    if len(output) > TAG_SLOT_COUNT:
+        raise ValueError(f"A source can have at most {TAG_SLOT_COUNT} filterable tags.")
+    return output
+
+
 def _dict_payload(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
 
@@ -2146,11 +2179,18 @@ def _chunk_matches_request_filters(
     source_kinds: Sequence[str],
     tag_ids: Sequence[str],
     tag_match_mode: TagMatchMode,
+    created_after: datetime | None,
+    created_before: datetime | None,
 ) -> bool:
     source = chunk.source_file
     if selected_source_ids and source.id not in set(selected_source_ids):
         return False
     if source_kinds and source.source_kind not in set(source_kinds):
+        return False
+    source_created_at = _as_utc(source.created_at)
+    if created_after is not None and source_created_at < _as_utc(created_after):
+        return False
+    if created_before is not None and source_created_at > _as_utc(created_before):
         return False
     if tag_ids:
         selected_tag_ids = set(tag_ids)
@@ -2160,6 +2200,19 @@ def _chunk_matches_request_filters(
             if tag_match_mode == "all"
             else bool(selected_tag_ids & source_tag_ids)
         )
+    return True
+
+
+def _library_supports_vector_created_at_filter(library: UserLibrary) -> bool:
+    for source in library.sources:
+        for chunk in source.chunks:
+            if chunk.openai_file_id is None:
+                continue
+            attributes = chunk.vector_attributes_json or {}
+            if attributes.get("attributes_version") != float(VECTOR_ATTRIBUTES_VERSION):
+                return False
+            if not isinstance(attributes.get("created_at"), (int, float)):
+                return False
     return True
 
 
@@ -2174,6 +2227,25 @@ def _tag_slug_filter(slug: str) -> CompoundFilter:
         "type": "or",
         "filters": [{"type": "eq", "key": f"tag_{index}", "value": slug} for index in range(1, TAG_SLOT_COUNT + 1)],
     }
+
+
+def _tag_metadata_value(tag_slugs: Sequence[str]) -> str:
+    unique_slugs = list(dict.fromkeys(slug for slug in tag_slugs if slug))
+    output: list[str] = []
+    current_length = 0
+    for slug in unique_slugs:
+        next_length = current_length + len(slug) + (1 if output else 0)
+        if next_length > 256:
+            break
+        output.append(slug)
+        current_length = next_length
+    return ",".join(output)
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def _openai_file_purpose(*, source_kind: str) -> FilePurpose:

@@ -4,6 +4,15 @@ export type TagMatchMode = "all" | "any";
 export type StructuredPayload = Record<string, unknown> | unknown[] | null;
 export type OpenAIAttributes = Record<string, string | number | boolean>;
 
+export type SearchFilterPayload = {
+  selectedSourceIds?: string[];
+  sourceKinds?: SourceKind[];
+  tagIds?: string[];
+  tagMatchMode?: TagMatchMode;
+  createdAfter?: string | null;
+  createdBefore?: string | null;
+};
+
 export type AuthUser = {
   clerk_user_id: string;
   display_name: string;

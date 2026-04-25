@@ -166,11 +166,33 @@ def _matches_filter(filters: object, attributes: dict[str, str | float | bool]) 
     if filters is None:
         return True
     if not isinstance(filters, dict):
-        return True
+        return False
     filter_type = filters.get("type")
-    if filter_type == "eq":
+    if filter_type in {"eq", "ne", "gt", "gte", "lt", "lte", "in", "nin"}:
         key = filters.get("key")
-        return isinstance(key, str) and attributes.get(key) == filters.get("value")
+        if not isinstance(key, str):
+            return False
+        candidate = attributes.get(key)
+        expected = filters.get("value")
+        if filter_type == "eq":
+            return candidate == expected
+        if filter_type == "ne":
+            return candidate != expected
+        if filter_type == "in":
+            return isinstance(expected, list) and candidate in expected
+        if filter_type == "nin":
+            return isinstance(expected, list) and candidate not in expected
+        if not isinstance(candidate, (int, float)) or not isinstance(expected, (int, float)):
+            return False
+        if filter_type == "gt":
+            return candidate > expected
+        if filter_type == "gte":
+            return candidate >= expected
+        if filter_type == "lt":
+            return candidate < expected
+        if filter_type == "lte":
+            return candidate <= expected
+        return False
     if filter_type == "and":
         nested_filters = filters.get("filters")
         return isinstance(nested_filters, list) and all(
@@ -181,4 +203,4 @@ def _matches_filter(filters: object, attributes: dict[str, str | float | bool]) 
         return isinstance(nested_filters, list) and any(
             _matches_filter(nested, attributes) for nested in nested_filters
         )
-    return True
+    return False

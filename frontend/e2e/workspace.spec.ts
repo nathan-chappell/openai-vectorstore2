@@ -3,14 +3,6 @@ import { expect, test, type APIRequestContext, type Page } from "@playwright/tes
 const BACKEND_URL = "http://127.0.0.1:8000";
 const AUTH_HEADERS = { Authorization: "Bearer local-dev" };
 
-type ChatKitAttachment = {
-  id: string;
-  type: "file";
-  name: string;
-  mime_type: string;
-  metadata?: Record<string, unknown>;
-};
-
 type TaskSummary = {
   id: string;
   kind: string;
@@ -31,6 +23,11 @@ type SourceDetail = {
   id: string;
   status: string;
   display_title: string;
+  original_filename: string;
+};
+
+type SourceListResponse = {
+  sources: SourceDetail[];
 };
 
 test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => {
@@ -45,13 +42,15 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".explorer-pane")).toBeVisible();
   await expect(page.locator(".preview-pane")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
+  await expect(page.getByPlaceholder("Search files, tags, type, status")).toBeVisible();
+  await expect(page.getByText("0 files for chat")).toBeVisible();
   await expect(page.getByText("Choose files")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
 });
 
-test("chatkit uploads a file, answers from it, and deletes it", async ({ page, request }, testInfo) => {
+test("explorer-selected file answers through chatkit and deletes cleanly", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop", "Run the live ChatKit flow once.");
   test.setTimeout(300_000);
 
@@ -70,33 +69,40 @@ test("chatkit uploads a file, answers from it, and deletes it", async ({ page, r
     await expect(page.getByText("Local dev auth")).toBeVisible();
     await waitForChatKit(page);
 
-    const attachment = await uploadAttachmentFromBrowser(page, filename, fileText);
-    expect(attachment.type).toBe("file");
-    expect(attachment.name).toBe(filename);
-    expect(attachment.metadata).toBeTruthy();
-    sourceId = stringMetadata(attachment, "source_id");
-    const taskId = stringMetadata(attachment, "task_id");
-    expect(sourceId).toBeTruthy();
-    expect(taskId).toBeTruthy();
+    await page.locator(".upload-strip input[type='file']").setInputFiles({
+      name: filename,
+      mimeType: "text/plain",
+      buffer: Buffer.from(fileText),
+    });
+    await expect(page.getByText("1 selected")).toBeVisible();
+    await page.locator(".upload-strip").getByRole("button", { name: "Upload" }).click();
 
-    await waitForTask(request, taskId, "completed", 120_000);
-    const source = await getSource(request, sourceId);
+    const source = await waitForSourceByFilename(request, filename, 120_000);
+    sourceId = source.id;
     expect(source.status).toBe("ready");
+    await page.getByRole("button", { name: "Refresh" }).click();
+    await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
+    await page.getByLabel(`Select ${source.display_title} for chat`).check();
+    await expect(page.getByText("1 file for chat")).toBeVisible();
 
     await sendChatKitMessage(
       page,
       [
-        `Use the attached source ${sourceId} and call answer_from_library.`,
+        "Use the currently selected file scope and call answer_from_library.",
         "Question: what is the project codename and retention policy?",
         "Use only that uploaded file and include the exact phrases Cobalt Maple and seven years.",
       ].join(" "),
-      attachment,
     );
 
     const qaTask = await waitForTaskMatching(
       request,
       (task) => task.kind === "qa" && task.origin_surface === "chatkit" && jsonText(task.result_json).includes("cobalt maple"),
       120_000,
+      (task) =>
+        task.kind === "qa" &&
+        task.origin_surface === "chatkit" &&
+        ["failed", "cancelled"].includes(task.status) &&
+        jsonText(task.input_json).toLowerCase().includes("cobalt maple"),
     );
     expect(jsonText(qaTask.result_json)).toContain("seven years");
 
@@ -155,30 +161,11 @@ async function waitForChatKit(page: Page): Promise<void> {
   });
 }
 
-async function uploadAttachmentFromBrowser(page: Page, filename: string, content: string): Promise<ChatKitAttachment> {
-  return page.evaluate(
-    async ({ filename: uploadName, content: uploadContent }) => {
-      const formData = new FormData();
-      formData.set("file", new File([uploadContent], uploadName, { type: "text/plain" }), uploadName);
-      const response = await fetch("/api/chatkit/attachments", {
-        method: "POST",
-        headers: { Authorization: "Bearer local-dev" },
-        body: formData,
-      });
-      if (!response.ok) {
-        throw new Error(`ChatKit attachment upload failed: ${response.status} ${await response.text()}`);
-      }
-      return (await response.json()) as ChatKitAttachment;
-    },
-    { filename, content },
-  );
-}
-
-async function sendChatKitMessage(page: Page, text: string, attachment?: ChatKitAttachment): Promise<void> {
+async function sendChatKitMessage(page: Page, text: string): Promise<void> {
   await page.evaluate(
-    async ({ text: messageText, attachment: uploadedAttachment }) => {
+    async ({ text: messageText }) => {
       const chatkit = document.querySelector("openai-chatkit") as unknown as {
-        sendUserMessage(params: { text: string; attachments?: ChatKitAttachment[] }): Promise<void>;
+        sendUserMessage(params: { text: string }): Promise<void>;
         addEventListener(type: string, listener: EventListener, options?: AddEventListenerOptions): void;
         removeEventListener(type: string, listener: EventListener): void;
       } | null;
@@ -211,47 +198,30 @@ async function sendChatKitMessage(page: Page, text: string, attachment?: ChatKit
       });
       await chatkit.sendUserMessage({
         text: messageText,
-        attachments: uploadedAttachment ? [uploadedAttachment] : undefined,
       });
       await responseDone;
     },
-    { text, attachment },
+    { text },
   );
-}
-
-async function waitForTask(
-  request: APIRequestContext,
-  taskId: string,
-  expectedStatus: string,
-  timeoutMs: number,
-): Promise<TaskSummary> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await request.get(`${BACKEND_URL}/api/tasks/${taskId}`, { headers: AUTH_HEADERS });
-    if (response.ok()) {
-      const task = (await response.json()) as TaskSummary;
-      if (task.status === expectedStatus) {
-        return task;
-      }
-      if (task.status === "failed" || task.status === "cancelled") {
-        throw new Error(`Task ${taskId} ended as ${task.status}: ${task.error_message ?? "no error"}`);
-      }
-    }
-    await delay(1_000);
-  }
-  throw new Error(`Timed out waiting for task ${taskId} to become ${expectedStatus}.`);
 }
 
 async function waitForTaskMatching(
   request: APIRequestContext,
   matches: (task: TaskSummary) => boolean,
   timeoutMs: number,
+  fails?: (task: TaskSummary) => boolean,
 ): Promise<TaskSummary> {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeoutMs) {
     const response = await request.get(`${BACKEND_URL}/api/tasks?limit=50`, { headers: AUTH_HEADERS });
     if (response.ok()) {
       const payload = (await response.json()) as TaskListResponse;
+      const failure = fails ? payload.tasks.find(fails) : undefined;
+      if (failure) {
+        throw new Error(
+          `Task ${failure.id} ended ${failure.status}: ${failure.error_message ?? jsonText(failure.result_json)}`,
+        );
+      }
       const match = payload.tasks.find(matches);
       if (match) {
         return match;
@@ -262,10 +232,29 @@ async function waitForTaskMatching(
   throw new Error("Timed out waiting for a matching task.");
 }
 
-async function getSource(request: APIRequestContext, sourceId: string): Promise<SourceDetail> {
-  const response = await request.get(`${BACKEND_URL}/api/sources/${sourceId}`, { headers: AUTH_HEADERS });
-  expect(response.status()).toBe(200);
-  return (await response.json()) as SourceDetail;
+async function waitForSourceByFilename(
+  request: APIRequestContext,
+  filename: string,
+  timeoutMs: number,
+): Promise<SourceDetail> {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeoutMs) {
+    const response = await request.get(`${BACKEND_URL}/api/sources?query=${encodeURIComponent(filename)}&page_size=50`, {
+      headers: AUTH_HEADERS,
+    });
+    if (response.ok()) {
+      const payload = (await response.json()) as SourceListResponse;
+      const source = payload.sources.find((candidate) => candidate.original_filename === filename);
+      if (source?.status === "ready") {
+        return source;
+      }
+      if (source?.status === "failed") {
+        throw new Error(`Source ${filename} failed ingestion.`);
+      }
+    }
+    await delay(1_000);
+  }
+  throw new Error(`Timed out waiting for ${filename} to become ready.`);
 }
 
 async function waitForSourceDeleted(request: APIRequestContext, sourceId: string, timeoutMs: number): Promise<void> {
@@ -281,14 +270,6 @@ async function waitForSourceDeleted(request: APIRequestContext, sourceId: string
     await delay(1_000);
   }
   throw new Error(`Timed out waiting for source ${sourceId} to be deleted.`);
-}
-
-function stringMetadata(attachment: ChatKitAttachment, key: string): string {
-  const value = attachment.metadata?.[key];
-  if (typeof value !== "string" || !value.trim()) {
-    throw new Error(`Attachment metadata ${key} was missing.`);
-  }
-  return value;
 }
 
 function jsonText(value: unknown): string {

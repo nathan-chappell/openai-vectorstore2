@@ -85,7 +85,12 @@ class DatabaseManager:
         self._async_session_factory: async_sessionmaker[AsyncSession] | None = None
 
         if self._use_sync_sqlite:
-            self._sync_engine = create_engine(settings.sync_database_url, future=True, pool_pre_ping=True)
+            self._sync_engine = create_engine(
+                settings.sync_database_url,
+                future=True,
+                pool_pre_ping=True,
+                connect_args={"timeout": 30},
+            )
             self._sync_session_factory = sessionmaker(self._sync_engine, class_=Session, expire_on_commit=False)
         else:
             self._async_engine = create_async_engine(settings.normalized_database_url, future=True, pool_pre_ping=True)

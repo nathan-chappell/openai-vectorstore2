@@ -167,6 +167,8 @@ class SearchRequest(BaseModel):
     source_kinds: list[SourceKind] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list)
     tag_match_mode: TagMatchMode = "all"
+    created_after: datetime | None = None
+    created_before: datetime | None = None
     max_results: int = Field(default=8, ge=1, le=24)
 
 

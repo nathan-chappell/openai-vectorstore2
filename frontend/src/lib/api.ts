@@ -4,10 +4,10 @@ import type {
   BranchSearchResponse,
   IngestFinalizeResponse,
   ResplitSourceRequest,
+  SearchFilterPayload,
   SearchResponse,
   SplitPreviewResponse,
   SourceDetail,
-  SourceKind,
   SourceListResponse,
   SourceTagsUpdateRequest,
   TagMatchMode,
@@ -39,11 +39,10 @@ export function setChatKitMetadataGetter(getter: (() => Record<string, unknown> 
   chatKitMetadataGetter = getter;
 }
 
-export function getChatKitConfig(): { url: string; domainKey: string; uploadUrl: string } {
+export function getChatKitConfig(): { url: string; domainKey: string } {
   return {
     url: `${API_BASE_URL}/chatkit`,
     domainKey: CHATKIT_DOMAIN_KEY,
-    uploadUrl: `${API_BASE_URL}/chatkit/attachments`,
   };
 }
 
@@ -149,12 +148,8 @@ export async function listTags(): Promise<TagSummary[]> {
 
 export async function searchChunks(payload: {
   query: string;
-  selectedSourceIds?: string[];
-  sourceKinds?: SourceKind[];
-  tagIds?: string[];
-  tagMatchMode?: TagMatchMode;
   maxResults?: number;
-}): Promise<SearchResponse> {
+} & SearchFilterPayload): Promise<SearchResponse> {
   return apiRequest<SearchResponse>("/search", {
     method: "POST",
     body: JSON.stringify({
@@ -163,6 +158,8 @@ export async function searchChunks(payload: {
       source_kinds: payload.sourceKinds ?? [],
       tag_ids: payload.tagIds ?? [],
       tag_match_mode: payload.tagMatchMode ?? "all",
+      created_after: payload.createdAfter ?? null,
+      created_before: payload.createdBefore ?? null,
       max_results: payload.maxResults ?? 8,
     }),
   });
@@ -170,19 +167,19 @@ export async function searchChunks(payload: {
 
 export async function branchSearch(payload: {
   query: string;
-  selectedSourceIds?: string[];
-  tagIds?: string[];
-  tagMatchMode?: TagMatchMode;
   descend?: number;
   maxWidth?: number;
-}): Promise<BranchSearchResponse> {
+} & SearchFilterPayload): Promise<BranchSearchResponse> {
   return apiRequest<BranchSearchResponse>("/search/branch", {
     method: "POST",
     body: JSON.stringify({
       query: payload.query,
       selected_source_ids: payload.selectedSourceIds ?? [],
+      source_kinds: payload.sourceKinds ?? [],
       tag_ids: payload.tagIds ?? [],
       tag_match_mode: payload.tagMatchMode ?? "all",
+      created_after: payload.createdAfter ?? null,
+      created_before: payload.createdBefore ?? null,
       descend: payload.descend ?? 2,
       max_width: payload.maxWidth ?? 3,
     }),

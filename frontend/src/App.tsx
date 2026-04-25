@@ -55,6 +55,8 @@ const MODEL_CHOICES = [
 
 const TEXT_PREVIEW_LIMIT = 40_000;
 const CHUNK_PREVIEW_LIMIT = 40;
+const SOURCE_PAGE_SIZE = 100;
+const SOURCE_TAG_LIMIT = 8;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -63,12 +65,29 @@ const dateFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+async function loadAllSources(): Promise<{ sources: SourceSummary[]; totalCount: number }> {
+  const sources: SourceSummary[] = [];
+  let page = 1;
+  let totalCount = 0;
+  while (true) {
+    const response = await listSources({ page, pageSize: SOURCE_PAGE_SIZE });
+    sources.push(...response.sources);
+    totalCount = response.total_count;
+    if (!response.has_more) {
+      return { sources, totalCount };
+    }
+    page += 1;
+  }
+}
+
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [sources, setSources] = useState<SourceSummary[]>([]);
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
   const [searchQuery, setSearchQuery] = useState("What matters most in this library?");
   const [actionPrompt, setActionPrompt] = useState("Answer from the selected sources with citations.");
   const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
@@ -83,11 +102,33 @@ export function App({ authMode }: AppProps) {
   const [busy, setBusy] = useState(false);
 
   const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
+  const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
   const sortedSources = useMemo(
     () => [...sources].sort((left, right) => Date.parse(right.updated_at) - Date.parse(left.updated_at)),
     [sources],
   );
+  const filteredSources = useMemo(() => {
+    const normalizedQuery = sourceQuery.trim().toLowerCase();
+    return sortedSources.filter((source) => {
+      const matchesQuery =
+        !normalizedQuery ||
+        [
+          source.display_title,
+          source.original_filename,
+          source.source_kind,
+          source.status,
+          source.created_at,
+          ...source.tags.map((tag) => tag.name),
+        ]
+          .join(" ")
+          .toLowerCase()
+          .includes(normalizedQuery);
+      const matchesTags =
+        !selectedExplorerTagIds.length || source.tags.some((tag) => selectedExplorerTagIdSet.has(tag.id));
+      return matchesQuery && matchesTags;
+    });
+  }, [selectedExplorerTagIdSet, selectedExplorerTagIds.length, sortedSources, sourceQuery]);
   const activeSourceId = selectedSource?.id ?? selectedSourceIds[0] ?? null;
 
   const refreshAll = useCallback(async (): Promise<void> => {
@@ -95,7 +136,7 @@ export function App({ authMode }: AppProps) {
     try {
       const [me, sourceList, tagList, taskList] = await Promise.all([
         getAuthenticatedUser(),
-        listSources({ pageSize: 50 }),
+        loadAllSources(),
         listTags(),
         listTasks(),
       ]);
@@ -103,7 +144,7 @@ export function App({ authMode }: AppProps) {
       setSources(sourceList.sources);
       setTags(tagList);
       setTasks(taskList.tasks);
-      setStatus(`Ready with ${sourceList.total_count} source${sourceList.total_count === 1 ? "" : "s"}.`);
+      setStatus(`Ready with ${sourceList.totalCount} source${sourceList.totalCount === 1 ? "" : "s"}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not load the workspace.");
     } finally {
@@ -159,16 +200,32 @@ export function App({ authMode }: AppProps) {
     }
     setBusy(true);
     try {
+      const uploadedSources: SourceSummary[] = [];
+      const uploadedTasks: TaskSummary[] = [];
       for (const file of pendingFiles) {
         const response = await uploadSource(file, uploadGuidance, []);
+        uploadedSources.push(response.source);
+        if (response.task) {
+          uploadedTasks.push(response.task);
+        }
         setStatus(`Uploaded ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "complete"}.`);
       }
       setPendingFiles([]);
       setSplitPreview(null);
-      const [sourceList, tagList, taskList] = await Promise.all([listSources({ pageSize: 50 }), listTags(), listTasks()]);
-      setSources(sourceList.sources);
-      setTags(tagList);
-      setTasks(taskList.tasks);
+      setSources((current) => {
+        const byId = new Map(current.map((source) => [source.id, source]));
+        for (const source of uploadedSources) {
+          byId.set(source.id, source);
+        }
+        return Array.from(byId.values());
+      });
+      setTasks((current) => {
+        const byId = new Map(current.map((task) => [task.id, task]));
+        for (const task of uploadedTasks) {
+          byId.set(task.id, task);
+        }
+        return Array.from(byId.values());
+      });
       setStatus("Upload queued. Semantic chunks will publish in the background.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
@@ -178,7 +235,6 @@ export function App({ authMode }: AppProps) {
   }, [pendingFiles, uploadGuidance]);
 
   const openSource = useCallback(async (sourceId: string): Promise<void> => {
-    setSelectedSourceIds([sourceId]);
     setStatus("Loading source preview.");
     try {
       const detail = await getSource(sourceId);
@@ -190,6 +246,37 @@ export function App({ authMode }: AppProps) {
     }
   }, []);
 
+  const toggleSourceChatSelection = useCallback((sourceId: string): void => {
+    setSelectedSourceIds((current) =>
+      current.includes(sourceId) ? current.filter((id) => id !== sourceId) : [...current, sourceId],
+    );
+  }, []);
+
+  const selectVisibleSourcesForChat = useCallback((): void => {
+    setSelectedSourceIds((current) => {
+      const next = new Set(current);
+      for (const source of filteredSources) {
+        next.add(source.id);
+      }
+      return Array.from(next);
+    });
+  }, [filteredSources]);
+
+  const clearChatSourceSelection = useCallback((): void => {
+    setSelectedSourceIds([]);
+  }, []);
+
+  const toggleExplorerTag = useCallback((tagId: string): void => {
+    setSelectedExplorerTagIds((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    );
+  }, []);
+
+  const clearExplorerFilters = useCallback((): void => {
+    setSourceQuery("");
+    setSelectedExplorerTagIds([]);
+  }, []);
+
   const resplitSelectedSource = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
@@ -198,7 +285,7 @@ export function App({ authMode }: AppProps) {
     try {
       const response = await resplitSource(selectedSource.id, { user_guidance: uploadGuidance });
       const [sourceList, detail, taskList] = await Promise.all([
-        listSources({ pageSize: 50 }),
+        loadAllSources(),
         getSource(selectedSource.id),
         listTasks(),
       ]);
@@ -221,7 +308,7 @@ export function App({ authMode }: AppProps) {
     try {
       const response = await updateSourceTags(selectedSource.id, { tag_ids: selectedSourceTagDraftIds });
       const [sourceList, detail, tagList, taskList] = await Promise.all([
-        listSources({ pageSize: 50 }),
+        loadAllSources(),
         getSource(selectedSource.id),
         listTags(),
         listTasks(),
@@ -322,6 +409,16 @@ export function App({ authMode }: AppProps) {
     },
     [refreshAll],
   );
+  const openSourceFromExplorer = useCallback((sourceId: string): void => void openSource(sourceId), [openSource]);
+  const deleteSourceFromExplorer = useCallback((sourceId: string): void => void removeSource(sourceId), [removeSource]);
+  const previewSplitFromExplorer = useCallback((): void => void previewPendingSplit(), [previewPendingSplit]);
+  const uploadFromExplorer = useCallback((): void => void handleUpload(), [handleUpload]);
+  const refreshWorkspace = useCallback((): void => void refreshAll(), [refreshAll]);
+  const runSearchFromWorkbench = useCallback((): void => void runSearch(), [runSearch]);
+  const runBranchSearchFromWorkbench = useCallback((): void => void runBranchSearch(), [runBranchSearch]);
+  const runActionFromWorkbench = useCallback((kind: "qa" | "freeform" | "image" | "voice"): void => void runAction(kind), [runAction]);
+  const saveTagsFromWorkbench = useCallback((): void => void saveSelectedSourceTags(), [saveSelectedSourceTags]);
+  const resplitFromWorkbench = useCallback((): void => void resplitSelectedSource(), [resplitSelectedSource]);
 
   const selectedSourceTagChanged = selectedSource
     ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
@@ -335,7 +432,7 @@ export function App({ authMode }: AppProps) {
         status={status}
         tasks={tasks}
         user={user}
-        onRefresh={() => void refreshAll()}
+        onRefresh={refreshWorkspace}
       />
 
       <section className="workspace-grid" aria-label="Semantic workspace">
@@ -343,16 +440,26 @@ export function App({ authMode }: AppProps) {
           activeSourceId={activeSourceId}
           busy={busy}
           pendingFiles={pendingFiles}
+          selectedExplorerTagIdSet={selectedExplorerTagIdSet}
           selectedSourceIdSet={selectedSourceIdSet}
-          sources={sortedSources}
+          selectedSourceCount={selectedSourceIds.length}
+          sourceQuery={sourceQuery}
+          sources={filteredSources}
           splitPreview={splitPreview}
           tags={tags}
+          totalSourceCount={sources.length}
           uploadGuidance={uploadGuidance}
           onChooseFiles={chooseFiles}
-          onDeleteSource={(sourceId) => void removeSource(sourceId)}
-          onOpenSource={(sourceId) => void openSource(sourceId)}
-          onPreviewSplit={() => void previewPendingSplit()}
-          onUpload={() => void handleUpload()}
+          onClearChatSelection={clearChatSourceSelection}
+          onClearExplorerFilters={clearExplorerFilters}
+          onDeleteSource={deleteSourceFromExplorer}
+          onOpenSource={openSourceFromExplorer}
+          onPreviewSplit={previewSplitFromExplorer}
+          onSelectVisibleSources={selectVisibleSourcesForChat}
+          onSourceQueryChange={setSourceQuery}
+          onToggleExplorerTag={toggleExplorerTag}
+          onToggleSourceSelection={toggleSourceChatSelection}
+          onUpload={uploadFromExplorer}
           onUploadGuidanceChange={setUploadGuidance}
         />
 
@@ -370,14 +477,14 @@ export function App({ authMode }: AppProps) {
           tags={tags}
           uploadGuidance={uploadGuidance}
           onActionPromptChange={setActionPrompt}
-          onRunAction={(kind) => void runAction(kind)}
-          onRunBranchSearch={() => void runBranchSearch()}
-          onRunSearch={() => void runSearch()}
-          onSaveTags={() => void saveSelectedSourceTags()}
+          onRunAction={runActionFromWorkbench}
+          onRunBranchSearch={runBranchSearchFromWorkbench}
+          onRunSearch={runSearchFromWorkbench}
+          onSaveTags={saveTagsFromWorkbench}
           onSearchQueryChange={setSearchQuery}
           onTagToggle={toggleSelectedSourceTagDraft}
           onUploadGuidanceChange={setUploadGuidance}
-          onResplit={() => void resplitSelectedSource()}
+          onResplit={resplitFromWorkbench}
         />
 
         <aside className="chat-panel" aria-label="Semantic copilot">
@@ -429,33 +536,55 @@ const SourceExplorer = memo(function SourceExplorer({
   activeSourceId,
   busy,
   pendingFiles,
+  selectedExplorerTagIdSet,
   selectedSourceIdSet,
+  selectedSourceCount,
+  sourceQuery,
   sources,
   splitPreview,
   tags,
+  totalSourceCount,
   uploadGuidance,
   onChooseFiles,
+  onClearChatSelection,
+  onClearExplorerFilters,
   onDeleteSource,
   onOpenSource,
   onPreviewSplit,
+  onSelectVisibleSources,
+  onSourceQueryChange,
+  onToggleExplorerTag,
+  onToggleSourceSelection,
   onUpload,
   onUploadGuidanceChange,
 }: {
   activeSourceId: string | null;
   busy: boolean;
   pendingFiles: File[];
+  selectedExplorerTagIdSet: Set<string>;
   selectedSourceIdSet: Set<string>;
+  selectedSourceCount: number;
+  sourceQuery: string;
   sources: SourceSummary[];
   splitPreview: SplitPreviewResponse | null;
   tags: TagSummary[];
+  totalSourceCount: number;
   uploadGuidance: string;
   onChooseFiles: (files: FileList | null) => void;
+  onClearChatSelection: () => void;
+  onClearExplorerFilters: () => void;
   onDeleteSource: (sourceId: string) => void;
   onOpenSource: (sourceId: string) => void;
   onPreviewSplit: () => void;
+  onSelectVisibleSources: () => void;
+  onSourceQueryChange: (value: string) => void;
+  onToggleExplorerTag: (tagId: string) => void;
+  onToggleSourceSelection: (sourceId: string) => void;
   onUpload: () => void;
   onUploadGuidanceChange: (value: string) => void;
 }) {
+  const filtering = Boolean(sourceQuery.trim() || selectedExplorerTagIdSet.size);
+  const chatScopeLabel = selectedSourceCount === 1 ? "1 file for chat" : `${selectedSourceCount} files for chat`;
   return (
     <aside className="explorer-pane" aria-label="Files">
       <div className="pane-header">
@@ -463,14 +592,100 @@ const SourceExplorer = memo(function SourceExplorer({
           <p className="eyebrow">Library</p>
           <h1>Files</h1>
         </div>
-        <span className="count-pill">{sources.length}</span>
+        <span className="count-pill">
+          {sources.length}
+          {sources.length === totalSourceCount ? "" : ` / ${totalSourceCount}`}
+        </span>
+      </div>
+
+      <section className="explorer-controls" aria-label="Filter files">
+        <label className="query-field">
+          <span>Query</span>
+          <input
+            value={sourceQuery}
+            onChange={(event) => onSourceQueryChange(event.currentTarget.value)}
+            placeholder="Search files, tags, type, status"
+          />
+        </label>
+        <div className="explorer-filter-row">
+          <span>Tags</span>
+          <button type="button" className="link-button" onClick={onClearExplorerFilters} disabled={!filtering}>
+            Clear
+          </button>
+        </div>
+        <div className="tag-strip" aria-label="Tags">
+          {tags.map((tag) => (
+            <button
+              key={tag.id}
+              type="button"
+              aria-pressed={selectedExplorerTagIdSet.has(tag.id)}
+              className={selectedExplorerTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
+              onClick={() => onToggleExplorerTag(tag.id)}
+            >
+              {tag.name}
+            </button>
+          ))}
+          {!tags.length ? <span>No tags</span> : null}
+        </div>
+      </section>
+
+      <section className="chat-scope-strip" aria-label="Chat file scope">
+        <div>
+          <strong>{chatScopeLabel}</strong>
+          <span>Selected files guide ChatKit.</span>
+        </div>
+        <div className="button-row">
+          <button type="button" className="secondary-button" onClick={onSelectVisibleSources} disabled={!sources.length}>
+            Select all
+          </button>
+          <button type="button" className="secondary-button" onClick={onClearChatSelection} disabled={!selectedSourceCount}>
+            Clear
+          </button>
+        </div>
+      </section>
+
+      <div className="file-table-wrap">
+        <table className="file-table">
+          <thead>
+            <tr>
+              <th aria-label="Chat scope" />
+              <th>Name</th>
+              <th>Tags</th>
+              <th>Info</th>
+              <th aria-label="Actions" />
+            </tr>
+          </thead>
+          <tbody>
+            {sources.map((source) => (
+              <SourceRow
+                key={source.id}
+                active={activeSourceId === source.id}
+                selected={selectedSourceIdSet.has(source.id)}
+                source={source}
+                onDelete={onDeleteSource}
+                onOpen={onOpenSource}
+                onToggleSelection={onToggleSourceSelection}
+              />
+            ))}
+            {!sources.length ? (
+              <tr>
+                <td colSpan={5} className="empty-cell">
+                  {filtering ? "No files match the current query or tags." : "No files yet."}
+                </td>
+              </tr>
+            ) : null}
+          </tbody>
+        </table>
       </div>
 
       <section className="upload-strip" aria-label="Upload source">
-        <label className="file-picker">
-          <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
-          <span>{pendingFiles.length ? `${pendingFiles.length} selected` : "Choose files"}</span>
-        </label>
+        <div className="upload-heading">
+          <strong>Add files</strong>
+          <label className="file-picker">
+            <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
+            <span>{pendingFiles.length ? `${pendingFiles.length} selected` : "Choose files"}</span>
+          </label>
+        </div>
         <textarea
           className="compact-textarea"
           value={uploadGuidance}
@@ -493,45 +708,6 @@ const SourceExplorer = memo(function SourceExplorer({
           </div>
         ) : null}
       </section>
-
-      <div className="tag-strip" aria-label="Tags">
-        {tags.slice(0, 8).map((tag) => (
-          <span key={tag.id}>{tag.name}</span>
-        ))}
-        {!tags.length ? <span>No tags</span> : null}
-      </div>
-
-      <div className="file-table-wrap">
-        <table className="file-table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Status</th>
-              <th>Size</th>
-              <th aria-label="Actions" />
-            </tr>
-          </thead>
-          <tbody>
-            {sources.map((source) => (
-              <SourceRow
-                key={source.id}
-                active={activeSourceId === source.id}
-                selected={selectedSourceIdSet.has(source.id)}
-                source={source}
-                onDelete={onDeleteSource}
-                onOpen={onOpenSource}
-              />
-            ))}
-            {!sources.length ? (
-              <tr>
-                <td colSpan={4} className="empty-cell">
-                  No files yet.
-                </td>
-              </tr>
-            ) : null}
-          </tbody>
-        </table>
-      </div>
     </aside>
   );
 });
@@ -542,17 +718,37 @@ const SourceRow = memo(function SourceRow({
   source,
   onDelete,
   onOpen,
+  onToggleSelection,
 }: {
   active: boolean;
   selected: boolean;
   source: SourceSummary;
   onDelete: (sourceId: string) => void;
   onOpen: (sourceId: string) => void;
+  onToggleSelection: (sourceId: string) => void;
 }) {
+  const rowClassName = [active ? "active-file-row" : "", selected ? "selected-file-row" : ""].filter(Boolean).join(" ");
   return (
-    <tr className={active ? "active-file-row" : selected ? "selected-file-row" : undefined} onClick={() => onOpen(source.id)}>
+    <tr className={rowClassName || undefined} onClick={() => onOpen(source.id)}>
       <td>
-        <button type="button" className="file-name-button" onClick={() => onOpen(source.id)}>
+        <input
+          aria-label={`Select ${source.display_title} for chat`}
+          checked={selected}
+          className="file-select-checkbox"
+          onChange={() => onToggleSelection(source.id)}
+          onClick={(event) => event.stopPropagation()}
+          type="checkbox"
+        />
+      </td>
+      <td>
+        <button
+          type="button"
+          className="file-name-button"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpen(source.id);
+          }}
+        >
           <span className="file-type-badge">{sourceExtension(source)}</span>
           <span>
             <strong>{source.display_title}</strong>
@@ -561,9 +757,20 @@ const SourceRow = memo(function SourceRow({
         </button>
       </td>
       <td>
-        <span className={`status-badge status-${source.status}`}>{source.status}</span>
+        <div className="file-tag-list">
+          {source.tags.slice(0, 2).map((tag) => (
+            <span key={tag.id}>{tag.name}</span>
+          ))}
+          {source.tags.length > 2 ? <span>+{source.tags.length - 2}</span> : null}
+          {!source.tags.length ? <span>untagged</span> : null}
+        </div>
       </td>
-      <td>{formatBytes(source.byte_size)}</td>
+      <td>
+        <span className={`status-badge status-${source.status}`}>{source.status}</span>
+        <small className="file-size">
+          {formatBytes(source.byte_size)} | {formatDate(source.created_at)}
+        </small>
+      </td>
       <td>
         <button
           type="button"
@@ -796,7 +1003,7 @@ function SourcePreview({
     return (
       <section className="source-preview empty-preview">
         <h2>Select a file to preview it.</h2>
-        <p>The left pane opens source details here and scopes ChatKit to the selected file.</p>
+        <p>Open files here, then use the file checkboxes to scope ChatKit.</p>
       </section>
     );
   }
@@ -843,6 +1050,10 @@ function SourcePreview({
               <dd>{formatBytes(selectedSource.byte_size)}</dd>
             </div>
             <div>
+              <dt>Created</dt>
+              <dd>{formatDate(selectedSource.created_at)}</dd>
+            </div>
+            <div>
               <dt>Chunks</dt>
               <dd>{selectedSource.chunk_count}</dd>
             </div>
@@ -864,19 +1075,22 @@ function SourcePreview({
             Re-split
           </button>
           <div className="tag-editor">
-            <strong>Tags</strong>
+            <strong>Tags {selectedSourceTagDraftIdSet.size}/{SOURCE_TAG_LIMIT}</strong>
             <div className="tag-picker-list">
-              {tags.map((tag) => (
-                <label key={tag.id} className="tag-checkbox">
-                  <input
-                    type="checkbox"
-                    checked={selectedSourceTagDraftIdSet.has(tag.id)}
-                    onChange={() => onTagToggle(tag.id)}
-                    disabled={busy || selectedSource.status === "processing"}
-                  />
-                  <span>{tag.name}</span>
-                </label>
-              ))}
+              {tags.map((tag) => {
+                const checked = selectedSourceTagDraftIdSet.has(tag.id);
+                return (
+                  <label key={tag.id} className="tag-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => onTagToggle(tag.id)}
+                      disabled={busy || selectedSource.status === "processing" || (!checked && selectedSourceTagDraftIdSet.size >= SOURCE_TAG_LIMIT)}
+                    />
+                    <span>{tag.name}</span>
+                  </label>
+                );
+              })}
               {!tags.length ? <span className="subtle">No tags yet</span> : null}
             </div>
             <button
@@ -1059,13 +1273,14 @@ function formatLocator(chunk: ChunkSummary): string {
 
 const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
   const chatKitConfig = getChatKitConfig();
+  const selectedFileScopeLabel =
+    selectedSourceIds.length === 1 ? "Ask about the selected file." : `Ask about the ${selectedSourceIds.length} selected files.`;
   const options = useMemo<UseChatKitOptions>(
     () => ({
       api: {
         url: chatKitConfig.url,
         domainKey: chatKitConfig.domainKey,
         fetch: authenticatedFetch,
-        uploadStrategy: { type: "direct", uploadUrl: chatKitConfig.uploadUrl },
       },
       theme: {
         colorScheme: "light",
@@ -1083,8 +1298,8 @@ const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceI
       },
       startScreen: {
         greeting: selectedSourceIds.length
-          ? "Ask about the selected sources or widen the search."
-          : "Ask me to search, branch, answer, image, or narrate from your semantic library.",
+          ? selectedFileScopeLabel
+          : "Select files in the explorer, then ask me to search, branch, answer, image, or narrate from them.",
         prompts: [
           { label: "Grounded QA", prompt: "Answer my question using semantic chunks and cite the source titles.", icon: "check-circle" },
           { label: "Branch search", prompt: "Run a branch search around this topic and explain the interesting trails.", icon: "sparkle" },
@@ -1094,16 +1309,7 @@ const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceI
       composer: {
         placeholder: "Ask the semantic library...",
         attachments: {
-          enabled: true,
-          maxSize: 20 * 1024 * 1024,
-          maxCount: 3,
-          accept: {
-            "application/pdf": [".pdf"],
-            "text/*": [".txt", ".md", ".csv", ".json"],
-            "image/*": [".png", ".jpg", ".jpeg", ".webp"],
-            "audio/*": [".mp3", ".m4a", ".wav"],
-            "video/*": [".mp4", ".mov", ".webm"],
-          },
+          enabled: false,
         },
         dictation: { enabled: false },
         models: MODEL_CHOICES.map((choice) => ({ ...choice, default: choice.id === "balanced" })),
@@ -1112,7 +1318,7 @@ const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceI
         feedback: false,
       },
     }),
-    [chatKitConfig.domainKey, chatKitConfig.uploadUrl, chatKitConfig.url, selectedSourceIds.length],
+    [chatKitConfig.domainKey, chatKitConfig.url, selectedFileScopeLabel, selectedSourceIds.length],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;
