@@ -25,6 +25,24 @@ Tasks:
 - [x] Run typecheck, build, backend tests, and live Playwright checks.
 - [x] Stage tracked changes, confirm `.env` stays unstaged, and commit the implementation.
 
+## Current Implementation Pass: Explorer Workspace And Scroll Performance
+
+Status: in progress.
+
+Tasks:
+
+- [x] Run parallel read-only reviews of the React/CSS workspace for obvious scroll and render issues.
+- [x] Record the main findings: the current hero/card layout creates a large full-page scroll surface, repeated translucent cards use expensive blur/shadow effects, collapsed search chunks still render full text, and ChatKit rerenders with unrelated workspace state changes.
+- [ ] Replace the massive hero with a compact app bar that keeps only useful status, auth, task, and refresh signals.
+- [ ] Reshape the workspace into a dense left file explorer, center file preview/workbench, and right ChatKit pane.
+- [ ] Make the file explorer Windows-like: simple rows, tight metadata, clear file icons, fast selection, and direct delete/upload affordances.
+- [ ] Add source previews by media type: PDF/object preview, image/audio/video native previews, text/chunk preview, and metadata fallback.
+- [ ] Apply reasonable React optimizations: memoized ChatKit pane, memoized file rows, set-based selection lookups, lazy rendering for full hit text, and bounded chunk preview rendering.
+- [ ] Replace expensive backdrop blur and large repeated shadows with mostly opaque, low-cost operational surfaces.
+- [ ] Update Playwright shell checks and screenshots for the new explorer/preview/chat layout.
+- [ ] Run typecheck, build, and Playwright smoke coverage.
+- [ ] Commit this UI/performance pass once verified.
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:
