@@ -1,0 +1,55 @@
+# Architecture
+
+OpenAI Vectorstore2 is organized around an app-core service layer. REST, ChatKit, and MCP call the same source/action services so ingestion, retrieval, tasks, and cleanup do not drift between surfaces.
+
+## Core Boundary
+
+- `backend/app/services/sources.py` owns source upload, extraction, semantic splitting, tag assignment, vector-store publication, search, branch search, re-split, tag reindexing, and source cleanup.
+- `backend/app/services/actions.py` owns QA, freeform generation, image generation, voice generation, generated assets, and action tasks.
+- `backend/app/core/capabilities.py` records the intended operation map across REST, ChatKit, and MCP.
+- `backend/app/schemas/records.py` is the Pydantic contract source for API responses and app task payloads.
+
+## Data Model
+
+The ORM models live in `backend/app/models/records.py`.
+
+- App-core tables: users, libraries, tags, sources, source-tag links, semantic chunks, tasks, and generated assets.
+- ChatKit tables: threads, entries, and attachments.
+- The important linkage points are `AppTask.origin_thread_id`, `AppChatThread.metadata_json.selected_source_ids`, and `AppChatAttachment.payload.metadata.source_id/task_id`.
+
+## Webapp
+
+The web UI is a Vite/React app served by FastAPI after build.
+
+- The left explorer is the primary file input surface: files, tags, query, and selected ChatKit scope.
+- Row click opens preview; checkboxes select the files ChatKit should treat as the default retrieval scope.
+- ChatKit composer attachments are disabled in the current UX. The backend attachment endpoint remains compatibility plumbing and still turns uploads into normal app-core sources if used by an older host.
+- Background ingest, re-split, and reindex tasks are polled while active so file readiness updates without manual refresh.
+
+## ChatKit
+
+`backend/app/chatkit/server.py` implements the custom ChatKit backend.
+
+- ChatKit receives selected source IDs through request metadata and persists them to thread metadata.
+- Tools map directly to app-core operations: list/inspect sources, manage tags, preview split, ingest text, re-split, search, branch, QA, freeform, image, voice, list tasks, and inspect tasks.
+- Long-running ChatKit tools emit progress updates with useful counts, task IDs, and generated asset IDs.
+
+## MCP And Apps UI
+
+`backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.
+
+- Data tools return structured JSON for hosts.
+- The `sources` render tool exposes a Prefab MCP Apps UI resource with file query, tag filters, semantic chunk search, source detail chunks, re-split controls, and recent tasks.
+- HTTP MCP is mounted at `/mcp`; stdio is available through `openai-vectorstore2-stdio`.
+
+## Vector Store Metadata
+
+OpenAI vector-store attributes are denormalized on each semantic chunk.
+
+- `attributes_version=2`
+- `source_id`, `chunk_id`, `source_kind`, `filename`
+- numeric `created_at` and string `created_date`
+- canonical comma-separated `tags`
+- bounded `tag_1` through `tag_8` for exact tag pre-filtering
+
+Eight source tags is the current product limit because OpenAI vector-store attributes are scalar and bounded.

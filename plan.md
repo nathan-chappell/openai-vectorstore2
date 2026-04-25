@@ -154,6 +154,21 @@ Tasks:
 - [x] Run pyright and migration/backend integration tests.
 - [x] Commit this runtime migration mode once verified.
 
+## Current Implementation Pass: Contributor Docs
+
+Status: completed.
+
+Tasks:
+
+- [x] Update README with the current web, ChatKit, MCP, Playwright, and migration commands.
+- [x] Add architecture docs for app-core boundaries, ChatKit, MCP Apps UI, and vector-store metadata.
+- [x] Add testing docs for backend contracts, Playwright live flow, and migration checks.
+- [x] Add migration docs for Alembic usage, schema modes, and drift checks.
+- [x] Add auth docs for local-dev, Clerk web, MCP HTTP, and stdio.
+- [x] Add operations docs for storage, OpenAI file cleanup, reindexing, and background task behavior.
+- [x] Run docs-adjacent sanity checks.
+- [x] Commit this documentation pass once verified.
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:
@@ -565,26 +580,26 @@ Acceptance criteria:
 
 ## Phase 9: Documentation And Operational Readiness
 
-Status: planned.
+Status: in progress.
 
 Update docs as the implementation catches up.
 
 Tasks:
 
-- Update `README.md` so it distinguishes current local capabilities from ChatGPT Apps production requirements.
-- Add a `docs/` directory with:
-  - Architecture and capability matrix.
-  - Data model and migration policy.
-  - ChatKit webapp behavior.
-  - MCP server and Apps UI behavior.
-  - Auth setup for local-dev, Clerk web, MCP HTTP, stdio, and ChatGPT Apps.
-  - Testing and screenshot workflow.
-- Add `.env.example` entries for any new OAuth, MCP Apps, or ChatKit settings.
-- Add operational notes for OpenAI file/vector-store cleanup and reindexing.
+- [x] Update `README.md` so it distinguishes current local capabilities from ChatGPT Apps production requirements.
+- [x] Add a `docs/` directory with:
+  - [x] Architecture and capability matrix.
+  - [x] Data model and migration policy.
+  - [x] ChatKit webapp behavior.
+  - [x] MCP server and Apps UI behavior.
+  - [x] Auth setup for local-dev, Clerk web, MCP HTTP, stdio, and ChatGPT Apps.
+  - [x] Testing and screenshot workflow.
+- [x] Add `.env.example` entries for any new OAuth, MCP Apps, or ChatKit settings.
+- [x] Add operational notes for OpenAI file/vector-store cleanup and reindexing.
 
 Acceptance criteria:
 
-- A new contributor can run the webapp, run MCP locally, understand required production auth, and run tests from docs alone.
+- [x] A new contributor can run the webapp, run MCP locally, understand required production auth, and run tests from docs alone.
 
 ## Suggested Order
 
