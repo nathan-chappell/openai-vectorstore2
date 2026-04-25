@@ -25,6 +25,7 @@ from backend.app.schemas import (
     ImageGenerationRequest,
     QaRequest,
     SearchRequest,
+    TaskKind,
     VoiceGenerationRequest,
 )
 from backend.app.services import ActionService, SourceService
@@ -245,6 +246,41 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tags = await self._sources.list_tags(clerk_user_id=request_context.clerk_user_id)
             return [tag.model_dump(mode="json") for tag in tags]
 
+        @function_tool(name_override="get_source_detail")
+        async def get_source_detail_tool(ctx: ChatKitToolContext, source_id: str) -> dict[str, object]:
+            """Load one source with its stored metadata and semantic chunks."""
+            request_context = ctx.context.request_context
+            detail = await self._sources.get_source(
+                clerk_user_id=request_context.clerk_user_id,
+                source_id=source_id,
+            )
+            return detail.model_dump(mode="json")
+
+        @function_tool(name_override="ingest_text_source")
+        async def ingest_text_source_tool(
+            ctx: ChatKitToolContext,
+            filename: str,
+            text: str,
+            tag_ids: list[str] | None = None,
+            user_guidance: str | None = None,
+        ) -> dict[str, object]:
+            """Create a text source and queue semantic chunk publication."""
+            if not text.strip():
+                raise ValueError("Text source content is required.")
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Queuing text source ingestion."))
+            response = await self._sources.ingest_source(
+                clerk_user_id=request_context.clerk_user_id,
+                filename=filename.strip() or "note.txt",
+                declared_media_type="text/plain",
+                payload=text.encode("utf-8"),
+                tag_ids=tag_ids or [],
+                user_guidance=user_guidance,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="search_chunks")
         async def search_chunks_tool(
             ctx: ChatKitToolContext,
@@ -350,6 +386,62 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 tag_ids=tag_ids,
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="delete_source")
+        async def delete_source_tool(
+            ctx: ChatKitToolContext,
+            source_id: str,
+            confirm: bool = False,
+        ) -> dict[str, object]:
+            """Delete one source only after explicit user confirmation."""
+            if not confirm:
+                return {
+                    "confirmation_required": True,
+                    "source_id": source_id,
+                    "message": "Ask the user to confirm deletion, then call delete_source again with confirm=true.",
+                }
+            request_context = ctx.context.request_context
+            deleted_id = await self._sources.delete_source(
+                clerk_user_id=request_context.clerk_user_id,
+                source_id=source_id,
+            )
+            return {"deleted_source_id": deleted_id}
+
+        @function_tool(name_override="list_tasks")
+        async def list_tasks_tool(
+            ctx: ChatKitToolContext,
+            kind: str | None = None,
+            limit: int = 20,
+        ) -> dict[str, object]:
+            """List recent app tasks for the current user."""
+            request_context = ctx.context.request_context
+            valid_task_kinds = {
+                "ingest",
+                "resplit",
+                "reindex",
+                "qa",
+                "freeform",
+                "branch_search",
+                "image_gen",
+                "voice_gen",
+            }
+            task_kind: TaskKind | None = cast(TaskKind, kind) if kind in valid_task_kinds else None
+            response = await self._actions.list_tasks(
+                clerk_user_id=request_context.clerk_user_id,
+                kind=task_kind,
+                limit=max(1, min(limit, 50)),
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="get_task")
+        async def get_task_tool(ctx: ChatKitToolContext, task_id: str) -> dict[str, object]:
+            """Load task status, inputs, state, result, and error information."""
+            request_context = ctx.context.request_context
+            response = await self._actions.get_task(
+                clerk_user_id=request_context.clerk_user_id,
+                task_id=task_id,
             )
             return response.model_dump(mode="json")
 
@@ -464,11 +556,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         return [
             list_sources_tool,
             list_tags_tool,
+            get_source_detail_tool,
+            ingest_text_source_tool,
             search_chunks_tool,
             branch_search_tool,
             preview_semantic_split_tool,
             resplit_source_tool,
             update_source_tags_tool,
+            delete_source_tool,
+            list_tasks_tool,
+            get_task_tool,
             answer_from_library_tool,
             freeform_from_library_tool,
             generate_image_from_library_tool,
@@ -485,11 +582,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     async def _agent_instructions(_context: Any, _agent: Any) -> str:
         return (
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
-            "Use the direct app tools to list sources, inspect tags, search chunks, branch through related "
-            "semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its published chunks, update a source's tags when the user explicitly asks, answer questions, and create image or voice assets. "
-            "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. Prefer the user's selected "
-            "sources when present. Be concise, name the evidence you used, and say clearly when the library "
+            "Use the direct app tools to list sources, inspect source details and tags, ingest text snippets, search chunks, "
+            "branch through related semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
+            "to replace its published chunks, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
+            "Prefer the user's selected sources when present. Only delete a source after explicit user confirmation. "
+            "Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."
         )
 

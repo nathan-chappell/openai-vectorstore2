@@ -250,13 +250,14 @@ Acceptance criteria:
 
 ## Phase 5: Agentic ChatKit Webapp
 
-Status: planned.
+Status: in progress.
 
 Make ChatKit the main way to access the app, with the surrounding UI acting as context, inspection, and control surface.
 
 Tasks:
 
 - Keep the current custom ChatKit backend pattern. Official docs describe this as implementing `ChatKitServer`, persisting threads/messages/files with a `Store`, forwarding requests to the server, and passing custom context into `server.process`.
+- [x] Expand ChatKit tool coverage so the agent can directly list sources/tags, inspect source details, ingest text snippets, preview splits, re-split, update source tags, guarded-delete sources, search, branch, run actions, and inspect task progress.
 - Move selected source scope from only request metadata toward explicit thread/app state:
   - Continue sending current selections from the frontend.
   - Store meaningful scope decisions in thread metadata or app task input when the agent acts.
@@ -271,6 +272,11 @@ Tasks:
 - Replace the standalone action buttons with agent-friendly controls where useful, but keep direct controls for repeatable workflows like upload, source selection, and filter editing.
 - Add helpful progress events for all long-running tools, not only search/branch/image.
 - Tighten layout and styling after functionality is stable. The current UI works, but it uses a hero-like layout and broad cards; for an operational RAG workspace, move toward denser, quieter controls.
+
+Implementation notes:
+
+- Added ChatKit tools for `get_source_detail`, `ingest_text_source`, `delete_source` with explicit confirmation, `list_tasks`, and `get_task`.
+- Updated ingest tasks so ChatKit-origin text ingest can carry `origin_thread_id`, matching the task/thread linkage planned for ChatKit and app-core drift control.
 
 Acceptance criteria:
 

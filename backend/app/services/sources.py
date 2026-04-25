@@ -411,6 +411,7 @@ class SourceService:
         tag_ids: list[str],
         user_guidance: str | None,
         origin_surface: str,
+        origin_thread_id: str | None = None,
     ) -> IngestFinalizeResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
@@ -456,6 +457,7 @@ class SourceService:
                 status="queued",
                 title=f"Ingest: {display_title}",
                 origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
                 source_file_id=source.id,
                 input_json={
                     "filename": filename,

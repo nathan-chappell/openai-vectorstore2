@@ -54,8 +54,8 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="get_source_detail",
         summary="Load one source with its stored metadata and semantic chunks.",
         rest_routes=("GET /api/sources/{source_id}",),
+        chatkit_tool="get_source_detail",
         mcp_tools=("get_source_detail",),
-        notes="ChatKit currently receives selected-source summaries as context instead of a dedicated detail tool.",
     ),
     AppCapability(
         operation="preview_semantic_split",
@@ -69,8 +69,9 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="ingest_source",
         summary="Ingest raw material, split it semantically, tag it, and publish chunks to OpenAI vector stores.",
         rest_routes=("POST /api/sources",),
+        chatkit_tool="ingest_text_source",
         mcp_tools=("ingest_text_source", "ingest_file_source"),
-        notes="MCP file ingest currently accepts base64 payloads; richer Apps file inputs are planned.",
+        notes="ChatKit supports text ingest; web and MCP also support file/PDF ingest.",
     ),
     AppCapability(
         operation="resplit_source",
@@ -92,6 +93,7 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="delete_source",
         summary="Delete an app-owned source record and its stored source payload.",
         rest_routes=("DELETE /api/sources/{source_id}",),
+        chatkit_tool="delete_source",
         mcp_tools=("delete_source",),
         notes="Deletes the stored payload plus tracked OpenAI original and chunk files.",
     ),
@@ -141,12 +143,14 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="list_tasks",
         summary="List recent app tasks for the current user.",
         rest_routes=("GET /api/tasks",),
+        chatkit_tool="list_tasks",
         mcp_tools=("list_tasks",),
     ),
     AppCapability(
         operation="get_task",
         summary="Load task status, inputs, state, result, and error information.",
         rest_routes=("GET /api/tasks/{task_id}",),
+        chatkit_tool="get_task",
         mcp_tools=("get_task",),
     ),
 )
