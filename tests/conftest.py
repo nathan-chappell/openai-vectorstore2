@@ -20,6 +20,7 @@ class FakeOpenAIGateway:
         self.deleted_file_ids: list[str] = []
         self.detached_vector_store_file_ids: list[tuple[str, str]] = []
         self.fail_during_split = False
+        self.ignore_filters = False
 
     async def close(self) -> None:
         return None
@@ -117,6 +118,8 @@ class FakeOpenAIGateway:
         filters: object,
     ) -> list[VectorSearchCandidate]:
         del vector_store_id, query
+        if self.ignore_filters:
+            return list(self._chunks.values())[:max_results]
         return [candidate for candidate in self._chunks.values() if _matches_filter(filters, candidate.attributes)][
             :max_results
         ]

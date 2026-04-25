@@ -469,6 +469,15 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             assert kind_scoped_search.status_code == 200
             assert kind_scoped_search.json()["hits"] == []
 
+            app.state.services.openai.ignore_filters = True
+            fallback_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "tag_ids": [bravo_tag_id], "max_results": 8},
+            )
+            assert fallback_search.status_code == 200
+            assert {hit["source_file_id"] for hit in fallback_search.json()["hits"]} == {bravo_source_id}
+
 
 @pytest.mark.asyncio
 async def test_failed_ingest_cleans_up_tracked_openai_files(

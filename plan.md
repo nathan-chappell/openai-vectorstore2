@@ -206,7 +206,7 @@ Tasks:
 - [x] Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
 - Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
 - [x] Add a `vector_attributes_version` concept, either in chunk metadata or in settings, so future reindexing can detect stale chunks.
-- Add DB post-filtering fallback only if OpenAI vector-store filters cannot express a future tag model.
+- [x] Add DB post-filtering fallback only if OpenAI vector-store filters cannot express a future tag model.
 - [x] Add tests for all/any tag matching and source-kind/source-id combinations.
 
 Implementation notes:
@@ -215,7 +215,8 @@ Implementation notes:
 - Kept `TAG_SLOT_COUNT=8` as an explicit vector-attribute limit and added `VECTOR_ATTRIBUTES_VERSION=1` to chunk vector attributes.
 - Added vector attribute/filter construction tests for versioning, bounded tag slots, all/any tag groups, source IDs, and source kind filters.
 - Updated the fake OpenAI gateway to evaluate the same OpenAI vector-store filter shape used by app search, then added HTTP integration coverage for tag all/any, selected source, and source-kind filters.
-- Remaining Phase 4 work: manual tag management, reindex tasks when tags change, and a fallback strategy if future OpenAI filters cannot express the chosen tag model.
+- Added DB-side post-filtering after vector search hydration so stale or overly broad vector-store results cannot escape app-owned source/tag/kind constraints.
+- Remaining Phase 4 work: manual tag management and reindex tasks when tags change.
 
 Acceptance criteria:
 

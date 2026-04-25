@@ -1209,6 +1209,14 @@ class SourceService:
                 candidate = candidates_by_chunk_id.get(chunk_id)
                 if chunk is None or candidate is None:
                     continue
+                if not _chunk_matches_request_filters(
+                    chunk,
+                    selected_source_ids=request.selected_source_ids,
+                    source_kinds=request.source_kinds,
+                    tag_ids=[tag.id for tag in tags],
+                    tag_match_mode=request.tag_match_mode,
+                ):
+                    continue
                 output.append(self._chunk_hit(chunk, score=candidate.score, attributes=candidate.attributes))
             return output
 
@@ -1807,6 +1815,30 @@ def _chunk_locator(chunk: SemanticChunk) -> ChunkLocator:
         start_seconds=chunk.start_seconds,
         end_seconds=chunk.end_seconds,
     )
+
+
+def _chunk_matches_request_filters(
+    chunk: SemanticChunk,
+    *,
+    selected_source_ids: Sequence[str],
+    source_kinds: Sequence[str],
+    tag_ids: Sequence[str],
+    tag_match_mode: TagMatchMode,
+) -> bool:
+    source = chunk.source_file
+    if selected_source_ids and source.id not in set(selected_source_ids):
+        return False
+    if source_kinds and source.source_kind not in set(source_kinds):
+        return False
+    if tag_ids:
+        selected_tag_ids = set(tag_ids)
+        source_tag_ids = {link.tag_id for link in source.tag_links}
+        return (
+            selected_tag_ids.issubset(source_tag_ids)
+            if tag_match_mode == "all"
+            else bool(selected_tag_ids & source_tag_ids)
+        )
+    return True
 
 
 def _or_filter(key: str, values: Sequence[str]) -> ComparisonFilter | CompoundFilter:
