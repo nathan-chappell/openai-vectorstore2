@@ -96,6 +96,23 @@ Implementation notes:
   - `npm run test:e2e -- --project=chromium-desktop`
   - `npm run test:e2e -- --project=chromium-mobile`
 
+## Current Implementation Pass: Agentic Filesystem Polish And Progress
+
+Status: completed.
+
+Tasks:
+
+- [x] Persist explorer-selected file scope into ChatKit thread metadata so scope decisions survive beyond a single request.
+- [x] Keep ChatKit composer attachments hidden for the current web UX; file input happens through the explorer.
+- [x] Show selected file names in the explorer scope strip, not only the count.
+- [x] Rename the filtered bulk scope action to "Select visible" so query/tag filtering semantics are clear.
+- [x] Add Enter-to-search and an explicit semantic-search label in the preview workbench.
+- [x] Fix late object-URL cleanup when rapidly switching file previews.
+- [x] Add lightweight polling while background ingest/reindex/resplit tasks are queued or running, so the explorer updates readiness without manual refresh.
+- [x] Add ChatKit progress completion events for long-running tools, including search, branch, split preview, ingest, tag reindexing, grounded answers, freeform drafting, image generation, voice generation, and deletion cleanup.
+- [x] Run typecheck, build, backend integration tests, and Playwright checks.
+- [x] Commit this polish pass once verified.
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:
@@ -360,7 +377,7 @@ Tasks:
   - [x] uploaded files are immediately queued through `SourceService.ingest_source(origin_surface="chatkit")`.
   - [x] `AppChatAttachment` metadata links attachment IDs to source and task IDs so chat history and app-core task history stay related.
 - Replace the standalone action buttons with agent-friendly controls where useful, but keep direct controls for repeatable workflows like upload, source selection, and filter editing.
-- Add helpful progress events for all long-running tools, not only search/branch/image.
+- [x] Add helpful progress events for all long-running tools, not only search/branch/image.
 - Tighten layout and styling after functionality is stable. The current UI works, but it uses a hero-like layout and broad cards; for an operational RAG workspace, move toward denser, quieter controls.
 
 Implementation notes:
@@ -370,6 +387,9 @@ Implementation notes:
 - Added a compact recent-task strip to the webapp shell so queued/running/completed work is visible outside chat.
 - Persisted selected-file scope into ChatKit thread metadata (`selected_source_ids`, count, origin, timestamp) whenever threads are saved, and the live ChatKit QA test now asserts task input contains the selected source scope.
 - Decision update: the web ChatKit composer should not expose attachments for the current product direction; file input belongs to the explorer. The attachment endpoint remains compatibility plumbing, and attachments still become normal app-core sources if used by an older host.
+- Added completion progress updates for ChatKit's long-running app tools so the agent surface reports hit counts, level counts, proposed split sizes, task IDs/statuses, queued reindex counts, generated asset IDs, and delete cleanup completion.
+- Added lightweight frontend background-task polling so queued/running ingest, re-split, and reindex work refreshes the explorer and selected preview automatically while work is active.
+- Tightened filesystem UX details: selected file names appear in the ChatKit scope strip, filtered bulk selection now says "Select visible", semantic search runs on Enter, and preview object URLs are revoked even when source switching races a blob load.
 
 Acceptance criteria:
 

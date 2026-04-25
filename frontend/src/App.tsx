@@ -131,7 +131,15 @@ export function App({ authMode }: AppProps) {
       return matchesQuery && matchesTags;
     });
   }, [selectedExplorerTagIdSet, selectedExplorerTagIds.length, sortedSources, sourceQuery]);
+  const selectedSourceSummaries = useMemo(() => {
+    const byId = new Map(sources.map((source) => [source.id, source]));
+    return selectedSourceIds.flatMap((sourceId) => {
+      const source = byId.get(sourceId);
+      return source ? [source] : [];
+    });
+  }, [selectedSourceIds, sources]);
   const activeSourceId = selectedSource?.id ?? selectedSourceIds[0] ?? null;
+  const hasActiveTasks = useMemo(() => tasks.some(isActiveTask), [tasks]);
 
   const refreshAll = useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -154,6 +162,34 @@ export function App({ authMode }: AppProps) {
     }
   }, []);
 
+  const refreshActivity = useCallback(async (): Promise<void> => {
+    try {
+      const selectedSourceId = selectedSource?.id ?? null;
+      const detailPromise = selectedSourceId
+        ? getSource(selectedSourceId).catch(() => null)
+        : Promise.resolve<SourceDetail | null>(null);
+      const [sourceList, tagList, taskList, detail] = await Promise.all([
+        loadAllSources(),
+        listTags(),
+        listTasks(),
+        detailPromise,
+      ]);
+      setSources(sourceList.sources);
+      setTags(tagList);
+      setTasks(taskList.tasks);
+      setSelectedSource((current) => (current && detail?.id === current.id ? detail : current));
+
+      const activeTask = taskList.tasks.find(isActiveTask);
+      if (activeTask) {
+        setStatus(`${activeTask.kind} ${activeTask.status}: ${activeTask.title}.`);
+      } else {
+        setStatus(`Ready with ${sourceList.totalCount} source${sourceList.totalCount === 1 ? "" : "s"}.`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh background activity.");
+    }
+  }, [selectedSource]);
+
   useEffect(() => {
     setChatKitMetadataGetter(() => ({
       origin: "web",
@@ -165,6 +201,17 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
+
+  useEffect(() => {
+    if (!hasActiveTasks) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshActivity();
+    }, 2_500);
+    void refreshActivity();
+    return () => window.clearInterval(intervalId);
+  }, [hasActiveTasks, refreshActivity]);
 
   useEffect(() => {
     setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
@@ -465,6 +512,7 @@ export function App({ authMode }: AppProps) {
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
           selectedSourceIdSet={selectedSourceIdSet}
           selectedSourceCount={selectedSourceIds.length}
+          selectedSourceSummaries={selectedSourceSummaries}
           sourceQuery={sourceQuery}
           sources={filteredSources}
           splitPreview={splitPreview}
@@ -564,6 +612,7 @@ const SourceExplorer = memo(function SourceExplorer({
   selectedExplorerTagIdSet,
   selectedSourceIdSet,
   selectedSourceCount,
+  selectedSourceSummaries,
   sourceQuery,
   sources,
   splitPreview,
@@ -592,6 +641,7 @@ const SourceExplorer = memo(function SourceExplorer({
   selectedExplorerTagIdSet: Set<string>;
   selectedSourceIdSet: Set<string>;
   selectedSourceCount: number;
+  selectedSourceSummaries: SourceSummary[];
   sourceQuery: string;
   sources: SourceSummary[];
   splitPreview: SplitPreviewResponse | null;
@@ -615,6 +665,7 @@ const SourceExplorer = memo(function SourceExplorer({
 }) {
   const filtering = Boolean(sourceQuery.trim() || selectedExplorerTagIdSet.size);
   const chatScopeLabel = selectedSourceCount === 1 ? "1 file for chat" : `${selectedSourceCount} files for chat`;
+  const selectedScopeNames = selectedSourceSummaries.map((source) => source.display_title);
   return (
     <aside className="explorer-pane" aria-label="Files">
       <div className="pane-header">
@@ -679,11 +730,14 @@ const SourceExplorer = memo(function SourceExplorer({
       <section className="chat-scope-strip" aria-label="Chat file scope">
         <div>
           <strong>{chatScopeLabel}</strong>
-          <span>Selected files guide ChatKit.</span>
+          <span>
+            {selectedScopeNames.length ? selectedScopeNames.slice(0, 3).join(", ") : "Selected files guide ChatKit."}
+            {selectedScopeNames.length > 3 ? `, +${selectedScopeNames.length - 3}` : ""}
+          </span>
         </div>
         <div className="button-row">
           <button type="button" className="secondary-button" onClick={onSelectVisibleSources} disabled={!sources.length}>
-            Select all
+            Select visible
           </button>
           <button type="button" className="secondary-button" onClick={onClearChatSelection} disabled={!selectedSourceCount}>
             Clear
@@ -912,7 +966,18 @@ function PreviewWorkbench({
               </button>
             </div>
             <div className="input-row">
-              <input value={searchQuery} onChange={(event) => onSearchQueryChange(event.currentTarget.value)} />
+              <input
+                aria-label="Semantic search query"
+                placeholder="Search selected files or the library"
+                value={searchQuery}
+                onChange={(event) => onSearchQueryChange(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    onRunSearch();
+                  }
+                }}
+              />
               <button type="button" onClick={onRunSearch} disabled={busy}>
                 Search
               </button>
@@ -1021,10 +1086,13 @@ function SourcePreview({
           }
           return;
         }
-        objectUrl = URL.createObjectURL(response.blob);
-        if (!cancelled) {
-          setPreviewResource({ state: "file", url: objectUrl, mediaType });
+        const nextObjectUrl = URL.createObjectURL(response.blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextObjectUrl);
+          return;
         }
+        objectUrl = nextObjectUrl;
+        setPreviewResource({ state: "file", url: objectUrl, mediaType });
       } catch (error) {
         if (!cancelled) {
           setPreviewResource({ state: "error", message: error instanceof Error ? error.message : "Preview failed." });
@@ -1252,6 +1320,10 @@ function sameStringSet(left: string[], right: string[]): boolean {
   }
   const rightSet = new Set(right);
   return left.every((item) => rightSet.has(item));
+}
+
+function isActiveTask(task: TaskSummary): boolean {
+  return task.status === "queued" || task.status === "running";
 }
 
 function canPreviewSource(source: SourceDetail): boolean {

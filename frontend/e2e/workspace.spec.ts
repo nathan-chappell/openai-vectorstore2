@@ -43,7 +43,9 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".preview-pane")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.getByPlaceholder("Search files, tags, type, status")).toBeVisible();
+  await expect(page.getByPlaceholder("Search selected files or the library")).toBeVisible();
   await expect(page.getByText("0 files for chat")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Select visible" })).toBeDisabled();
   await expect(page.getByText("Choose files")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
 
@@ -86,6 +88,7 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
     await page.getByLabel(`Select ${source.display_title} for chat`).check();
     await expect(page.getByText("1 file for chat")).toBeVisible();
+    await expect(page.locator(".chat-scope-strip")).toContainText(source.display_title);
 
     await sendChatKitMessage(
       page,
