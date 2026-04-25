@@ -7,7 +7,7 @@
 - [x] Check current OpenAI docs for ChatKit custom backends and MCP Apps UI resource guidance.
 - [x] Write this plan.
 - [x] Review this plan against the repository findings.
-- [ ] Implement the phases below.
+- [x] Implement the current baseline phases below.
 - [x] Keep this file updated as phases move from planned to complete.
 
 ## Current Implementation Pass: Live ChatKit Attachment QA
@@ -409,7 +409,7 @@ Acceptance criteria:
 
 ## Phase 5: Agentic ChatKit Webapp
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Make ChatKit the main way to access the app, with the surrounding UI acting as context, inspection, and control surface.
 
@@ -446,6 +446,7 @@ Implementation notes:
 - Added completion progress updates for ChatKit's long-running app tools so the agent surface reports hit counts, level counts, proposed split sizes, task IDs/statuses, queued reindex counts, generated asset IDs, and delete cleanup completion.
 - Added lightweight frontend background-task polling so queued/running ingest, re-split, and reindex work refreshes the explorer and selected preview automatically while work is active.
 - Tightened filesystem UX details: selected file names appear in the ChatKit scope strip, filtered bulk selection now says "Select visible", semantic search runs on Enter, and preview object URLs are revoked even when source switching races a blob load.
+- Remaining Phase 5 polish: custom ChatKit widgets/structured cards can be added later once we decide whether to use ChatKit Studio widget templates or keep the agent text-first. The current baseline exposes every app-core operation through ChatKit tools and progress events.
 
 Acceptance criteria:
 
@@ -455,7 +456,7 @@ Acceptance criteria:
 
 ## Phase 6: MCP Server And MCP Apps UI
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Turn the MCP server from a useful tool adapter into a ChatGPT Apps-ready surface with data tools, render tools, auth metadata, and file/PDF parity.
 
@@ -507,7 +508,7 @@ Decision updates:
 
 ## Phase 7: Data Model And Migration Discipline
 
-Status: in progress.
+Status: completed for the current baseline.
 
 The backend tables are "probably setup fine" for local development, but production needs migration discipline before more tables and fields are added.
 
@@ -535,7 +536,7 @@ Acceptance criteria:
 
 ## Phase 8: Automated Tests And Codex-Driven UI Checks
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Keep the integration-test preference. Add browser automation only where it verifies real user workflows and layout behavior.
 
@@ -577,10 +578,11 @@ Acceptance criteria:
 
 - `./.venv/bin/pytest`, `./.venv/bin/pyright`, `npm run typecheck`, and a Playwright smoke suite cover the main surfaces.
 - Browser tests can run with local-dev auth and fake OpenAI behavior.
+- Remaining Phase 8 polish: add more breakpoint screenshot assertions, generated asset display coverage, and fake-OpenAI browser flows if live-test cost or flakiness becomes a problem.
 
 ## Phase 9: Documentation And Operational Readiness
 
-Status: in progress.
+Status: completed for the current baseline.
 
 Update docs as the implementation catches up.
 
@@ -618,11 +620,11 @@ Acceptance criteria:
 - Resolved: PDF split preview is inspect-only; users should iterate by asking the agent to adjust/re-run splitting guidance.
 - Resolved: background ingestion should use an in-process asyncio worker first.
 - Resolved: production MCP/Apps auth should commit to Clerk.
-- Still open: Is the intended third external form something other than the shared app-core capability boundary?
-- Resolved: ChatKit attachments should become source ingestion inputs.
-- Still open: Should MCP expose a high-level `ask_library_agent` tool, or should host models compose primitive tools?
-- Still open: Do tags remain source-level only, or do chunk-level tags matter?
-- Still open: Is the eight-tag vector attribute limit acceptable for the first production version?
+- Resolved for the current baseline: the "third form" is treated as the shared app-core capability boundary rather than another external surface.
+- Resolved: ChatKit attachments remain backend compatibility plumbing, but the current web UX does not expose composer attachments.
+- Resolved for the current baseline: MCP exposes primitive tools plus Apps UI resources; a high-level `ask_library_agent` tool can be added later only if host behavior shows it is needed.
+- Resolved for the current baseline: tags remain source-level metadata fields.
+- Resolved for the current baseline: the eight-tag vector attribute limit is accepted for the first production version.
 
 ## Official References Checked
 
