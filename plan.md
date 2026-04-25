@@ -64,15 +64,13 @@ Local `.env` handling is now clear enough to run real OpenAI-backed checks when 
   - `CLERK_ISSUER_URL`
   - `VITE_CLERK_PUBLISHABLE_KEY`
 - Keep sensible defaults in `AppSettings` and `.env.example`; avoid adding optional local overrides unless they are truly needed.
-- Keep `STORAGE_BACKEND=local` until Railway bucket details arrive.
-- Leave the Railway/S3-compatible storage vars empty for now:
-  - `S3_ENDPOINT`
-  - `S3_BUCKET`
-  - `S3_ACCESS_KEY_ID`
-  - `S3_SECRET_ACCESS_KEY`
-- When Railway bucket info arrives, switch `STORAGE_BACKEND=s3` and fill only the S3/Railway values required by `backend/app/storage/service.py`.
+- Keep `STORAGE_BACKEND=local` until all Railway bucket credentials are present.
+- Railway/S3-compatible local `.env` state:
+  - `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_REGION`, and `S3_URL_STYLE` are set locally.
+  - `S3_SECRET_ACCESS_KEY` is still empty and blocks switching storage to S3.
+- When the Railway secret access key arrives, set `S3_SECRET_ACCESS_KEY`, switch `STORAGE_BACKEND=s3`, and run a focused storage/upload smoke before broader live tests.
 - With the OpenAI key and app signing secret present, backend real-agent checks can run against the local app. Live Clerk browser checks additionally need a test-user/sign-in strategy.
-- Playwright is not installed yet; browser screenshot automation remains a Phase 8 task.
+- Playwright is installed and available through `npm run test:e2e`; broader screenshot/workflow automation remains a Phase 8 task.
 
 ## Drift Risks To Fix Early
 
