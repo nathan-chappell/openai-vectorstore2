@@ -8,7 +8,22 @@
 - [x] Write this plan.
 - [x] Review this plan against the repository findings.
 - [ ] Implement the phases below.
-- [ ] Keep this file updated as phases move from planned to complete.
+- [x] Keep this file updated as phases move from planned to complete.
+
+## Current Implementation Pass: Live ChatKit Attachment QA
+
+Status: completed.
+
+Tasks:
+
+- [x] Normalize local Railway S3 settings in ignored `.env` and verify `S3_SECRET_ACCESS_KEY` is present without exposing the value.
+- [x] Add ChatKit direct attachment upload so uploaded files become normal app-core sources.
+- [x] Link ChatKit attachment metadata to source/task records and ChatKit thread IDs.
+- [x] Enable ChatKit composer attachments in the webapp.
+- [x] Disable Clerk explicitly for Playwright while preserving local-dev auth.
+- [x] Add a live Playwright flow that uploads a file through ChatKit, asks a grounded question, and deletes the source.
+- [x] Run typecheck, build, backend tests, and live Playwright checks.
+- [x] Stage tracked changes, confirm `.env` stays unstaged, and commit the implementation.
 
 ## Goal
 
@@ -64,11 +79,10 @@ Local `.env` handling is now clear enough to run real OpenAI-backed checks when 
   - `CLERK_ISSUER_URL`
   - `VITE_CLERK_PUBLISHABLE_KEY`
 - Keep sensible defaults in `AppSettings` and `.env.example`; avoid adding optional local overrides unless they are truly needed.
-- Keep `STORAGE_BACKEND=local` until all Railway bucket credentials are present.
 - Railway/S3-compatible local `.env` state:
-  - `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_REGION`, and `S3_URL_STYLE` are set locally.
-  - `S3_SECRET_ACCESS_KEY` is still empty and blocks switching storage to S3.
-- When the Railway secret access key arrives, set `S3_SECRET_ACCESS_KEY`, switch `STORAGE_BACKEND=s3`, and run a focused storage/upload smoke before broader live tests.
+  - `STORAGE_BACKEND=s3`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_URL_STYLE` are set locally.
+  - `.env.example` keeps secret values empty.
+- Playwright should run with live OpenAI and Railway storage, but with Clerk disabled through test-only env overrides and local-dev auth enabled.
 - With the OpenAI key and app signing secret present, backend real-agent checks can run against the local app. Live Clerk browser checks additionally need a test-user/sign-in strategy.
 - Playwright is installed and available through `npm run test:e2e`; broader screenshot/workflow automation remains a Phase 8 task.
 
@@ -266,7 +280,11 @@ Tasks:
   - Source detail and chunk map.
   - Generated asset links/previews.
   - Ingest progress and split preview.
-- Decide whether ChatKit attachments should become source ingestion inputs. The backend has ChatKit attachment storage, while the composer currently disables attachments.
+- [x] Decide whether ChatKit attachments should become source ingestion inputs. The backend has ChatKit attachment storage, while the composer currently disables attachments.
+- Add ChatKit attachment ingestion:
+  - direct upload endpoint receives composer files through authenticated app fetch.
+  - uploaded files are immediately queued through `SourceService.ingest_source(origin_surface="chatkit")`.
+  - `AppChatAttachment` metadata links attachment IDs to source and task IDs so chat history and app-core task history stay related.
 - Replace the standalone action buttons with agent-friendly controls where useful, but keep direct controls for repeatable workflows like upload, source selection, and filter editing.
 - Add helpful progress events for all long-running tools, not only search/branch/image.
 - Tighten layout and styling after functionality is stable. The current UI works, but it uses a hero-like layout and broad cards; for an operational RAG workspace, move toward denser, quieter controls.
@@ -276,6 +294,7 @@ Implementation notes:
 - Added ChatKit tools for `get_source_detail`, `ingest_text_source`, `delete_source` with explicit confirmation, `list_tasks`, and `get_task`.
 - Updated ingest tasks so ChatKit-origin text ingest can carry `origin_thread_id`, matching the task/thread linkage planned for ChatKit and app-core drift control.
 - Added a compact recent-task strip to the webapp shell so queued/running/completed work is visible outside chat.
+- Decision update: ChatKit attachments should become source ingestion inputs, not a separate chat-only file model.
 
 Acceptance criteria:
 
@@ -377,6 +396,7 @@ Frontend and browser tests:
 - Run the FastAPI app with the fake OpenAI gateway and built frontend.
 - Test upload, source selection, search, QA, generated asset display, and task visibility.
 - Add ChatKit smoke tests for mount, authenticated `/api/chatkit` fetch, selected-source metadata, streamed response rendering, and history load.
+- Add a live ChatKit attachment test for upload, ingest completion, grounded QA, explicit delete confirmation, and source cleanup.
 - Add screenshot checks at desktop, 1280px, 820px, and mobile breakpoints for:
   - Three-column layout.
   - ChatKit panel placement.
@@ -394,6 +414,7 @@ Current readiness notes:
 
 - Added `@playwright/test`, `playwright.config.ts`, `npm run test:e2e`, and a first smoke spec at `frontend/e2e/workspace.spec.ts`.
 - The smoke spec starts the FastAPI app with local-dev auth and isolated local SQLite/storage settings, starts Vite with Clerk disabled, opens desktop and mobile Chromium views, verifies the main workspace regions, and captures screenshots into ignored `output/playwright/` artifacts.
+- Current live-test direction: default `npm run test:e2e` should use real `OPENAI_API_KEY` and Railway S3 settings from `.env`, while overriding Clerk env vars to empty values for Playwright.
 - Expected manual run path outside Playwright: `npm run build:watch`, run the FastAPI app from `.venv`, then open `http://localhost:8000`; alternatively run `npm run dev` against the backend on `localhost:8000`.
 - Live UI testing with Clerk needs Clerk keys plus a deterministic test-user/sign-in flow. Local-dev auth can cover non-Clerk browser smoke tests once Playwright is installed.
 
@@ -443,7 +464,7 @@ Acceptance criteria:
 - Resolved: background ingestion should use an in-process asyncio worker first.
 - Resolved: production MCP/Apps auth should commit to Clerk.
 - Still open: Is the intended third external form something other than the shared app-core capability boundary?
-- Still open: Should ChatKit attachments become source ingestion inputs, or should uploads stay outside chat?
+- Resolved: ChatKit attachments should become source ingestion inputs.
 - Still open: Should MCP expose a high-level `ask_library_agent` tool, or should host models compose primitive tools?
 - Still open: Do tags remain source-level only, or do chunk-level tags matter?
 - Still open: Is the eight-tag vector attribute limit acceptable for the first production version?

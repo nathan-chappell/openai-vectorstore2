@@ -529,6 +529,7 @@ function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
         url: chatKitConfig.url,
         domainKey: chatKitConfig.domainKey,
         fetch: authenticatedFetch,
+        uploadStrategy: { type: "direct", uploadUrl: chatKitConfig.uploadUrl },
       },
       theme: {
         colorScheme: "light",
@@ -556,7 +557,18 @@ function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
       },
       composer: {
         placeholder: "Ask the semantic library...",
-        attachments: { enabled: false },
+        attachments: {
+          enabled: true,
+          maxSize: 20 * 1024 * 1024,
+          maxCount: 3,
+          accept: {
+            "application/pdf": [".pdf"],
+            "text/*": [".txt", ".md", ".csv", ".json"],
+            "image/*": [".png", ".jpg", ".jpeg", ".webp"],
+            "audio/*": [".mp3", ".m4a", ".wav"],
+            "video/*": [".mp4", ".mov", ".webm"],
+          },
+        },
         dictation: { enabled: false },
         models: MODEL_CHOICES.map((choice) => ({ ...choice, default: choice.id === "balanced" })),
       },
@@ -564,7 +576,7 @@ function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
         feedback: false,
       },
     }),
-    [chatKitConfig.domainKey, chatKitConfig.url, selectedSourceIds.length],
+    [chatKitConfig.domainKey, chatKitConfig.uploadUrl, chatKitConfig.url, selectedSourceIds.length],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;

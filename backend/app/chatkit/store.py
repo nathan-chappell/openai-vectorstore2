@@ -5,13 +5,13 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from chatkit.store import NotFoundError, Store
-from chatkit.types import Attachment, Page, ThreadItem, ThreadMetadata
+from chatkit.store import AttachmentStore, NotFoundError, Store
+from chatkit.types import Attachment, AttachmentCreateParams, FileAttachment, Page, ThreadItem, ThreadMetadata
 from pydantic import TypeAdapter
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 
 from backend.app.db.session import DatabaseManager
-from backend.app.models import AppChatAttachment, AppChatEntry, AppChatThread
+from backend.app.models import AppChatAttachment, AppChatEntry, AppChatThread, AppTask
 from backend.app.services.sources import SourceService
 
 THREAD_ITEM_ADAPTER: TypeAdapter[ThreadItem] = TypeAdapter(ThreadItem)
@@ -28,7 +28,7 @@ class VectorstoreChatContext:
     thread_origin: str | None
 
 
-class VectorstoreChatStore(Store[VectorstoreChatContext]):
+class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[VectorstoreChatContext]):
     def __init__(self, *, database: DatabaseManager, sources: SourceService) -> None:
         self._database = database
         self._sources = sources
@@ -160,6 +160,10 @@ class VectorstoreChatStore(Store[VectorstoreChatContext]):
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
             payload = attachment.model_dump(mode="json")
+            metadata = _metadata_dict(payload.get("metadata"))
+            if attachment.thread_id is not None:
+                metadata["thread_id"] = attachment.thread_id
+                payload["metadata"] = metadata
             record = await session.get(AppChatAttachment, attachment.id)
             if record is None:
                 session.add(
@@ -176,6 +180,13 @@ class VectorstoreChatStore(Store[VectorstoreChatContext]):
                 record.kind = attachment.type
                 record.payload = payload
                 record.updated_at = datetime.now(UTC)
+            task_id = metadata.get("task_id")
+            if isinstance(task_id, str) and task_id.strip() and attachment.thread_id is not None:
+                await session.execute(
+                    update(AppTask)
+                    .where(AppTask.id == task_id, AppTask.user_id == app_user.id, AppTask.origin_thread_id.is_(None))
+                    .values(origin_thread_id=attachment.thread_id, updated_at=datetime.now(UTC))
+                )
             await session.commit()
 
     async def load_attachment(self, attachment_id: str, context: VectorstoreChatContext) -> Attachment:
@@ -193,6 +204,65 @@ class VectorstoreChatStore(Store[VectorstoreChatContext]):
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
             await session.execute(delete(AppChatAttachment).where(AppChatAttachment.id == attachment_id, AppChatAttachment.user_id == app_user.id))
             await session.commit()
+
+    async def create_attachment(self, input: AttachmentCreateParams, context: VectorstoreChatContext) -> Attachment:
+        attachment_id = self.generate_attachment_id(input.mime_type, context)
+        return FileAttachment(
+            id=attachment_id,
+            name=input.name,
+            mime_type=input.mime_type,
+            metadata={
+                "attachment_id": attachment_id,
+                "upload_status": "pending",
+                "upload_endpoint": "/api/chatkit/attachments",
+            },
+        )
+
+    async def create_source_attachment(
+        self,
+        *,
+        filename: str,
+        declared_media_type: str | None,
+        payload: bytes,
+        tag_ids: list[str],
+        user_guidance: str | None,
+        thread_id: str | None,
+        context: VectorstoreChatContext,
+    ) -> Attachment:
+        ingest_response = await self._sources.ingest_source(
+            clerk_user_id=context.clerk_user_id,
+            filename=filename,
+            declared_media_type=declared_media_type,
+            payload=payload,
+            tag_ids=tag_ids,
+            user_guidance=user_guidance,
+            origin_surface="chatkit",
+            origin_thread_id=thread_id,
+        )
+        attachment_id = self.generate_attachment_id(ingest_response.source.media_type, context)
+        task_payload = ingest_response.task.model_dump(mode="json") if ingest_response.task is not None else None
+        metadata = {
+            "attachment_id": attachment_id,
+            "source_id": ingest_response.source.id,
+            "source_title": ingest_response.source.display_title,
+            "source_kind": ingest_response.source.source_kind,
+            "source_status": ingest_response.source.status,
+            "task_id": ingest_response.task.id if ingest_response.task is not None else None,
+            "task_status": ingest_response.task.status if ingest_response.task is not None else None,
+            "origin_surface": "chatkit",
+            "thread_id": thread_id,
+            "source": ingest_response.source.model_dump(mode="json"),
+            "task": task_payload,
+        }
+        attachment = FileAttachment(
+            id=attachment_id,
+            name=filename,
+            mime_type=ingest_response.source.media_type,
+            thread_id=thread_id,
+            metadata={key: value for key, value in metadata.items() if value is not None},
+        )
+        await self.save_attachment(attachment, context=context)
+        return attachment
 
     async def _save_item(self, *, thread_id: str, item: ThreadItem, context: VectorstoreChatContext, create_only: bool) -> None:
         await self._database.ensure_ready()
@@ -248,3 +318,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext]):
             select(AppChatEntry.sequence).where(AppChatEntry.thread_id == thread_id).order_by(AppChatEntry.sequence.desc()).limit(1)
         )
         return int(value or 0) + 1
+
+
+def _metadata_dict(value: object) -> dict[str, object]:
+    if isinstance(value, dict):
+        return {str(key): item for key, item in value.items()}
+    return {}

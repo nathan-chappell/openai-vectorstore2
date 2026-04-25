@@ -329,6 +329,38 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             return StreamingResponse(result, media_type="text/event-stream")
         return Response(content=result.json, media_type="application/json")
 
+    @app.post("/api/chatkit/attachments")
+    async def upload_chatkit_attachment_api(
+        file: UploadFile = File(...),
+        tag_ids: list[str] | None = Form(default=None),
+        user_guidance: str | None = Form(default=None),
+        thread_id: str | None = Form(default=None),
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> Response:
+        payload = await file.read()
+        await file.close()
+        context = services.chatkit_server.build_user_context(
+            clerk_user_id=user.clerk_user_id,
+            user_email=user.email,
+            display_name=user.display_name,
+            bearer_token=user.bearer_token,
+        )
+        try:
+            attachment = await services.chatkit_server.create_uploaded_attachment(
+                filename=file.filename or "upload",
+                declared_media_type=file.content_type,
+                payload=payload,
+                tag_ids=tag_ids or [],
+                user_guidance=user_guidance,
+                thread_id=thread_id.strip() if thread_id is not None and thread_id.strip() else None,
+                context=context,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+        return Response(content=attachment.model_dump_json(exclude_none=True), media_type="application/json")
+
     @app.get("/{full_path:path}")
     async def spa_entrypoint(full_path: str) -> Response:
         index_path = static_dir / "index.html"

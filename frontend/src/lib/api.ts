@@ -39,10 +39,11 @@ export function setChatKitMetadataGetter(getter: (() => Record<string, unknown> 
   chatKitMetadataGetter = getter;
 }
 
-export function getChatKitConfig(): { url: string; domainKey: string } {
+export function getChatKitConfig(): { url: string; domainKey: string; uploadUrl: string } {
   return {
     url: `${API_BASE_URL}/chatkit`,
     domainKey: CHATKIT_DOMAIN_KEY,
+    uploadUrl: `${API_BASE_URL}/chatkit/attachments`,
   };
 }
 

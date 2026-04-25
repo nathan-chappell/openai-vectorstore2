@@ -2,19 +2,22 @@ from __future__ import annotations
 
 import asyncio
 from base64 import b64encode
+from datetime import UTC, datetime
 from pathlib import Path
 import re
 from time import monotonic
 from typing import cast
 
+from chatkit.types import FileAttachment, ThreadMetadata
 import httpx
 import pytest
 
 from backend import create_fastapi_app
+from backend.app.bootstrap import AppServices, create_services
 from backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, rest_route_names
 from backend.app.core.config import AppSettings
-from backend.app.bootstrap import AppServices, create_services
 from backend.app.mcp.server import create_mcp_server
+from backend.app.models import AppChatAttachment
 from backend.app.schemas import TaskDetail
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -729,6 +732,110 @@ async def test_mcp_file_ingest_tool_runs_against_app_core(
     assert payload["source"]["source_kind"] == "text"
     assert payload["task"]["kind"] == "ingest"
     assert completed_task.origin_surface == "mcp"
+
+
+@pytest.mark.asyncio
+async def test_http_chatkit_attachment_upload_creates_source_task_and_metadata(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            upload = await client.post(
+                "/api/chatkit/attachments",
+                headers=auth_headers,
+                files={
+                    "file": (
+                        "chatkit-note.txt",
+                        b"Attached ChatKit notes should become searchable source material.",
+                        "text/plain",
+                    )
+                },
+                data={"user_guidance": "Keep attachment chunks concise."},
+            )
+
+            assert upload.status_code == 200
+            attachment_payload = upload.json()
+            assert attachment_payload["type"] == "file"
+            assert attachment_payload["name"] == "chatkit-note.txt"
+            assert attachment_payload["mime_type"] == "text/plain"
+            metadata = attachment_payload["metadata"]
+            source_id = metadata["source_id"]
+            task_id = metadata["task_id"]
+            assert metadata["attachment_id"] == attachment_payload["id"]
+            assert metadata["origin_surface"] == "chatkit"
+            assert metadata["source"]["id"] == source_id
+            assert metadata["task"]["id"] == task_id
+
+            task = await client.get(f"/api/tasks/{task_id}", headers=auth_headers)
+            assert task.status_code == 200
+            task_payload = task.json()
+            assert task_payload["kind"] == "ingest"
+            assert task_payload["origin_surface"] == "chatkit"
+            assert task_payload["source_file_id"] == source_id
+            assert task_payload["origin_thread_id"] is None
+
+            async with app.state.services.database.session() as session:
+                record = await session.get(AppChatAttachment, attachment_payload["id"])
+                assert record is not None
+                assert record.payload["metadata"]["source_id"] == source_id
+                assert record.payload["metadata"]["task_id"] == task_id
+
+            completed_task = await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=task_id,
+                expected_status="completed",
+            )
+            assert completed_task["origin_surface"] == "chatkit"
+
+
+@pytest.mark.asyncio
+async def test_chatkit_attachment_save_backfills_ingest_task_thread_link(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            upload = await client.post(
+                "/api/chatkit/attachments",
+                headers=auth_headers,
+                files={"file": ("thread-link.txt", b"Thread linked attachment payload.", "text/plain")},
+            )
+            assert upload.status_code == 200
+            attachment_payload = upload.json()
+
+        services = app.state.services
+        context = services.chatkit_server.build_user_context(
+            clerk_user_id="local-dev",
+            user_email=None,
+            display_name="Local Dev",
+            bearer_token="local-dev",
+        )
+        thread = ThreadMetadata(id="chat_thread_link_test", created_at=datetime.now(UTC))
+        await services.chatkit_server.store.save_thread(thread, context=context)
+        linked_attachment = FileAttachment.model_validate(attachment_payload).model_copy(update={"thread_id": thread.id})
+        await services.chatkit_server.store.save_attachment(linked_attachment, context=context)
+
+        task_detail = await services.actions.get_task(
+            clerk_user_id="local-dev",
+            task_id=attachment_payload["metadata"]["task_id"],
+        )
+        assert task_detail.origin_thread_id == thread.id
+
+        async with services.database.session() as session:
+            record = await session.get(AppChatAttachment, attachment_payload["id"])
+            assert record is not None
+            assert record.payload["thread_id"] == thread.id
+            assert record.payload["metadata"]["thread_id"] == thread.id
 
 
 @pytest.mark.asyncio

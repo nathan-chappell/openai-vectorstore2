@@ -21,7 +21,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.models import AppTask, AppUser, SemanticChunk, SourceFile, SourceTagLink, Tag, UserLibrary
+from backend.app.models import AppTask, AppUser, SemanticChunk, SourceFile, SourceTagLink, Tag, UserLibrary, new_id
 from backend.app.schemas import (
     BranchSearchLevel,
     BranchSearchRequest,
@@ -791,6 +791,7 @@ class SourceService:
                 await session.commit()
                 for draft in normalized_chunks:
                     chunk = SemanticChunk(
+                        id=new_id(),
                         source_file_id=source.id,
                         sequence=draft.sequence,
                         title=draft.title,
@@ -809,8 +810,6 @@ class SourceService:
                         created_at=_utcnow(),
                         updated_at=_utcnow(),
                     )
-                    session.add(chunk)
-                    await session.flush()
                     attributes = build_vector_attributes(
                         library_id=library.id,
                         source_id=source.id,
@@ -829,6 +828,7 @@ class SourceService:
                     )
                     chunk.status = "ready"
                     chunk.updated_at = _utcnow()
+                    session.add(chunk)
                     task.state_json = {
                         "stage": "publishing_chunks",
                         "source_id": source.id,
@@ -1075,6 +1075,7 @@ class SourceService:
                 publish_started_at = perf_counter()
                 for draft in normalized_chunks:
                     chunk = SemanticChunk(
+                        id=new_id(),
                         source_file_id=source.id,
                         sequence=draft.sequence,
                         title=draft.title,
@@ -1093,8 +1094,6 @@ class SourceService:
                         created_at=_utcnow(),
                         updated_at=_utcnow(),
                     )
-                    session.add(chunk)
-                    await session.flush()
                     attributes = build_vector_attributes(
                         library_id=library.id,
                         source_id=source.id,
@@ -1113,6 +1112,7 @@ class SourceService:
                     )
                     chunk.status = "ready"
                     chunk.updated_at = _utcnow()
+                    session.add(chunk)
                     task.state_json = {
                         "stage": "publishing_chunks",
                         "source_id": source.id,

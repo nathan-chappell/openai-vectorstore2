@@ -83,6 +83,21 @@ class AppSettings(BaseSettings):
             return [part.strip() for part in raw_value.split(",") if part.strip()]
         raise TypeError("Expected a comma-separated string or list.")
 
+    @field_validator(
+        "clerk_secret_key",
+        "clerk_issuer_url",
+        "s3_endpoint",
+        "s3_bucket",
+        "s3_access_key_id",
+        "s3_secret_access_key",
+        mode="before",
+    )
+    @classmethod
+    def _empty_optional_string_as_none(cls, raw_value: object) -> object:
+        if isinstance(raw_value, str) and not raw_value.strip():
+            return None
+        return raw_value
+
     @property
     def normalized_app_base_url(self) -> str:
         return str(self.app_base_url).rstrip("/")

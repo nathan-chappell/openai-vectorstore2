@@ -12,8 +12,9 @@ from agents.tool_context import ToolContext
 from chatkit.agents import AgentContext as ChatKitAgentContext
 from chatkit.agents import ThreadItemConverter, stream_agent_response
 from chatkit.server import ChatKitServer
-from chatkit.types import ChatKitReq, ProgressUpdateEvent, ThreadMetadata, ThreadStreamEvent, UserMessageItem
+from chatkit.types import Attachment, ChatKitReq, ProgressUpdateEvent, ThreadMetadata, ThreadStreamEvent, UserMessageItem
 from openai.types.responses.response_input_item_param import Message, ResponseInputItemParam
+from openai.types.responses import ResponseInputContentParam, ResponseInputTextParam
 from openai.types.shared import Reasoning
 from pydantic import TypeAdapter
 
@@ -54,11 +55,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         sources: SourceService,
         actions: ActionService,
     ) -> None:
-        super().__init__(store=store)
+        super().__init__(store=store, attachment_store=store)
         self._settings = settings
+        self._store = store
         self._sources = sources
         self._actions = actions
-        self._converter = ThreadItemConverter()
+        self._converter = VectorstoreThreadItemConverter()
 
     async def build_request_context(
         self,
@@ -81,6 +83,54 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             selected_source_ids=_string_list(metadata.get("selected_source_ids")),
             thread_origin=_string_or_none(metadata.get("origin")),
         )
+
+    def build_user_context(
+        self,
+        *,
+        clerk_user_id: str,
+        user_email: str | None,
+        display_name: str,
+        bearer_token: str,
+    ) -> VectorstoreChatContext:
+        return VectorstoreChatContext(
+            clerk_user_id=clerk_user_id,
+            user_email=user_email,
+            display_name=display_name,
+            bearer_token=bearer_token,
+            selected_source_ids=[],
+            thread_origin=None,
+        )
+
+    async def create_uploaded_attachment(
+        self,
+        *,
+        filename: str,
+        declared_media_type: str | None,
+        payload: bytes,
+        tag_ids: list[str],
+        user_guidance: str | None,
+        thread_id: str | None,
+        context: VectorstoreChatContext,
+    ) -> Attachment:
+        attachment = await self._store.create_source_attachment(
+            filename=filename,
+            declared_media_type=declared_media_type,
+            payload=payload,
+            tag_ids=tag_ids,
+            user_guidance=user_guidance,
+            thread_id=thread_id,
+            context=context,
+        )
+        metadata = _metadata_dict(attachment.metadata)
+        logger.info(
+            "chatkit_attachment_uploaded attachment_id=%s source_id=%s task_id=%s thread_id=%s bytes=%s",
+            attachment.id,
+            metadata.get("source_id"),
+            metadata.get("task_id"),
+            thread_id,
+            len(payload),
+        )
+        return attachment
 
     def respond(
         self,
@@ -585,6 +635,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "Use the direct app tools to list sources, inspect source details and tags, ingest text snippets, search chunks, "
             "branch through related semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
             "to replace its published chunks, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "User attachments are already uploaded as app sources; use the attachment context source_id as the retrieval scope. "
+            "If an attached source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
             "Prefer the user's selected sources when present. Only delete a source after explicit user confirmation. "
             "Be concise, name the evidence you used, and say clearly when the library "
@@ -626,3 +678,32 @@ def _model_settings_override_for_model(model: str | None) -> ModelSettings | Non
     if not isinstance(model, str) or not model.startswith("gpt-5"):
         return None
     return ModelSettings(reasoning=Reasoning(effort="low", summary="auto"))
+
+
+class VectorstoreThreadItemConverter(ThreadItemConverter):
+    async def attachment_to_message_content(self, attachment: Attachment) -> ResponseInputContentParam:
+        metadata = _metadata_dict(attachment.metadata)
+        source_id = _string_or_none(metadata.get("source_id"))
+        task_id = _string_or_none(metadata.get("task_id"))
+        source_title = _string_or_none(metadata.get("source_title")) or attachment.name
+        source_status = _string_or_none(metadata.get("source_status")) or "unknown"
+        task_status = _string_or_none(metadata.get("task_status")) or "unknown"
+
+        lines = [
+            "The user attached a file that has been added to the app semantic library.",
+            f"Attachment: {attachment.name} ({attachment.id}, {attachment.mime_type})",
+            f"Source: {source_title} ({source_id or 'source id unavailable'}, status: {source_status})",
+        ]
+        if task_id is not None:
+            lines.append(f"Ingest task: {task_id} (status when uploaded: {task_status})")
+        if source_id is not None:
+            lines.append(
+                "Use this source by calling search_chunks or answer_from_library with "
+                f"selected_source_ids=['{source_id}'] after ingestion is ready."
+            )
+        if task_id is not None and source_status != "ready":
+            lines.append("If retrieval returns no chunks, call get_task for the ingest task before answering.")
+        return cast(
+            ResponseInputContentParam,
+            ResponseInputTextParam(type="input_text", text="\n".join(lines)),
+        )
