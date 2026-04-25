@@ -10,6 +10,7 @@ AppOperation: TypeAlias = Literal[
     "preview_semantic_split",
     "ingest_source",
     "resplit_source",
+    "update_source_tags",
     "delete_source",
     "search_chunks",
     "branch_search",
@@ -80,11 +81,19 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         notes="Re-split runs as a queued app task and preserves existing tags unless explicit tag IDs are supplied.",
     ),
     AppCapability(
+        operation="update_source_tags",
+        summary="Replace a source's tag assignments and queue vector-store reindexing for its existing chunks.",
+        rest_routes=("POST /api/sources/{source_id}/tags",),
+        chatkit_tool="update_source_tags",
+        mcp_tools=("update_source_tags",),
+        notes="Reindexing refreshes OpenAI vector attributes so tag-filtered retrieval stays aligned with app-owned tags.",
+    ),
+    AppCapability(
         operation="delete_source",
         summary="Delete an app-owned source record and its stored source payload.",
         rest_routes=("DELETE /api/sources/{source_id}",),
         mcp_tools=("delete_source",),
-        notes="OpenAI vector-store file cleanup is planned.",
+        notes="Deletes the stored payload plus tracked OpenAI original and chunk files.",
     ),
     AppCapability(
         operation="search_chunks",

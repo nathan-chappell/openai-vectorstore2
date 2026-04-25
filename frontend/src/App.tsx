@@ -16,6 +16,7 @@ import {
   resplitSource,
   searchChunks,
   setChatKitMetadataGetter,
+  updateSourceTags,
   uploadSource,
   voiceAction,
   authenticatedFetch,
@@ -52,6 +53,7 @@ export function App({ authMode }: AppProps) {
   const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
+  const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
   const [hits, setHits] = useState<ChunkHit[]>([]);
   const [branchResult, setBranchResult] = useState<BranchSearchResponse | null>(null);
   const [actionResult, setActionResult] = useState<ActionResponse | null>(null);
@@ -69,6 +71,10 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     void refreshAll();
   }, []);
+
+  useEffect(() => {
+    setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
+  }, [selectedSource]);
 
   async function refreshAll(): Promise<void> {
     setBusy(true);
@@ -159,6 +165,35 @@ export function App({ authMode }: AppProps) {
     }
   }
 
+  async function saveSelectedSourceTags(): Promise<void> {
+    if (!selectedSource) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await updateSourceTags(selectedSource.id, { tag_ids: selectedSourceTagDraftIds });
+      const [sourceList, detail, tagList] = await Promise.all([
+        listSources({ pageSize: 50 }),
+        getSource(selectedSource.id),
+        listTags(),
+      ]);
+      setSources(sourceList.sources);
+      setSelectedSource(detail);
+      setTags(tagList);
+      setStatus(`Queued tag reindex for ${response.source.display_title} as task ${response.task?.id.slice(0, 8) ?? "pending"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tag update failed.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleSelectedSourceTagDraft(tagId: string): void {
+    setSelectedSourceTagDraftIds((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    );
+  }
+
   async function toggleSource(sourceId: string): Promise<void> {
     const next = selectedSourceIds.includes(sourceId)
       ? selectedSourceIds.filter((id) => id !== sourceId)
@@ -244,6 +279,10 @@ export function App({ authMode }: AppProps) {
       setBusy(false);
     }
   }
+
+  const selectedSourceTagChanged = selectedSource
+    ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
+    : false;
 
   return (
     <main className="app-shell">
@@ -376,6 +415,29 @@ export function App({ authMode }: AppProps) {
                   <button type="button" className="ghost" onClick={() => void resplitSelectedSource()} disabled={busy}>
                     Re-split
                   </button>
+                  <div className="source-tag-editor">
+                    <div className="tag-picker-list">
+                      {tags.map((tag) => (
+                        <label key={tag.id} className="tag-checkbox">
+                          <input
+                            type="checkbox"
+                            checked={selectedSourceTagDraftIds.includes(tag.id)}
+                            onChange={() => toggleSelectedSourceTagDraft(tag.id)}
+                            disabled={busy || selectedSource.status === "processing"}
+                          />
+                          <span>{tag.name}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <button
+                      type="button"
+                      className="ghost"
+                      onClick={() => void saveSelectedSourceTags()}
+                      disabled={busy || selectedSource.status === "processing" || !selectedSourceTagChanged}
+                    >
+                      Save Tags
+                    </button>
+                  </div>
                   <div className="mini-list">
                     {selectedSource.chunks.slice(0, 6).map((chunk) => (
                       <span key={chunk.id}>{chunk.title}</span>
@@ -429,6 +491,14 @@ export function App({ authMode }: AppProps) {
       </section>
     </main>
   );
+}
+
+function sameStringSet(left: string[], right: string[]): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+  const rightSet = new Set(right);
+  return left.every((item) => rightSet.has(item));
 }
 
 function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {

@@ -94,6 +94,10 @@ export type ResplitSourceRequest = {
   user_guidance?: string | null;
 };
 
+export type SourceTagsUpdateRequest = {
+  tag_ids: string[];
+};
+
 export type SourceDetail = SourceSummary & {
   storage_provider: string;
   storage_key: string;
@@ -160,7 +164,7 @@ export type IngestFinalizeResponse = {
 
 export type TaskSummary = {
   id: string;
-  kind: "ingest" | "resplit" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
+  kind: "ingest" | "resplit" | "reindex" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   title: string;
   origin_surface: "web" | "mcp" | "chatkit" | "system";

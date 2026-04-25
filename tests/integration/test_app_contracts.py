@@ -38,6 +38,7 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
         {"keywords", "locator", "sequence", "strategy_label", "summary", "text", "title"},
     ),
     "SemanticSplitResult": ("SemanticSplitResult", {"chunks", "strategy_label", "tags"}),
+    "SourceTagsUpdateRequest": ("SourceTagsUpdateRequest", {"tag_ids"}),
     "SplitPreviewResponse": (
         "SplitPreviewResponse",
         {
@@ -88,6 +89,7 @@ def test_frontend_types_cover_public_schema_contracts(
         assert backend_schema in backend_schemas
         assert expected_fields <= _exported_type_fields(frontend_source, frontend_type)
     assert '"resplit"' in frontend_source
+    assert '"reindex"' in frontend_source
 
 
 @pytest.mark.asyncio
@@ -477,6 +479,115 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             )
             assert fallback_search.status_code == 200
             assert {hit["source_file_id"] for hit in fallback_search.json()["hits"]} == {bravo_source_id}
+
+
+@pytest.mark.asyncio
+async def test_http_source_tag_update_reindexes_vector_attributes(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            alpha_upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+            )
+            assert alpha_upload.status_code == 200
+            alpha_payload = alpha_upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=alpha_payload["task"]["id"],
+                expected_status="completed",
+            )
+            bravo_upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("bravo.txt", b"Bravo topic for semantic retrieval.", "text/plain")},
+            )
+            assert bravo_upload.status_code == 200
+            bravo_payload = bravo_upload.json()
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=bravo_payload["task"]["id"],
+                expected_status="completed",
+            )
+
+            tags = await client.get("/api/tags", headers=auth_headers)
+            assert tags.status_code == 200
+            tag_ids_by_name = {tag["name"].casefold(): tag["id"] for tag in tags.json()}
+            alpha_tag_id = tag_ids_by_name["alpha"]
+            bravo_tag_id = tag_ids_by_name["bravo"]
+            alpha_source_id = alpha_payload["source"]["id"]
+            bravo_source_id = bravo_payload["source"]["id"]
+
+            before_detail = await client.get(f"/api/sources/{alpha_source_id}", headers=auth_headers)
+            assert before_detail.status_code == 200
+            old_chunk_file_ids = [
+                chunk["openai_file_id"]
+                for chunk in before_detail.json()["chunks"]
+                if chunk["openai_file_id"] is not None
+            ]
+            assert old_chunk_file_ids
+
+            tag_update = await client.post(
+                f"/api/sources/{alpha_source_id}/tags",
+                headers=auth_headers,
+                json={"tag_ids": [bravo_tag_id]},
+            )
+            assert tag_update.status_code == 200
+            tag_update_payload = tag_update.json()
+            assert tag_update_payload["task"]["kind"] == "reindex"
+            assert tag_update_payload["source"]["status"] == "processing"
+            completed_task = await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=tag_update_payload["task"]["id"],
+                expected_status="completed",
+            )
+            result_json = completed_task["result_json"]
+            assert isinstance(result_json, dict)
+            assert result_json["tag_count"] == 1
+
+            after_detail = await client.get(f"/api/sources/{alpha_source_id}", headers=auth_headers)
+            assert after_detail.status_code == 200
+            after_payload = after_detail.json()
+            assert after_payload["status"] == "ready"
+            assert [tag["id"] for tag in after_payload["tags"]] == [bravo_tag_id]
+            new_chunk_file_ids = [
+                chunk["openai_file_id"] for chunk in after_payload["chunks"] if chunk["openai_file_id"] is not None
+            ]
+            assert new_chunk_file_ids
+            assert not set(old_chunk_file_ids) & set(new_chunk_file_ids)
+            assert set(old_chunk_file_ids) <= set(app.state.services.openai.deleted_file_ids)
+            assert {("vs_fake", file_id) for file_id in old_chunk_file_ids} <= set(
+                app.state.services.openai.detached_vector_store_file_ids
+            )
+
+            old_tag_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "tag_ids": [alpha_tag_id], "max_results": 8},
+            )
+            assert old_tag_search.status_code == 200
+            assert alpha_source_id not in {hit["source_file_id"] for hit in old_tag_search.json()["hits"]}
+
+            new_tag_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "retrieval", "tag_ids": [bravo_tag_id], "max_results": 8},
+            )
+            assert new_tag_search.status_code == 200
+            assert {hit["source_file_id"] for hit in new_tag_search.json()["hits"]} == {
+                alpha_source_id,
+                bravo_source_id,
+            }
 
 
 @pytest.mark.asyncio

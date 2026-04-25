@@ -52,6 +52,28 @@ Tests:
 - Current integration tests cover HTTP upload/search/QA and MCP tool discovery in `tests/integration/test_app_contracts.py`.
 - `tests/conftest.py` already has a fake OpenAI gateway pattern that can support broader integration and browser tests without mocking every service boundary.
 
+## Local Environment And Live-Test Setup
+
+Local `.env` handling is now clear enough to run real OpenAI-backed checks when desired, without committing secrets or cluttering the template.
+
+- `.env` is ignored by `.gitignore`, so local credentials stay out of git.
+- The local `.env` can be seeded from `../openai-vectorstore-mcp-app/.env` for the shared keys this app expects:
+  - `OPENAI_API_KEY`
+  - `CLERK_SECRET_KEY`
+  - `APP_SIGNING_SECRET`
+  - `CLERK_ISSUER_URL`
+  - `VITE_CLERK_PUBLISHABLE_KEY`
+- Keep sensible defaults in `AppSettings` and `.env.example`; avoid adding optional local overrides unless they are truly needed.
+- Keep `STORAGE_BACKEND=local` until Railway bucket details arrive.
+- Leave the Railway/S3-compatible storage vars empty for now:
+  - `S3_ENDPOINT`
+  - `S3_BUCKET`
+  - `S3_ACCESS_KEY_ID`
+  - `S3_SECRET_ACCESS_KEY`
+- When Railway bucket info arrives, switch `STORAGE_BACKEND=s3` and fill only the S3/Railway values required by `backend/app/storage/service.py`.
+- With the OpenAI key and app signing secret present, backend real-agent checks can run against the local app. Live Clerk browser checks additionally need a test-user/sign-in strategy.
+- Playwright is not installed yet; browser screenshot automation remains a Phase 8 task.
+
 ## Drift Risks To Fix Early
 
 The project is already close enough that the largest risk is not missing code, but parallel concepts evolving separately:
@@ -195,7 +217,7 @@ Acceptance criteria:
 
 ## Phase 4: Tag Model And Vector-Store Filter Correctness
 
-Status: in progress.
+Status: in progress; vector filter correctness and source tag reindexing are implemented, while manual tag CRUD remains planned.
 
 Tag-filtered access already works through vector attributes. Harden it so tag edits and app metadata remain synchronized with OpenAI vector-store filters.
 
@@ -204,7 +226,7 @@ Tasks:
 - Add manual tag create/update/delete operations if users need editable tags.
 - [x] Decide whether tags attach only to sources or can also attach to chunks. Current model attaches tags to sources.
 - [x] Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
-- Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
+- [x] Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
 - [x] Add a `vector_attributes_version` concept, either in chunk metadata or in settings, so future reindexing can detect stale chunks.
 - [x] Add DB post-filtering fallback only if OpenAI vector-store filters cannot express a future tag model.
 - [x] Add tests for all/any tag matching and source-kind/source-id combinations.
@@ -216,7 +238,9 @@ Implementation notes:
 - Added vector attribute/filter construction tests for versioning, bounded tag slots, all/any tag groups, source IDs, and source kind filters.
 - Updated the fake OpenAI gateway to evaluate the same OpenAI vector-store filter shape used by app search, then added HTTP integration coverage for tag all/any, selected source, and source-kind filters.
 - Added DB-side post-filtering after vector search hydration so stale or overly broad vector-store results cannot escape app-owned source/tag/kind constraints.
-- Remaining Phase 4 work: manual tag management and reindex tasks when tags change.
+- Added `update_source_tags` across REST, ChatKit, MCP, frontend API/types, and the direct webapp inspector. It queues `AppTask(kind="reindex")`, updates source tag links, republishes existing chunk files with refreshed vector attributes, and best-effort deletes old chunk vector files.
+- Added integration coverage proving a source can move from one tag to another, old vector files are detached/deleted, and tag-filtered search follows the new app-owned tags.
+- Remaining Phase 4 work: manual tag create/update/delete operations and optional retry/reconcile affordances for failed tag reindex tasks.
 
 Acceptance criteria:
 
@@ -360,6 +384,12 @@ Codex-driven UI tests:
 - Add a documented command that starts the app in test mode and lets Codex or Playwright capture screenshots.
 - Store screenshots as artifacts rather than committing generated screenshots by default.
 - Consider a small "UI smoke skill" later if repeated browser verification becomes common.
+
+Current readiness notes:
+
+- The repo currently has Vite/Vitest scripts but no Playwright dependency, config, browser test files, screenshot artifact path, or web-server test harness.
+- Expected manual run path before Playwright lands: `npm run build:watch`, run the FastAPI app from `.venv`, then open `http://localhost:8000`; alternatively run `npm run dev` against the backend on `localhost:8000`.
+- Live UI testing with Clerk needs Clerk keys plus a deterministic test-user/sign-in flow. Local-dev auth can cover non-Clerk browser smoke tests once Playwright is installed.
 
 Acceptance criteria:
 

@@ -185,6 +185,26 @@ class SourceService:
         self._background_tasks.add(task)
         task.add_done_callback(self._background_tasks.discard)
 
+    def _schedule_reindex_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+    ) -> None:
+        if self._closed:
+            raise RuntimeError("Source service is closed.")
+        task = asyncio.create_task(
+            self._run_reindex_job(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                task_id=task_id,
+            ),
+            name=f"reindex-source-{source_id}",
+        )
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
     async def _run_ingest_job(
         self,
         *,
@@ -238,6 +258,31 @@ class SourceService:
         except Exception:
             logger.exception(
                 "source_resplit_background_task_crashed clerk_user_id=%s source_id=%s task_id=%s",
+                clerk_user_id,
+                source_id,
+                task_id,
+            )
+
+    async def _run_reindex_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+    ) -> None:
+        try:
+            async with self._ingest_runner_semaphore():
+                await self._execute_reindex_job(
+                    clerk_user_id=clerk_user_id,
+                    source_id=source_id,
+                    task_id=task_id,
+                )
+        except asyncio.CancelledError:
+            await self._cancel_reindex_job(clerk_user_id=clerk_user_id, source_id=source_id, task_id=task_id)
+            raise
+        except Exception:
+            logger.exception(
+                "source_reindex_background_task_crashed clerk_user_id=%s source_id=%s task_id=%s",
                 clerk_user_id,
                 source_id,
                 task_id,
@@ -574,6 +619,73 @@ class SourceService:
                 tag_ids=selected_tag_ids,
                 user_guidance=user_guidance,
             )
+            return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
+
+    async def update_source_tags(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        tag_ids: list[str],
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> IngestFinalizeResponse:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to update source tags.")
+            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            if source.status == "processing":
+                raise ValueError("Wait for the current source processing task to finish before updating tags.")
+            library = source.library
+            await self._ensure_vector_store(session, library=library, app_user=app_user)
+
+            selected_tag_ids = list(dict.fromkeys(tag_ids))
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
+            previous_status = source.status
+            previous_error_message = source.error_message
+            previous_tag_ids = [link.tag_id for link in source.tag_links]
+            chunk_count = len(source.chunks)
+            source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+            if chunk_count:
+                source.status = "processing"
+                source.error_message = None
+            source.updated_at = _utcnow()
+            task = AppTask(
+                user_id=app_user.id,
+                library_id=library.id,
+                kind="reindex",
+                status="queued",
+                title=f"Reindex tags: {source.display_title}",
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+                source_file_id=source.id,
+                input_json={
+                    "source_id": source.id,
+                    "tag_ids": selected_tag_ids,
+                    "previous_tag_ids": previous_tag_ids,
+                    "previous_status": previous_status,
+                    "previous_error_message": previous_error_message,
+                    "chunk_count": chunk_count,
+                },
+                state_json={"stage": "queued", "source_id": source.id},
+                created_at=_utcnow(),
+                updated_at=_utcnow(),
+            )
+            session.add(task)
+            await session.commit()
+            await session.refresh(source)
+            await session.refresh(task)
+            logger.info(
+                "source_reindex_queued clerk_user_id=%s source_id=%s task_id=%s chunks=%s tags=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                chunk_count,
+                len(selected_tag_ids),
+            )
+            self._schedule_reindex_job(clerk_user_id=clerk_user_id, source_id=source.id, task_id=task.id)
             return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
 
     async def _execute_ingest_job(
@@ -1150,6 +1262,214 @@ class SourceService:
                 source.id,
                 task.id,
                 old_chunks_replaced,
+            )
+
+    async def _execute_reindex_job(
+        self,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        task_id: str,
+    ) -> None:
+        reindex_started_at = perf_counter()
+        reindexed_chunk_count = 0
+        cleanup_failed_file_ids: list[str] = []
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            source = await self._source_by_id(session, source_id=source_id)
+            task = await self._task_by_id(session, task_id=task_id)
+            library = source.library
+            task_input = _dict_payload(task.input_json)
+            raw_tag_ids = task_input.get("tag_ids")
+            tag_ids = (
+                [item.strip() for item in raw_tag_ids if isinstance(item, str) and item.strip()]
+                if isinstance(raw_tag_ids, list)
+                else []
+            )
+            previous_status = str(task_input.get("previous_status") or "failed")
+            if previous_status not in {"ready", "failed"}:
+                previous_status = "failed"
+            previous_error_raw = task_input.get("previous_error_message")
+            previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
+            now = _utcnow()
+            task.status = "running"
+            task.started_at = task.started_at or now
+            task.state_json = {"stage": "validating_tags", "source_id": source.id}
+            task.updated_at = now
+            await session.commit()
+            logger.info(
+                "source_reindex_started clerk_user_id=%s source_id=%s task_id=%s chunks=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                len(source.chunks),
+            )
+
+            try:
+                selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+                chunks = sorted(source.chunks, key=lambda item: item.sequence)
+                task.state_json = {
+                    "stage": "reindexing_chunks",
+                    "source_id": source.id,
+                    "chunk_count": len(chunks),
+                    "reindexed_chunk_count": 0,
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
+
+                for chunk in chunks:
+                    old_file_id = chunk.openai_file_id
+                    attributes = build_vector_attributes(
+                        library_id=library.id,
+                        source_id=source.id,
+                        chunk_id=chunk.id,
+                        source_kind=source.source_kind,
+                        content_kind="semantic_chunk",
+                        title=chunk.title,
+                        tag_slugs=[tag.slug for tag in selected_tags],
+                    )
+                    new_file_id = await self._openai.attach_chunk_to_vector_store(
+                        vector_store_id=library.openai_vector_store_id or "",
+                        filename=f"{source.original_filename}.chunk-{chunk.sequence}.md",
+                        text_content=render_chunk_markdown(source=source, chunk=chunk),
+                        attributes=attributes,
+                    )
+                    chunk.openai_file_id = new_file_id
+                    chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
+                    chunk.status = "ready"
+                    chunk.updated_at = _utcnow()
+                    reindexed_chunk_count += 1
+                    task.state_json = {
+                        "stage": "reindexing_chunks",
+                        "source_id": source.id,
+                        "chunk_count": len(chunks),
+                        "reindexed_chunk_count": reindexed_chunk_count,
+                        "last_openai_file_id": new_file_id,
+                    }
+                    task.updated_at = _utcnow()
+                    await session.commit()
+
+                    if old_file_id is not None:
+                        try:
+                            if library.openai_vector_store_id is not None:
+                                await self._openai.detach_file_from_vector_store(
+                                    vector_store_id=library.openai_vector_store_id,
+                                    file_id=old_file_id,
+                                )
+                            await self._openai.delete_file(file_id=old_file_id)
+                        except Exception as cleanup_error:
+                            cleanup_failed_file_ids.append(old_file_id)
+                            logger.warning(
+                                "source_reindex_old_chunk_cleanup_failed clerk_user_id=%s source_id=%s task_id=%s file_id=%s error=%s",
+                                clerk_user_id,
+                                source.id,
+                                task.id,
+                                old_file_id,
+                                cleanup_error,
+                            )
+
+                source.status = "ready" if chunks else previous_status
+                source.error_message = None if chunks else previous_error_message
+                source.updated_at = _utcnow()
+                library.updated_at = _utcnow()
+                task.status = "completed"
+                task.state_json = {
+                    "stage": "completed",
+                    "source_id": source.id,
+                    "chunk_count": len(chunks),
+                    "tag_count": len(selected_tags),
+                    "cleanup_failed_file_count": len(cleanup_failed_file_ids),
+                }
+                task.result_json = {
+                    "source_id": source.id,
+                    "chunk_count": len(chunks),
+                    "tag_count": len(selected_tags),
+                    "cleanup_failed_file_count": len(cleanup_failed_file_ids),
+                }
+                task.error_message = None
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
+                await session.commit()
+                logger.info(
+                    "source_reindex_completed clerk_user_id=%s source_id=%s task_id=%s chunks=%s cleanup_failures=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    len(chunks),
+                    len(cleanup_failed_file_ids),
+                    (perf_counter() - reindex_started_at) * 1000,
+                )
+            except Exception as exc:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+                source.status = "failed" if source.chunks else previous_status
+                source.error_message = str(exc) if source.chunks else previous_error_message
+                source.updated_at = _utcnow()
+                task.status = "failed"
+                task.state_json = {
+                    "stage": "failed",
+                    "source_id": source.id,
+                    "reindexed_chunk_count": reindexed_chunk_count,
+                    "cleanup_failed_file_count": len(cleanup_failed_file_ids),
+                }
+                task.error_message = str(exc)
+                task.completed_at = _utcnow()
+                task.updated_at = _utcnow()
+                await session.commit()
+                logger.error(
+                    "source_reindex_failed clerk_user_id=%s source_id=%s task_id=%s reindexed_chunks=%s error=%s duration_ms=%.1f",
+                    clerk_user_id,
+                    source.id,
+                    task.id,
+                    reindexed_chunk_count,
+                    exc,
+                    (perf_counter() - reindex_started_at) * 1000,
+                )
+
+    async def _cancel_reindex_job(self, *, clerk_user_id: str, source_id: str, task_id: str) -> None:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            try:
+                source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
+                task = await self._task_by_id(session, task_id=task_id)
+            except FileNotFoundError:
+                logger.warning(
+                    "source_reindex_cancel_missing_record clerk_user_id=%s source_id=%s task_id=%s",
+                    clerk_user_id,
+                    source_id,
+                    task_id,
+                )
+                return
+
+            task_input = _dict_payload(task.input_json)
+            previous_status = str(task_input.get("previous_status") or "failed")
+            if previous_status not in {"ready", "failed"}:
+                previous_status = "failed"
+            previous_error_raw = task_input.get("previous_error_message")
+            previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
+            state = _dict_payload(task.state_json)
+            reindexed_raw = state.get("reindexed_chunk_count")
+            reindexed_chunk_count = reindexed_raw if isinstance(reindexed_raw, int) else 0
+            source.status = "failed" if source.chunks else previous_status
+            source.error_message = "Tag reindex cancelled during shutdown." if source.chunks else previous_error_message
+            source.updated_at = _utcnow()
+            task.status = "cancelled"
+            task.state_json = {
+                "stage": "cancelled",
+                "source_id": source.id,
+                "reindexed_chunk_count": reindexed_chunk_count,
+            }
+            task.error_message = "Tag reindex cancelled during shutdown."
+            task.completed_at = _utcnow()
+            task.updated_at = _utcnow()
+            await session.commit()
+            logger.warning(
+                "source_reindex_cancelled clerk_user_id=%s source_id=%s task_id=%s reindexed_chunks=%s",
+                clerk_user_id,
+                source.id,
+                task.id,
+                reindexed_chunk_count,
             )
 
     async def search(self, *, clerk_user_id: str, request: SearchRequest) -> SearchResponse:

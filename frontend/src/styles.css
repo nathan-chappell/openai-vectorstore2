@@ -219,6 +219,38 @@ textarea {
   padding: 0.85rem;
 }
 
+.source-tag-editor {
+  display: grid;
+  gap: 0.65rem;
+  margin: 0.85rem 0;
+}
+
+.tag-picker-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.tag-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 2rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.25rem 0.55rem;
+  background: rgba(255, 250, 239, 0.58);
+  color: #4c5d43;
+  font-family: "Sometype Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.tag-checkbox input {
+  width: auto;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
 .source-list,
 .chunk-stack,
 .mini-list {

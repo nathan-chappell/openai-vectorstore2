@@ -34,6 +34,7 @@ from backend.app.schemas import (
     TaskDetail,
     TaskKind,
     TaskListResponse,
+    SourceTagsUpdateRequest,
     VoiceGenerationRequest,
 )
 from backend.app.services import AuthenticatedUser
@@ -167,6 +168,26 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 source_id=source_id,
                 tag_ids=payload.tag_ids,
                 user_guidance=payload.user_guidance,
+                origin_surface="web",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.post("/api/sources/{source_id}/tags")
+    async def update_source_tags_api(
+        source_id: str,
+        payload: SourceTagsUpdateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> IngestFinalizeResponse:
+        try:
+            return await services.sources.update_source_tags(
+                clerk_user_id=user.clerk_user_id,
+                source_id=source_id,
+                tag_ids=payload.tag_ids,
                 origin_surface="web",
             )
         except FileNotFoundError as exc:

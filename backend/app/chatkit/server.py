@@ -335,6 +335,24 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return response.model_dump(mode="json")
 
+        @function_tool(name_override="update_source_tags")
+        async def update_source_tags_tool(
+            ctx: ChatKitToolContext,
+            source_id: str,
+            tag_ids: list[str],
+        ) -> dict[str, object]:
+            """Replace a source's tag assignments and queue vector-store reindexing."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(text="Queuing tag reindex for the selected source."))
+            response = await self._sources.update_source_tags(
+                clerk_user_id=request_context.clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="answer_from_library")
         async def answer_from_library_tool(
             ctx: ChatKitToolContext,
@@ -450,6 +468,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             branch_search_tool,
             preview_semantic_split_tool,
             resplit_source_tool,
+            update_source_tags_tool,
             answer_from_library_tool,
             freeform_from_library_tool,
             generate_image_from_library_tool,
@@ -468,7 +487,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
             "Use the direct app tools to list sources, inspect tags, search chunks, branch through related "
             "semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its published chunks, answer questions, and create image or voice assets. "
+            "to replace its published chunks, update a source's tags when the user explicitly asks, answer questions, and create image or voice assets. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. Prefer the user's selected "
             "sources when present. Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."

@@ -144,7 +144,7 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
             "You are the MCP adapter for an app-first semantic RAG workspace. The app owns ingestion, "
             "semantic chunks, storage, retrieval, and generation. Use sources for a visual library UI; "
             "use list_sources, list_tags, search_chunks, branch_search, qa, freeform, generate_image, "
-            "generate_voice, list_tasks, and get_task to operate on the current user's library. "
+            "generate_voice, update_source_tags, list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
         ),
         auth=auth,
@@ -356,6 +356,28 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 source_id=source_id,
                 tag_ids=tag_ids,
                 user_guidance=user_guidance,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="update_source_tags",
+        description="Replace a source's tag assignments and queue vector-store reindexing.",
+        annotations=mutating,
+    )
+    async def update_source_tags_tool(
+        source_id: Annotated[str, Field(min_length=1)],
+        tag_ids: list[str] | None = None,
+    ) -> IngestFinalizeResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="update_source_tags",
+            clerk_user_id=clerk_user_id,
+            arguments={"source_id": source_id, "tag_ids": tag_ids or []},
+            operation=services.sources.update_source_tags(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                tag_ids=tag_ids or [],
                 origin_surface="mcp",
             ),
         )
