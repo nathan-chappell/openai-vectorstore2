@@ -362,7 +362,7 @@ Acceptance criteria:
 
 ## Phase 8: Automated Tests And Codex-Driven UI Checks
 
-Status: planned.
+Status: in progress.
 
 Keep the integration-test preference. Add browser automation only where it verifies real user workflows and layout behavior.
 
@@ -374,7 +374,7 @@ Backend integration tests:
 
 Frontend and browser tests:
 
-- Add Playwright.
+- [x] Add Playwright.
 - Run the FastAPI app with the fake OpenAI gateway and built frontend.
 - Test upload, source selection, search, QA, generated asset display, and task visibility.
 - Add ChatKit smoke tests for mount, authenticated `/api/chatkit` fetch, selected-source metadata, streamed response rendering, and history load.
@@ -393,8 +393,9 @@ Codex-driven UI tests:
 
 Current readiness notes:
 
-- The repo currently has Vite/Vitest scripts but no Playwright dependency, config, browser test files, screenshot artifact path, or web-server test harness.
-- Expected manual run path before Playwright lands: `npm run build:watch`, run the FastAPI app from `.venv`, then open `http://localhost:8000`; alternatively run `npm run dev` against the backend on `localhost:8000`.
+- Added `@playwright/test`, `playwright.config.ts`, `npm run test:e2e`, and a first smoke spec at `frontend/e2e/workspace.spec.ts`.
+- The smoke spec starts the FastAPI app with local-dev auth and isolated local SQLite/storage settings, starts Vite with Clerk disabled, opens desktop and mobile Chromium views, verifies the main workspace regions, and captures screenshots into ignored `output/playwright/` artifacts.
+- Expected manual run path outside Playwright: `npm run build:watch`, run the FastAPI app from `.venv`, then open `http://localhost:8000`; alternatively run `npm run dev` against the backend on `localhost:8000`.
 - Live UI testing with Clerk needs Clerk keys plus a deterministic test-user/sign-in flow. Local-dev auth can cover non-Clerk browser smoke tests once Playwright is installed.
 
 Acceptance criteria:
