@@ -1,0 +1,22 @@
+- We're using python3.14 located with a venv in .venv
+- We always use good type annotations (parameters, variables, and return types)
+    - prefer pydantic when serialization or validation is a concern
+    - prefer dataclasses to pydantic when structures include arbitrary types
+    - prefer typed-dict when interop or simplicity is a concern
+    - prefer normal classes when the data type has significant logic associated with it
+- For most cases we write tests at the "integration" level - unit tests are only required for "tricky" logic (e.g. parsers).
+    - DO NOT PREFER to mock out capabilities unless explicitly discussed with the user
+- We use pydantic-settings for app config, and in some cases "global settings" that don't fit well (even if they are not really "configurable")
+    - Whenever a reasonable default exists it should be hardcoded into the settings declaration to keep .env light
+    - Mandatory settings (e.g. OPENAI_API_KEY) should be declared with `Field(init=False)` to satisfy type checkers (use `SecretStr` when appropriate)
+    - NOTE: tests and the app should simply fail if mandatory settings are missing.
+- Prefer to inline logic rather than have many "helper functions" (only create helper functions when they are likely to be reused, otherwise simply provide decent commentary)
+- We'll use colorlog:
+    - log meaningful events at boundaries and state changes; each line should make it clear what happened, to which thing (ids), and with what outcome (include duration when useful), while avoiding noise (loops, step-by-step narration, duplicate exception logs, or sensitive data)
+    - use levels consistently: INFO for normal lifecycle events, WARNING for degraded/retry/fallback behavior, ERROR for actual failures of the current operation, DEBUG for detailed developer-only context
+- Let exceptions propagate, especially early in development when error recovery is not decided
+---
+- For FE code, we typically like to use vite/typescript/react
+    - build:watch will be the primary command used
+    - code mapping is required
+    - don't minify until production build is desired

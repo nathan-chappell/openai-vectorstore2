@@ -1,0 +1,68 @@
+[build-system]
+requires = ["setuptools>=80", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openai-vectorstore2"
+version = "0.1.0"
+description = "App-first OpenAI vector-store backed semantic RAG workspace with ChatKit and MCP adapters."
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiosqlite",
+    "asyncpg",
+    "clerk-backend-api",
+    "colorlog",
+    "fastapi",
+    "fastmcp[apps]",
+    "httpx",
+    "itsdangerous",
+    "minio",
+    "openai",
+    "openai-agents",
+    "openai-chatkit",
+    "pypdf",
+    "psycopg[binary]",
+    "pydantic",
+    "pydantic-settings",
+    "python-multipart",
+    "sqlalchemy",
+    "uvicorn[standard]",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pyright",
+    "pytest",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[project.scripts]
+openai-vectorstore2-http = "backend.app.main:main"
+openai-vectorstore2-stdio = "backend.app.mcp.stdio:main"
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+pythonpath = ["."]
+
+[tool.pyright]
+pythonVersion = "3.14"
+typeCheckingMode = "strict"
+include = ["backend", "tests"]
+venvPath = "."
+venv = ".venv"
+reportUnknownVariableType = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownParameterType = "none"
+reportUntypedFunctionDecorator = "none"
+reportUnusedFunction = "none"
+
+[tool.ruff]
+line-length = 120
+target-version = "py314"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["backend*"]

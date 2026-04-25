@@ -1,0 +1,29 @@
+{
+  "name": "openai-vectorstore2",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.ts",
+    "build": "tsc -p frontend/tsconfig.json && vite build --config frontend/vite.config.ts",
+    "build:watch": "vite build --watch --config frontend/vite.config.ts",
+    "typecheck": "tsc --noEmit -p frontend/tsconfig.json",
+    "test": "vitest run --config frontend/vite.config.ts"
+  },
+  "dependencies": {
+    "@clerk/react": "^6.4.3",
+    "@openai/chatkit": "^1.6.0",
+    "@openai/chatkit-react": "^1.5.0",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.10",
+    "vitest": "^4.1.0"
+  }
+}

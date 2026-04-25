@@ -1,0 +1,343 @@
+from __future__ import annotations
+
+import base64
+from dataclasses import dataclass
+import logging
+from pathlib import Path
+from tempfile import NamedTemporaryFile
+from time import perf_counter
+from typing import Any, cast
+
+from openai import AsyncOpenAI
+from openai.types.file_purpose import FilePurpose
+from openai.types.shared_params.comparison_filter import ComparisonFilter
+from openai.types.shared_params.compound_filter import CompoundFilter
+
+from backend.app.core.config import AppSettings
+from backend.app.schemas import ChunkHit, SemanticSplitResult
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class VectorSearchCandidate:
+    openai_file_id: str
+    score: float
+    text: str
+    attributes: dict[str, str | float | bool]
+
+
+class OpenAIGateway:
+    """OpenAI-backed operations isolated behind a fakeable service boundary."""
+
+    def __init__(self, settings: AppSettings) -> None:
+        self._settings = settings
+        self._client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
+
+    async def close(self) -> None:
+        await self._client.close()
+
+    async def create_vector_store(self, *, name: str, metadata: dict[str, str]) -> str:
+        started_at = perf_counter()
+        vector_store = await cast(Any, self._client.vector_stores.create)(name=name, metadata=metadata)
+        logger.info(
+            "openai_vector_store_created vector_store_id=%s name=%s duration_ms=%.1f",
+            vector_store.id,
+            name,
+            (perf_counter() - started_at) * 1000,
+        )
+        return str(vector_store.id)
+
+    async def upload_file_bytes(
+        self,
+        *,
+        filename: str,
+        payload: bytes,
+        purpose: FilePurpose,
+    ) -> str:
+        started_at = perf_counter()
+        suffix = Path(filename).suffix or ".bin"
+        with NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(payload)
+        try:
+            with temp_path.open("rb") as file_handle:
+                uploaded = await self._client.files.create(file=file_handle, purpose=purpose)
+        finally:
+            temp_path.unlink(missing_ok=True)
+        logger.info(
+            "openai_file_uploaded file_id=%s filename=%s purpose=%s bytes=%s duration_ms=%.1f",
+            uploaded.id,
+            filename,
+            purpose,
+            len(payload),
+            (perf_counter() - started_at) * 1000,
+        )
+        return str(uploaded.id)
+
+    async def transcribe_audio_bytes(
+        self,
+        *,
+        filename: str,
+        payload: bytes,
+    ) -> tuple[str, dict[str, object]]:
+        suffix = Path(filename).suffix or ".bin"
+        with NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(payload)
+        try:
+            with temp_path.open("rb") as file_handle:
+                transcription = await cast(Any, self._client.audio.transcriptions).create(
+                    file=file_handle,
+                    model=self._settings.openai_transcription_model,
+                    response_format="diarized_json",
+                    chunking_strategy="auto",
+                )
+        finally:
+            temp_path.unlink(missing_ok=True)
+
+        segments = [
+            {
+                "id": getattr(segment, "id", index),
+                "speaker": getattr(segment, "speaker", "speaker"),
+                "start": getattr(segment, "start", None),
+                "end": getattr(segment, "end", None),
+                "text": getattr(segment, "text", ""),
+                "type": getattr(segment, "type", "transcript.segment"),
+            }
+            for index, segment in enumerate(getattr(transcription, "segments", []) or [])
+        ]
+        transcript = "\n".join(
+            f"[{segment['speaker']}] {segment['text']}".strip()
+            for segment in segments
+            if isinstance(segment.get("text"), str) and str(segment["text"]).strip()
+        ).strip()
+        if not transcript:
+            transcript = str(getattr(transcription, "text", "") or "").strip()
+        return transcript, {
+            "text": str(getattr(transcription, "text", "") or ""),
+            "duration": getattr(transcription, "duration", None),
+            "segments": segments,
+        }
+
+    async def split_semantically(
+        self,
+        *,
+        source_title: str,
+        source_kind: str,
+        text: str,
+        user_guidance: str | None,
+    ) -> SemanticSplitResult:
+        response = await self._client.responses.parse(
+            model=self._settings.openai_agent_model,
+            text_format=SemanticSplitResult,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Split this source into semantically meaningful retrieval chunks. "
+                                "Prefer complete ideas over fixed token windows. Return concise tags that help filtering. "
+                                "For PDFs use page ranges when page markers are present; for conversations use time ranges when timestamps exist; "
+                                "otherwise use line ranges. Keep chunk text faithful to the source.\n\n"
+                                f"Source title: {source_title}\n"
+                                f"Source kind: {source_kind}\n"
+                                f"User guidance: {user_guidance or 'None'}\n\n"
+                                f"Source text:\n{text}"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        )
+        parsed = response.output_parsed
+        if parsed is None:
+            raise RuntimeError("OpenAI did not return a semantic split payload.")
+        return parsed
+
+    async def attach_chunk_to_vector_store(
+        self,
+        *,
+        vector_store_id: str,
+        filename: str,
+        text_content: str,
+        attributes: dict[str, str | float | bool],
+    ) -> str:
+        started_at = perf_counter()
+        with NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as temp_file:
+            temp_path = Path(temp_file.name)
+            temp_file.write(text_content)
+        try:
+            with temp_path.open("rb") as file_handle:
+                uploaded = await self._client.files.create(file=file_handle, purpose="assistants")
+            await self._client.vector_stores.files.create_and_poll(
+                vector_store_id=vector_store_id,
+                file_id=uploaded.id,
+                attributes=attributes,
+                poll_interval_ms=self._settings.openai_poll_interval_ms,
+            )
+        finally:
+            temp_path.unlink(missing_ok=True)
+        logger.info(
+            "openai_vector_chunk_attached vector_store_id=%s file_id=%s filename=%s duration_ms=%.1f",
+            vector_store_id,
+            uploaded.id,
+            filename,
+            (perf_counter() - started_at) * 1000,
+        )
+        return str(uploaded.id)
+
+    async def search_vector_store(
+        self,
+        *,
+        vector_store_id: str,
+        query: str,
+        max_results: int,
+        filters: ComparisonFilter | CompoundFilter | None,
+    ) -> list[VectorSearchCandidate]:
+        search_arguments: dict[str, object] = {
+            "vector_store_id": vector_store_id,
+            "query": query,
+            "max_num_results": max_results,
+            "rewrite_query": True,
+        }
+        if filters is not None:
+            search_arguments["filters"] = filters
+        page = await cast(Any, self._client.vector_stores.search)(**search_arguments)
+        candidates: list[VectorSearchCandidate] = []
+        for item in page.data:
+            text = "\n".join(content.text for content in item.content if content.type == "text").strip()
+            candidates.append(
+                VectorSearchCandidate(
+                    openai_file_id=str(item.file_id),
+                    score=float(item.score),
+                    text=text,
+                    attributes=dict(item.attributes or {}),
+                )
+            )
+        return candidates
+
+    async def answer_with_chunks(
+        self,
+        *,
+        prompt: str,
+        hits: list[ChunkHit],
+    ) -> str:
+        evidence = _render_hit_evidence(hits)
+        if not evidence:
+            return "I could not find relevant semantic chunks in the current library."
+        response = await self._client.responses.create(
+            model=self._settings.openai_agent_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Answer using only the retrieved semantic chunks. Cite source titles and locators inline when useful. "
+                                "If the evidence is thin, say so clearly.\n\n"
+                                f"Question: {prompt}\n\nEvidence:\n{evidence}"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        )
+        output_text = getattr(response, "output_text", "")
+        if not isinstance(output_text, str) or not output_text.strip():
+            raise RuntimeError("OpenAI did not return answer text.")
+        return output_text.strip()
+
+    async def freeform_with_chunks(
+        self,
+        *,
+        prompt: str,
+        hits: list[ChunkHit],
+        mode: str,
+    ) -> str:
+        evidence = _render_hit_evidence(hits)
+        grounding = (
+            "Use the retrieved chunks as hard evidence and avoid unsupported claims."
+            if mode == "grounded"
+            else "Use the chunks as inspiration, but clearly separate grounded details from creative extrapolation."
+        )
+        response = await self._client.responses.create(
+            model=self._settings.openai_agent_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": f"{grounding}\n\nUser request: {prompt}\n\nRetrieved context:\n{evidence or '(none)'}",
+                        }
+                    ],
+                }
+            ],
+        )
+        output_text = getattr(response, "output_text", "")
+        if not isinstance(output_text, str) or not output_text.strip():
+            raise RuntimeError("OpenAI did not return free-form text.")
+        return output_text.strip()
+
+    async def generate_image_bytes(
+        self,
+        *,
+        prompt: str,
+        size: str,
+    ) -> tuple[bytes, dict[str, object]]:
+        result = await cast(Any, self._client.images.generate)(
+            model=self._settings.openai_image_generation_model,
+            prompt=prompt,
+            response_format="b64_json",
+            size=size,
+        )
+        first_image = result.data[0] if getattr(result, "data", None) else None
+        if first_image is None:
+            raise RuntimeError("OpenAI did not return generated image data.")
+        b64_json = getattr(first_image, "b64_json", None)
+        if not isinstance(b64_json, str) or not b64_json.strip():
+            raise RuntimeError("OpenAI image response did not include base64 data.")
+        return base64.b64decode(b64_json), {
+            "revised_prompt": getattr(first_image, "revised_prompt", None),
+            "model": self._settings.openai_image_generation_model,
+        }
+
+    async def generate_voice_bytes(
+        self,
+        *,
+        text: str,
+        voice: str,
+        response_format: str,
+    ) -> tuple[bytes, dict[str, object]]:
+        response = await cast(Any, self._client.audio.speech).create(
+            model=self._settings.openai_speech_model,
+            voice=voice,
+            input=text,
+            response_format=response_format,
+        )
+        content = getattr(response, "content", None)
+        if isinstance(content, bytes):
+            payload = content
+        elif hasattr(response, "read"):
+            payload = cast(bytes, response.read())
+        else:
+            payload = bytes(response)
+        return payload, {
+            "model": self._settings.openai_speech_model,
+            "voice": voice,
+            "response_format": response_format,
+        }
+
+
+def _render_hit_evidence(hits: list[ChunkHit]) -> str:
+    return "\n\n".join(
+        f"{index}. {hit.source_title} ({hit.locator.label()})\n"
+        f"Chunk: {hit.title}\n"
+        f"Summary: {hit.summary}\n"
+        f"Text:\n{hit.text}"
+        for index, hit in enumerate(hits, start=1)
+    ).strip()
