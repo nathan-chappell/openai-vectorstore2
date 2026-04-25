@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from base64 import b64encode
 from datetime import UTC, datetime
+import json
 from pathlib import Path
 import re
 from time import monotonic
@@ -765,6 +766,27 @@ async def test_mcp_server_exposes_app_first_tools(
     assert tools["search_chunks"].parameters["required"] == ["query"]
     assert tools["sources"].meta is not None
     assert tools["sources"].meta["ui"]["resourceUri"].startswith("ui://")
+
+
+@pytest.mark.asyncio
+async def test_mcp_sources_ui_resource_renders_explorer_sections(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    server = create_mcp_server(configured_settings, services)
+    try:
+        result = await server.call_tool("sources", {}, run_middleware=False)
+    finally:
+        await services.close()
+
+    serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
+    assert "Semantic Sources" in serialized
+    assert "Query files, filenames, kinds, status" in serialized
+    assert "Search semantic chunks with the selected tag scope" in serialized
+    assert "Recent Tasks" in serialized
+    assert "selectedTagIds" in serialized
 
 
 @pytest.mark.asyncio

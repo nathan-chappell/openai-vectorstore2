@@ -113,6 +113,20 @@ Tasks:
 - [x] Run typecheck, build, backend integration tests, and Playwright checks.
 - [x] Commit this polish pass once verified.
 
+## Current Implementation Pass: MCP Apps Explorer Query Surface
+
+Status: completed.
+
+Tasks:
+
+- [x] Keep the existing `sources` MCP Apps UI resource as the first render surface.
+- [x] Add file query controls so the MCP Apps UI mirrors the web explorer's query-first flow.
+- [x] Add tag chips backed by app-owned tag records for source filtering and chunk search scope.
+- [x] Add chunk-search results in the MCP UI while preserving `search_chunks` as the canonical data tool.
+- [x] Add source-detail chunk summaries and recent task visibility to the MCP UI resource.
+- [x] Run pyright, backend integration tests, and MCP contract checks.
+- [x] Commit this MCP Apps UI pass once verified.
+
 ## Goal
 
 Expose the app capabilities in product-ready surfaces:
@@ -399,7 +413,7 @@ Acceptance criteria:
 
 ## Phase 6: MCP Server And MCP Apps UI
 
-Status: planned.
+Status: in progress.
 
 Turn the MCP server from a useful tool adapter into a ChatGPT Apps-ready surface with data tools, render tools, auth metadata, and file/PDF parity.
 
@@ -416,11 +430,13 @@ Tasks:
   - Data tools return JSON only.
   - Render tools attach `_meta.ui.resourceUri` and, for ChatGPT compatibility, `_meta["openai/outputTemplate"]` when needed.
 - Expand MCP Apps UI beyond the current sources browser:
-  - Library browser.
-  - Source detail and chunk inspection.
-  - Search results and branch levels.
+  - [x] Library browser.
+  - [x] Source detail and chunk inspection.
+  - [x] Search results.
+  - Branch levels.
   - Split preview and ingest progress.
-  - Task history and generated assets.
+  - [x] Task history.
+  - Generated assets.
 - Add file/PDF ingest parity:
   - Support ChatGPT Apps file inputs where available.
   - Keep `ingest_text_source` for simple text.
@@ -440,6 +456,7 @@ Implementation notes:
 - Added MCP `ingest_file_source` with `filename`, `payload_base64`, optional `media_type`, tags, and guidance. It routes through `SourceService.ingest_source` with `origin_surface="mcp"`.
 - Updated the capability matrix so one app-core operation can map to multiple MCP tools.
 - Contract tests now require `ingest_file_source` to be advertised with `filename` and `payload_base64`, and a behavioral MCP test verifies it creates a ready source plus an MCP-origin ingest task.
+- Expanded the existing `sources` MCP Apps UI resource so it now has a file query bar, tag filter chips, semantic chunk search results, source detail chunk summaries, and recent task visibility.
 - Remaining MCP file work: native Apps file params, UI controls, auth metadata, and data/render split.
 
 Decision updates:

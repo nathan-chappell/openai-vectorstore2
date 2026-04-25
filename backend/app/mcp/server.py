@@ -17,6 +17,7 @@ from prefab_ui.actions import SetState, ShowToast
 from prefab_ui.actions.mcp import CallTool
 from prefab_ui.components import (
     ERROR,
+    EVENT,
     RESULT,
     STATE,
     Badge,
@@ -28,8 +29,10 @@ from prefab_ui.components import (
     CardTitle,
     Column,
     ForEach,
+    Form,
     H3 as PrefabH3,
     If,
+    Input,
     Muted,
     Row,
     Separator,
@@ -73,8 +76,10 @@ CardHeader: Any = CardHeader
 CardTitle: Any = CardTitle
 Column: Any = Column
 ForEach: Any = ForEach
+Form: Any = Form
 h3: Any = PrefabH3
 If: Any = If
+Input: Any = Input
 Muted: Any = Muted
 Row: Any = Row
 Separator: Any = Separator
@@ -664,15 +669,38 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
     sources_app = FastMCPApp("Semantic Sources")
 
     @sources_app.tool("refresh_sources")
-    async def refresh_sources_tool(ctx: Context) -> dict[str, Any]:
+    async def refresh_sources_tool(
+        ctx: Context,
+        query: str | None = None,
+        tag_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         del ctx
         response = await services.sources.list_sources(
             clerk_user_id=current_mcp_clerk_user_id(),
-            query=None,
-            tag_ids=[],
+            query=query,
+            tag_ids=tag_ids or [],
             tag_match_mode="all",
             page=1,
             page_size=30,
+        )
+        payload = response.model_dump(mode="json")
+        payload["query"] = query or ""
+        payload["tag_ids"] = tag_ids or []
+        return payload
+
+    @sources_app.tool("refresh_tags")
+    async def refresh_tags_tool(ctx: Context) -> list[dict[str, Any]]:
+        del ctx
+        tags = await services.sources.list_tags(clerk_user_id=current_mcp_clerk_user_id())
+        return [tag.model_dump(mode="json") for tag in tags]
+
+    @sources_app.tool("refresh_tasks")
+    async def refresh_tasks_tool(ctx: Context) -> dict[str, Any]:
+        del ctx
+        response = await services.actions.list_tasks(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            kind=None,
+            limit=12,
         )
         return response.model_dump(mode="json")
 
@@ -680,6 +708,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
     async def search_sources_for_ui_tool(
         query: str,
         ctx: Context,
+        tag_ids: list[str] | None = None,
         max_results: Annotated[int, Field(ge=1, le=16)] = 8,
     ) -> dict[str, Any]:
         del ctx
@@ -687,7 +716,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
             return {"query": "", "hits": []}
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=query, max_results=max_results),
+            request=SearchRequest(query=query, tag_ids=tag_ids or [], tag_match_mode="all", max_results=max_results),
         )
         return response.model_dump(mode="json")
 
@@ -720,21 +749,80 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
     )
     async def sources(ctx: Context) -> PrefabApp:
         initial_sources = await refresh_sources_tool(ctx)
-        with Card(css_class="max-w-4xl mx-auto") as view:
+        initial_tags = await refresh_tags_tool(ctx)
+        initial_tasks = await refresh_tasks_tool(ctx)
+        with Card(css_class="max-w-5xl mx-auto") as view:
             with CardHeader(), Column(gap=1):
                 CardTitle("Semantic Sources")
-                CardDescription("A compact MCP App view over the same app-owned semantic library used by ChatKit.")
+                CardDescription("Browse files, filter by tags, search semantic chunks, and inspect app tasks.")
             with CardContent(), Column(gap=4):
-                with Row(gap=2, align="center"):
-                    h3("Library")
-                    Button(
-                        "Refresh",
-                        on_click=CallTool(
+                with Column(gap=2):
+                    with Row(gap=2, align="center"):
+                        h3("Files")
+                        Button(
+                            "Refresh",
+                            variant="secondary",
+                            on_click=[
+                                CallTool(
+                                    "refresh_sources",
+                                    arguments={"query": STATE.sources.query, "tag_ids": STATE.selectedTagIds},
+                                    on_success=SetState("sources", RESULT),
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                                CallTool(
+                                    "refresh_tasks",
+                                    on_success=SetState("tasks", RESULT),
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                            ],
+                        )
+                    with Form(
+                        on_submit=CallTool(
                             "refresh_sources",
+                            arguments={"query": EVENT.formData.file_query, "tag_ids": STATE.selectedTagIds},
                             on_success=SetState("sources", RESULT),
                             on_error=ShowToast(ERROR, variant="error"),
-                        ),
-                    )
+                        )
+                    ):
+                        with Row(gap=2, align="center"):
+                            Input(
+                                name="file_query",
+                                input_type="search",
+                                placeholder="Query files, filenames, kinds, status",
+                                value=STATE.sources.query,
+                            )
+                            Button("Query", button_type="submit")
+                    with Row(gap=2, align="center"):
+                        Small("Tags")
+                        Button(
+                            "All",
+                            variant="secondary",
+                            size="sm",
+                            on_click=[
+                                SetState("selectedTagIds", []),
+                                CallTool(
+                                    "refresh_sources",
+                                    arguments={"query": STATE.sources.query, "tag_ids": []},
+                                    on_success=SetState("sources", RESULT),
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                            ],
+                        )
+                        with ForEach(STATE.tags) as tag:
+                            Button(
+                                tag.name,  # ty:ignore[invalid-argument-type]
+                                variant="outline",
+                                size="sm",
+                                on_click=[
+                                    SetState("selectedTagIds", [tag.id]),  # ty:ignore[invalid-argument-type]
+                                    CallTool(
+                                        "refresh_sources",
+                                        arguments={"query": STATE.sources.query, "tag_ids": [tag.id]},  # ty:ignore[invalid-argument-type]
+                                        on_success=SetState("sources", RESULT),
+                                        on_error=ShowToast(ERROR, variant="error"),
+                                    ),
+                                ],
+                            )
                 with ForEach(STATE.sources.sources) as source, Card(css_class="border border-slate-200"):
                     with CardContent(), Column(gap=2):
                         with Row(gap=2, align="center"):
@@ -742,7 +830,10 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             Badge(source.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
                             Badge(source.status, variant="outline")  # ty:ignore[invalid-argument-type]
                         Small(source.original_filename)  # ty:ignore[invalid-argument-type]
-                        Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
+                        with Row(gap=2, align="center"):
+                            Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
+                            with ForEach(source.tags) as tag:
+                                Badge(tag.name, variant="outline")  # ty:ignore[invalid-argument-type]
                         with Row(gap=2, align="center"):
                             Button(
                                 "Inspect",
@@ -770,6 +861,35 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                     on_error=ShowToast(ERROR, variant="error"),
                                 ),
                             )
+                Separator()
+                with Column(gap=2):
+                    h3("Chunk Query")
+                    with Form(
+                        on_submit=CallTool(
+                            "search_sources_for_ui",
+                            arguments={
+                                "query": EVENT.formData.chunk_query,
+                                "tag_ids": STATE.selectedTagIds,
+                                "max_results": 8,
+                            },
+                            on_success=SetState("searchResults", RESULT),
+                            on_error=ShowToast(ERROR, variant="error"),
+                        )
+                    ):
+                        with Row(gap=2, align="center"):
+                            Input(
+                                name="chunk_query",
+                                input_type="search",
+                                placeholder="Search semantic chunks with the selected tag scope",
+                            )
+                            Button("Search chunks", button_type="submit")
+                    with If(STATE.searchResults):
+                        with ForEach(STATE.searchResults.hits) as hit:
+                            with Card(css_class="border border-slate-200"):
+                                with CardContent(), Column(gap=1):
+                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
+                                    Small(hit.source_title)  # ty:ignore[invalid-argument-type]
+                                    Muted(hit.summary)  # ty:ignore[invalid-argument-type]
                 with If(STATE.selectedSource):
                     Separator()
                     with Card(css_class="border border-slate-200"):
@@ -782,11 +902,41 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                 Badge(STATE.selectedSource.status, variant="outline")  # ty:ignore[invalid-argument-type]
                                 Muted(STATE.selectedSource.chunk_count)  # ty:ignore[invalid-argument-type]
                             with ForEach(STATE.selectedSource.chunks) as chunk:
-                                Small(chunk.title)  # ty:ignore[invalid-argument-type]
+                                with Card(css_class="border border-slate-200"):
+                                    with CardContent(), Column(gap=1):
+                                        Small(chunk.title)  # ty:ignore[invalid-argument-type]
+                                        Muted(chunk.summary)  # ty:ignore[invalid-argument-type]
+                Separator()
+                with Column(gap=2):
+                    with Row(gap=2, align="center"):
+                        h3("Recent Tasks")
+                        Button(
+                            "Refresh tasks",
+                            variant="secondary",
+                            on_click=CallTool(
+                                "refresh_tasks",
+                                on_success=SetState("tasks", RESULT),
+                                on_error=ShowToast(ERROR, variant="error"),
+                            ),
+                        )
+                    with ForEach(STATE.tasks.tasks) as task:
+                        with Row(gap=2, align="center"):
+                            Text(task.title)  # ty:ignore[invalid-argument-type]
+                            Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                            Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
                 Separator()
                 Muted("Use the search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
         return PrefabApp(
-            title="Semantic Sources", view=view, state={"sources": initial_sources, "selectedSource": None}
+            title="Semantic Sources",
+            view=view,
+            state={
+                "sources": initial_sources,
+                "tags": initial_tags,
+                "tasks": initial_tasks,
+                "selectedTagIds": [],
+                "selectedSource": None,
+                "searchResults": None,
+            },
         )
 
     server.add_provider(sources_app)
