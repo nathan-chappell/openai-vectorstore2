@@ -41,6 +41,8 @@ from backend.app.schemas import (
     ResearchCandidateStatusUpdateResponse,
     ResearchImportCreateRequest,
     ResearchImportResponse,
+    ResearchLibraryBuildRequest,
+    ResearchLibraryBuildResponse,
     ResplitSourceRequest,
     SearchRequest,
     SearchResponse,
@@ -369,6 +371,22 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     ) -> ResearchImportResponse:
         try:
             return await services.research.create_import(
+                clerk_user_id=user.clerk_user_id,
+                payload=payload,
+                origin_surface="web",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.post("/api/research/library-builds")
+    async def build_research_library_api(
+        payload: ResearchLibraryBuildRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> ResearchLibraryBuildResponse:
+        try:
+            return await services.research.build_library(
                 clerk_user_id=user.clerk_user_id,
                 payload=payload,
                 origin_surface="web",

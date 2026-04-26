@@ -18,6 +18,8 @@ import type {
   ResearchCandidateStatusUpdateResponse,
   ResearchImportCreateRequest,
   ResearchImportResponse,
+  ResearchLibraryBuildRequest,
+  ResearchLibraryBuildResponse,
   ResplitSourceRequest,
   SearchFilterPayload,
   SearchResponse,
@@ -256,6 +258,13 @@ export async function deleteTag(tagId: string): Promise<TagMutationResponse> {
 
 export async function createResearchImport(payload: ResearchImportCreateRequest): Promise<ResearchImportResponse> {
   return apiRequest<ResearchImportResponse>("/research/imports", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function buildResearchLibrary(payload: ResearchLibraryBuildRequest): Promise<ResearchLibraryBuildResponse> {
+  return apiRequest<ResearchLibraryBuildResponse>("/research/library-builds", {
     method: "POST",
     body: JSON.stringify(payload),
   });

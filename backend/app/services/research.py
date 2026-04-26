@@ -32,6 +32,8 @@ from backend.app.schemas import (
     ResearchImportCandidateSummary,
     ResearchImportCreateRequest,
     ResearchImportResponse,
+    ResearchLibraryBuildRequest,
+    ResearchLibraryBuildResponse,
     TaskSummary,
 )
 from backend.app.services.sources import SourceService
@@ -228,6 +230,69 @@ class ResearchImportService:
             seed_source=seed_source.source if seed_source is not None else None,
             candidates=candidates,
             duplicate_count=duplicate_count,
+            target_folder_id=target_folder_id,
+        )
+
+    async def build_library(
+        self,
+        *,
+        clerk_user_id: str,
+        payload: ResearchLibraryBuildRequest,
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> ResearchLibraryBuildResponse:
+        seed_type = payload.seed_type
+        import_payload = ResearchImportCreateRequest(
+            seed_type=seed_type,
+            text=None if seed_type in {"url", "pdf_url", "arxiv_url"} else payload.query,
+            url=payload.query if seed_type in {"url", "pdf_url", "arxiv_url"} else None,
+            title=payload.title or payload.query[:512],
+            tag_ids=payload.tag_ids,
+            folder_id=payload.folder_id,
+            folder_name=payload.folder_name,
+            ingest_seed=seed_type not in {"topic", "paper"},
+            discover_references=payload.discover_references,
+            max_depth=payload.max_depth,
+            max_candidates_per_source=payload.max_candidates_per_source,
+            max_pending_candidates=max(payload.max_sources, payload.max_pending_candidates),
+        )
+        import_response = await self.create_import(
+            clerk_user_id=clerk_user_id,
+            payload=import_payload,
+            origin_surface=origin_surface,
+            origin_thread_id=origin_thread_id,
+        )
+        candidates = import_response.candidates[: payload.max_sources]
+        ingested: list[IngestFinalizeResponse] = []
+        updated_candidates = candidates
+        if payload.auto_ingest and candidates:
+            candidate_ids = [candidate.id for candidate in candidates]
+            status_response = await self.update_candidate_status(
+                clerk_user_id=clerk_user_id,
+                candidate_ids=candidate_ids,
+                status="approved",
+            )
+            updated_candidates = status_response.candidates
+            ingest_response = await self.ingest_approved_candidates(
+                clerk_user_id=clerk_user_id,
+                payload=ResearchCandidateIngestRequest(
+                    candidate_ids=candidate_ids,
+                    tag_ids=payload.tag_ids if payload.tag_ids else None,
+                    folder_id=payload.folder_id or import_response.target_folder_id,
+                ),
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+            )
+            ingested = ingest_response.ingested
+            updated_candidates = ingest_response.candidates
+
+        return ResearchLibraryBuildResponse(
+            task=import_response.task,
+            target_folder_id=import_response.target_folder_id,
+            seed_source=import_response.seed_source,
+            candidates=updated_candidates,
+            ingested=ingested,
+            duplicate_count=import_response.duplicate_count,
         )
 
     async def list_candidates(

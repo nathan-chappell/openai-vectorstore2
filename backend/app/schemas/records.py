@@ -327,6 +327,31 @@ class ResearchImportResponse(BaseModel):
     seed_source: LibrarySourceSummary | None = None
     candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
     duplicate_count: int = 0
+    target_folder_id: str | None = None
+
+
+class ResearchLibraryBuildRequest(BaseModel):
+    seed_type: ResearchSeedKind = "topic"
+    query: str = Field(min_length=1, max_length=4096)
+    title: str | None = Field(default=None, max_length=512)
+    folder_id: str | None = None
+    folder_name: str | None = Field(default=None, max_length=255)
+    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    auto_ingest: bool = True
+    discover_references: bool = True
+    max_depth: int = Field(default=2, ge=0, le=4)
+    max_sources: int = Field(default=12, ge=1, le=50)
+    max_candidates_per_source: int = Field(default=8, ge=0, le=20)
+    max_pending_candidates: int = Field(default=50, ge=0, le=200)
+
+
+class ResearchLibraryBuildResponse(BaseModel):
+    task: "TaskSummary"
+    target_folder_id: str | None = None
+    seed_source: LibrarySourceSummary | None = None
+    candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
+    ingested: list[IngestFinalizeResponse] = Field(default_factory=list)
+    duplicate_count: int = 0
 
 
 class ResearchCandidateListResponse(BaseModel):

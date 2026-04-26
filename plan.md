@@ -202,7 +202,7 @@ Implementation track:
 - [x] Add topic/paper seed contracts and discovery prompting so a bare title can find primary papers plus useful references.
 - [x] Add candidate/source metadata fields in API responses: `description`, `summary`, `suggested_tags`, and optional publication/authorship fields without requiring a table migration yet.
 - [x] Create or reuse a research folder automatically for topic/paper runs, and route seed/candidate ingestion into that folder.
-- [ ] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, optionally auto-approves and ingests public items up to `max_sources`, and records progress/results on the task.
+- [x] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, optionally auto-approves and ingests public items up to `max_sources`, and records progress/results on the task.
 - [ ] Extend discovery beyond one hop by deriving follow-up queries from ingested/candidate metadata, bounded by `max_depth`, `max_candidates_per_source`, and `max_pending_candidates`.
 - [ ] Add a compact web Research Import/Library Builder panel near explorer upload with seed input, max size/depth controls, task status, and candidate review actions.
 - [ ] Add MCP Apps UI resources for candidate review/library building, not just primitive tools.
@@ -212,6 +212,7 @@ Implementation track:
 Verification plan:
 
 - [x] Integration test: topic seed with fake discovery creates a research folder, pending candidates, and enriched metadata without ingesting the raw topic as a source.
+- [x] Integration test: build mode creates the foldered research library task and bounded review candidates. Auto-ingest is wired for live/public candidates but still needs deterministic fetch coverage.
 - [ ] Integration test: build mode auto-ingests approved/fake public candidates into the research folder through `SourceService.ingest_source`.
 - [ ] Contract tests: backend schemas, frontend TypeScript, REST, ChatKit tools, MCP tools, and capability matrix stay aligned.
 - [ ] UI/Playwright test: user starts a research library build from the browser, reviews candidates, and sees ingested files in the created folder.

@@ -317,6 +317,31 @@ export type ResearchImportResponse = {
   seed_source: SourceSummary | null;
   candidates: ResearchImportCandidateSummary[];
   duplicate_count: number;
+  target_folder_id: string | null;
+};
+
+export type ResearchLibraryBuildRequest = {
+  seed_type: ResearchSeedKind;
+  query: string;
+  title?: string | null;
+  folder_id?: string | null;
+  folder_name?: string | null;
+  tag_ids?: string[];
+  auto_ingest?: boolean;
+  discover_references?: boolean;
+  max_depth?: number;
+  max_sources?: number;
+  max_candidates_per_source?: number;
+  max_pending_candidates?: number;
+};
+
+export type ResearchLibraryBuildResponse = {
+  task: TaskSummary;
+  target_folder_id: string | null;
+  seed_source: SourceSummary | null;
+  candidates: ResearchImportCandidateSummary[];
+  ingested: IngestFinalizeResponse[];
+  duplicate_count: number;
 };
 
 export type ResearchCandidateListResponse = {

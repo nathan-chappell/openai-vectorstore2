@@ -36,6 +36,7 @@ from backend.app.schemas import (
     ResearchCandidateIngestRequest,
     ResearchCandidateStatusUpdateRequest,
     ResearchImportCreateRequest,
+    ResearchLibraryBuildRequest,
     SearchRequest,
     TaskKind,
     VoiceGenerationRequest,
@@ -711,6 +712,59 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return response.model_dump(mode="json")
 
+        @function_tool(name_override="build_research_library")
+        async def build_research_library_tool(
+            ctx: ChatKitToolContext,
+            query: str,
+            seed_type: str = "topic",
+            title: str | None = None,
+            folder_name: str | None = None,
+            auto_ingest: bool = True,
+            discover_references: bool = True,
+            max_depth: int = 2,
+            max_sources: int = 12,
+            max_candidates_per_source: int = 8,
+            max_pending_candidates: int = 50,
+        ) -> dict[str, object]:
+            """Create a foldered research library from a topic, paper title, or public URL."""
+            request_context = ctx.context.request_context
+            normalized_seed_type = (
+                seed_type
+                if seed_type in {"topic", "paper", "text", "url", "pdf_url", "arxiv_url", "linkedin_export"}
+                else "topic"
+            )
+            await ctx.context.stream(
+                ProgressUpdateEvent(icon="library", text="Building a foldered research library from the seed.")
+            )
+            response = await self._research.build_library(
+                clerk_user_id=request_context.clerk_user_id,
+                payload=ResearchLibraryBuildRequest(
+                    seed_type=cast(Any, normalized_seed_type),
+                    query=query,
+                    title=title,
+                    folder_name=folder_name,
+                    auto_ingest=auto_ingest,
+                    discover_references=discover_references,
+                    max_depth=max(0, min(max_depth, 4)),
+                    max_sources=max(1, min(max_sources, 50)),
+                    max_candidates_per_source=max(0, min(max_candidates_per_source, 20)),
+                    max_pending_candidates=max(0, min(max_pending_candidates, 200)),
+                ),
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            await ctx.context.stream(
+                ProgressUpdateEvent(
+                    icon="check-circle",
+                    text=(
+                        f"Research library build complete with {len(response.candidates)} candidate"
+                        f"{'' if len(response.candidates) == 1 else 's'} and {len(response.ingested)} queued ingest"
+                        f"{'' if len(response.ingested) == 1 else 's'}."
+                    ),
+                )
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="list_research_candidates")
         async def list_research_candidates_tool(
             ctx: ChatKitToolContext,
@@ -1058,6 +1112,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             branch_search_tool,
             preview_semantic_split_tool,
             start_research_import_tool,
+            build_research_library_tool,
             list_research_candidates_tool,
             update_research_candidate_status_tool,
             ingest_research_candidates_tool,
@@ -1084,7 +1139,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the indexed file-library assistant for an app-first OpenAI vector-store backed file explorer. "
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its optional split records, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "to replace its optional split records, build foldered research libraries from topics or papers, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "

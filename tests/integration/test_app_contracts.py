@@ -74,7 +74,18 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
         "ResearchImportCreateRequest",
         {"discover_references", "folder_name", "ingest_seed", "seed_type", "text", "url"},
     ),
-    "ResearchImportResponse": ("ResearchImportResponse", {"candidates", "duplicate_count", "seed_source", "task"}),
+    "ResearchImportResponse": (
+        "ResearchImportResponse",
+        {"candidates", "duplicate_count", "seed_source", "target_folder_id", "task"},
+    ),
+    "ResearchLibraryBuildRequest": (
+        "ResearchLibraryBuildRequest",
+        {"auto_ingest", "max_sources", "query", "seed_type"},
+    ),
+    "ResearchLibraryBuildResponse": (
+        "ResearchLibraryBuildResponse",
+        {"candidates", "duplicate_count", "ingested", "target_folder_id", "task"},
+    ),
     "ResplitSourceRequest": ("ResplitSourceRequest", {"tag_ids", "user_guidance"}),
     "SearchResponse": ("SearchResponse", {"hits", "query"}),
     "SemanticChunkDraft": (
@@ -369,6 +380,47 @@ async def test_http_research_paper_seed_creates_folder_and_enriched_candidates(
             )
             assert research_listing.status_code == 200
             assert [entry["name"] for entry in research_listing.json()["entries"]] == ["Attention Is All You Need"]
+
+
+@pytest.mark.asyncio
+async def test_http_research_library_build_creates_reviewable_foldered_library(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            build = await client.post(
+                "/api/research/library-builds",
+                headers=auth_headers,
+                json={
+                    "seed_type": "topic",
+                    "query": "transformer interpretability",
+                    "folder_name": "Transformer Interpretability",
+                    "auto_ingest": False,
+                    "max_sources": 3,
+                    "max_candidates_per_source": 3,
+                },
+            )
+            assert build.status_code == 200
+            payload = build.json()
+            assert payload["task"]["kind"] == "research_import"
+            assert payload["target_folder_id"]
+            assert payload["seed_source"] is None
+            assert payload["ingested"] == []
+            assert len(payload["candidates"]) == 3
+            assert {candidate["status"] for candidate in payload["candidates"]} == {"pending"}
+
+            target_folder = await client.get(
+                "/api/filesystem",
+                headers=auth_headers,
+                params={"folder_id": payload["target_folder_id"]},
+            )
+            assert target_folder.status_code == 200
+            assert target_folder.json()["current"]["path"] == "/Research/Transformer Interpretability"
 
 
 @pytest.mark.asyncio

@@ -65,6 +65,8 @@ from backend.app.schemas import (
     ResearchCandidateStatusUpdateResponse,
     ResearchImportCreateRequest,
     ResearchImportResponse,
+    ResearchLibraryBuildRequest,
+    ResearchLibraryBuildResponse,
     SearchRequest,
     SearchResponse,
     SplitPreviewResponse,
@@ -161,7 +163,7 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
             "You are the MCP adapter for an app-first file explorer backed by OpenAI vector-store search. "
             "The app owns ingestion, indexing, storage, retrieval, and generation. Use sources for a visual library UI; "
             "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
-            "start_research_import, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
+            "start_research_import, build_research_library, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
             "search_chunks, branch_search, qa, freeform, generate_image, generate_voice, update_source_tags, "
             "list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
@@ -596,6 +598,51 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             clerk_user_id=clerk_user_id,
             arguments=payload.model_dump(mode="json", exclude={"payload_base64"}),
             operation=services.research.create_import(
+                clerk_user_id=clerk_user_id,
+                payload=payload,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="build_research_library",
+        description="Create a foldered research library from a topic, paper title, or public URL; optionally auto-ingest bounded candidates.",
+        annotations=mutating,
+    )
+    async def build_research_library_tool(
+        query: Annotated[str, Field(min_length=1, max_length=4096)],
+        seed_type: Literal["topic", "paper", "text", "url", "pdf_url", "arxiv_url", "linkedin_export"] = "topic",
+        title: Annotated[str | None, Field(max_length=512)] = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        folder_name: Annotated[str | None, Field(max_length=255)] = None,
+        tag_ids: list[str] | None = None,
+        auto_ingest: bool = True,
+        discover_references: bool = True,
+        max_depth: Annotated[int, Field(ge=0, le=4)] = 2,
+        max_sources: Annotated[int, Field(ge=1, le=50)] = 12,
+        max_candidates_per_source: Annotated[int, Field(ge=0, le=20)] = 8,
+        max_pending_candidates: Annotated[int, Field(ge=0, le=200)] = 50,
+    ) -> ResearchLibraryBuildResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = ResearchLibraryBuildRequest(
+            seed_type=seed_type,
+            query=query,
+            title=title,
+            folder_id=folder_id,
+            folder_name=folder_name,
+            tag_ids=tag_ids or [],
+            auto_ingest=auto_ingest,
+            discover_references=discover_references,
+            max_depth=max_depth,
+            max_sources=max_sources,
+            max_candidates_per_source=max_candidates_per_source,
+            max_pending_candidates=max_pending_candidates,
+        )
+        return await _run_logged_tool(
+            tool_name="build_research_library",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=services.research.build_library(
                 clerk_user_id=clerk_user_id,
                 payload=payload,
                 origin_surface="mcp",
@@ -1252,6 +1299,15 @@ def _summarize_result(result: object) -> object:
             "candidates": len(result.candidates),
             "duplicate_count": result.duplicate_count,
             "seed_source_id": result.seed_source.id if result.seed_source is not None else None,
+            "target_folder_id": result.target_folder_id,
+        }
+    if isinstance(result, ResearchLibraryBuildResponse):
+        return {
+            "task_id": result.task.id,
+            "candidates": len(result.candidates),
+            "ingested": len(result.ingested),
+            "duplicate_count": result.duplicate_count,
+            "target_folder_id": result.target_folder_id,
         }
     if isinstance(result, ResearchCandidateListResponse):
         return {"returned": len(result.candidates), "total_count": result.total_count}

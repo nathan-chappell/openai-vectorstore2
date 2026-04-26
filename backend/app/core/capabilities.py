@@ -20,6 +20,7 @@ AppOperation: TypeAlias = Literal[
     "get_source_detail",
     "preview_semantic_split",
     "start_research_import",
+    "build_research_library",
     "list_research_candidates",
     "update_research_candidate_status",
     "ingest_research_candidates",
@@ -157,6 +158,13 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("POST /api/research/imports",),
         chatkit_tool="start_research_import",
         mcp_tools=("start_research_import",),
+    ),
+    AppCapability(
+        operation="build_research_library",
+        summary="Create a foldered research library from a topic, paper, URL, or text and optionally auto-ingest bounded candidates.",
+        rest_routes=("POST /api/research/library-builds",),
+        chatkit_tool="build_research_library",
+        mcp_tools=("build_research_library",),
     ),
     AppCapability(
         operation="list_research_candidates",
