@@ -62,7 +62,7 @@ class AppSettings(BaseSettings):
     semantic_split_pdf_batch_pages: int = 25
     semantic_split_text_batch_lines: int = 2_000
     semantic_chunk_max_search_results: int = 12
-    task_runner_max_concurrency: int = 2
+    task_runner_max_concurrency: int = 1
     mcp_client_session_timeout_seconds: float = 60.0
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"

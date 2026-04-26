@@ -50,6 +50,9 @@ class UserLibrary(Base):
 
     owner: Mapped[AppUser] = relationship(back_populates="library")
     sources: Mapped[list["SourceFile"]] = relationship(back_populates="library", cascade="all, delete-orphan")
+    filesystem_entries: Mapped[list["FilesystemEntry"]] = relationship(
+        back_populates="library", cascade="all, delete-orphan"
+    )
     tags: Mapped[list["Tag"]] = relationship(back_populates="library", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="library")
     assets: Mapped[list["StoredAsset"]] = relationship(back_populates="library", cascade="all, delete-orphan")
@@ -76,10 +79,7 @@ class Tag(Base):
 
 class SourceFile(Base):
     __tablename__ = "source_file"
-    __table_args__ = (
-        Index("ix_source_file_library_status_created_at", "library_id", "status", "created_at"),
-        UniqueConstraint("library_id", "display_title", name="uq_source_file_display_title"),
-    )
+    __table_args__ = (Index("ix_source_file_library_status_created_at", "library_id", "status", "created_at"),)
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     library_id: Mapped[str] = mapped_column(ForeignKey("user_library.id"), nullable=False, index=True)
@@ -93,15 +93,53 @@ class SourceFile(Base):
     storage_provider: Mapped[str] = mapped_column(String(48), nullable=False)
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
     openai_original_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    openai_original_file_purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ingest_strategy: Mapped[str | None] = mapped_column(String(80), nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     library: Mapped[UserLibrary] = relationship(back_populates="sources")
+    filesystem_entry: Mapped["FilesystemEntry | None"] = relationship(
+        back_populates="source_file", uselist=False, cascade="all, delete-orphan"
+    )
     chunks: Mapped[list["SemanticChunk"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
     tag_links: Mapped[list["SourceTagLink"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="source_file")
+
+
+class FilesystemEntry(Base):
+    __tablename__ = "filesystem_entry"
+    __table_args__ = (
+        UniqueConstraint("library_id", "normalized_path", name="uq_filesystem_entry_library_path"),
+        Index(
+            "ix_filesystem_entry_library_parent_kind_name",
+            "library_id",
+            "parent_id",
+            "kind",
+            "normalized_name",
+        ),
+        Index("ix_filesystem_entry_source_file_id", "source_file_id"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    library_id: Mapped[str] = mapped_column(ForeignKey("user_library.id"), nullable=False, index=True)
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey("filesystem_entry.id"), nullable=True, index=True)
+    source_file_id: Mapped[str | None] = mapped_column(ForeignKey("source_file.id"), nullable=True, unique=True)
+    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    normalized_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    normalized_path: Mapped[str] = mapped_column(String(1024), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    library: Mapped[UserLibrary] = relationship(back_populates="filesystem_entries")
+    parent: Mapped["FilesystemEntry | None"] = relationship(
+        back_populates="children", remote_side=lambda: FilesystemEntry.id
+    )
+    children: Mapped[list["FilesystemEntry"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
+    source_file: Mapped[SourceFile | None] = relationship(back_populates="filesystem_entry")
 
 
 class SourceTagLink(Base):

@@ -2,6 +2,13 @@ import type {
   ActionResponse,
   AuthUser,
   BranchSearchResponse,
+  FilesystemCreateFolderRequest,
+  FilesystemDeleteRequest,
+  FilesystemDeleteResponse,
+  FilesystemEntrySummary,
+  FilesystemListResponse,
+  FilesystemSearchResponse,
+  FilesystemUpdateEntryRequest,
   IngestFinalizeResponse,
   ResplitSourceRequest,
   SearchFilterPayload,
@@ -92,6 +99,66 @@ export async function getSource(sourceId: string): Promise<SourceDetail> {
   return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}`);
 }
 
+export async function listFilesystem(params: { folderId?: string | null } = {}): Promise<FilesystemListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.folderId) {
+    searchParams.set("folder_id", params.folderId);
+  }
+  const suffix = searchParams.toString();
+  return apiRequest<FilesystemListResponse>(suffix ? `/filesystem?${suffix}` : "/filesystem");
+}
+
+export async function searchFilesystem(params: {
+  query?: string | null;
+  tagIds?: string[];
+  tagMatchMode?: TagMatchMode;
+  page?: number;
+  pageSize?: number;
+}): Promise<FilesystemSearchResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.query?.trim()) {
+    searchParams.set("query", params.query.trim());
+  }
+  for (const tagId of params.tagIds ?? []) {
+    searchParams.append("tag_ids", tagId);
+  }
+  if (params.tagMatchMode) {
+    searchParams.set("tag_match_mode", params.tagMatchMode);
+  }
+  if (params.page) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.pageSize) {
+    searchParams.set("page_size", String(params.pageSize));
+  }
+  const suffix = searchParams.toString();
+  return apiRequest<FilesystemSearchResponse>(suffix ? `/filesystem/search?${suffix}` : "/filesystem/search");
+}
+
+export async function createFolder(payload: FilesystemCreateFolderRequest): Promise<FilesystemEntrySummary> {
+  return apiRequest<FilesystemEntrySummary>("/filesystem/folders", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function updateFilesystemEntry(
+  entryId: string,
+  payload: FilesystemUpdateEntryRequest,
+): Promise<FilesystemEntrySummary> {
+  return apiRequest<FilesystemEntrySummary>(`/filesystem/entries/${encodeURIComponent(entryId)}`, {
+    method: "PATCH",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function deleteFilesystemEntries(payload: FilesystemDeleteRequest): Promise<FilesystemDeleteResponse> {
+  return apiRequest<FilesystemDeleteResponse>("/filesystem/delete", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function readSourceContentBlob(sourceId: string): Promise<{ blob: Blob; mediaType: string | null }> {
   const response = await authenticatedFetch(`${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/content`);
   if (!response.ok) {
@@ -100,7 +167,13 @@ export async function readSourceContentBlob(sourceId: string): Promise<{ blob: B
   return { blob: await response.blob(), mediaType: response.headers.get("Content-Type") };
 }
 
-export async function uploadSource(file: File, userGuidance: string, tagIds: string[]): Promise<IngestFinalizeResponse> {
+export async function uploadSource(
+  file: File,
+  userGuidance: string,
+  tagIds: string[],
+  folderId?: string | null,
+  virtualName?: string | null,
+): Promise<IngestFinalizeResponse> {
   const formData = new FormData();
   formData.set("file", file, file.name);
   if (userGuidance.trim()) {
@@ -108,6 +181,12 @@ export async function uploadSource(file: File, userGuidance: string, tagIds: str
   }
   for (const tagId of tagIds) {
     formData.append("tag_ids", tagId);
+  }
+  if (folderId) {
+    formData.set("folder_id", folderId);
+  }
+  if (virtualName?.trim()) {
+    formData.set("virtual_name", virtualName.trim());
   }
   return apiRequest<IngestFinalizeResponse>("/sources", {
     method: "POST",

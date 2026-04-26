@@ -17,19 +17,21 @@ def test_build_vector_attributes_records_version_and_bounded_tag_slots() -> None
         source_id="source_1",
         chunk_id="chunk_1",
         source_kind="text",
-        original_filename="A" * 300,
+        virtual_path="/" + "A" * 300,
+        virtual_name="A" * 300,
         source_created_at=datetime(2026, 4, 25, 12, 30, tzinfo=UTC),
         tag_slugs=[f"tag-{index}" for index in range(1, TAG_SLOT_COUNT + 3)],
     )
 
     assert attributes["attributes_version"] == float(VECTOR_ATTRIBUTES_VERSION)
-    assert attributes["filename"] == "A" * 256
+    assert attributes["virtual_path"] == ("/" + "A" * 300)[:256]
+    assert attributes["virtual_name"] == "A" * 256
     assert attributes["created_at"] == datetime(2026, 4, 25, 12, 30, tzinfo=UTC).timestamp()
-    assert attributes["created_date"] == "2026-04-25"
     assert attributes["tags"] == "tag-1,tag-2,tag-3,tag-4,tag-5,tag-6,tag-7,tag-8,tag-9,tag-10"
     assert attributes["tag_1"] == "tag-1"
     assert attributes[f"tag_{TAG_SLOT_COUNT}"] == f"tag-{TAG_SLOT_COUNT}"
     assert f"tag_{TAG_SLOT_COUNT + 1}" not in attributes
+    assert len(attributes) == 8 + TAG_SLOT_COUNT
 
 
 def test_build_filter_groups_combines_source_kind_and_any_tags() -> None:

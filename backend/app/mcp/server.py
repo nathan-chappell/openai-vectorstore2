@@ -49,6 +49,10 @@ from backend.app.schemas import (
     BranchSearchRequest,
     BranchSearchResponse,
     FileListResponse,
+    FilesystemDeleteResponse,
+    FilesystemEntrySummary,
+    FilesystemListResponse,
+    FilesystemSearchResponse,
     FreeformRequest,
     ImageGenerationRequest,
     IngestFinalizeResponse,
@@ -149,8 +153,9 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
         instructions=(
             "You are the MCP adapter for an app-first semantic RAG workspace. The app owns ingestion, "
             "semantic chunks, storage, retrieval, and generation. Use sources for a visual library UI; "
-            "use list_sources, list_tags, create_tag, update_tag, delete_tag, search_chunks, branch_search, qa, "
-            "freeform, generate_image, generate_voice, update_source_tags, list_tasks, and get_task to operate on the current user's library. "
+            "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
+            "search_chunks, branch_search, qa, freeform, generate_image, generate_voice, update_source_tags, "
+            "list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
         ),
         auth=auth,
@@ -192,6 +197,121 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 tag_match_mode=tag_match_mode,
                 page=page,
                 page_size=page_size,
+            ),
+        )
+
+    @server.tool(
+        name="list_filesystem",
+        description="List the children of one virtual filesystem folder.",
+        annotations=read_only,
+    )
+    async def list_filesystem_tool(folder_id: Annotated[str | None, Field(min_length=1)] = None) -> FilesystemListResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="list_filesystem",
+            clerk_user_id=clerk_user_id,
+            arguments={"folder_id": folder_id},
+            operation=services.sources.list_filesystem(clerk_user_id=clerk_user_id, folder_id=folder_id),
+        )
+
+    @server.tool(
+        name="search_filesystem",
+        description="Find virtual files and folders by path, filename, tags, and vector-store retrieval.",
+        annotations=read_only,
+    )
+    async def search_filesystem_tool(
+        query: Annotated[str | None, Field(min_length=1)] = None,
+        tag_ids: list[str] | None = None,
+        tag_match_mode: Literal["all", "any"] = "all",
+        page: Annotated[int, Field(ge=1)] = 1,
+        page_size: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> FilesystemSearchResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="search_filesystem",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "query": query,
+                "tag_ids": tag_ids or [],
+                "tag_match_mode": tag_match_mode,
+                "page": page,
+                "page_size": page_size,
+            },
+            operation=services.sources.search_filesystem(
+                clerk_user_id=clerk_user_id,
+                query=query,
+                tag_ids=tag_ids or [],
+                tag_match_mode=tag_match_mode,
+                page=page,
+                page_size=page_size,
+            ),
+        )
+
+    @server.tool(name="create_folder", description="Create a virtual filesystem folder.", annotations=mutating)
+    async def create_folder_tool(
+        name: Annotated[str, Field(min_length=1, max_length=255)],
+        parent_id: Annotated[str | None, Field(min_length=1)] = None,
+    ) -> FilesystemEntrySummary:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="create_folder",
+            clerk_user_id=clerk_user_id,
+            arguments={"name": name, "parent_id": parent_id},
+            operation=services.sources.create_folder(
+                clerk_user_id=clerk_user_id,
+                parent_id=parent_id,
+                name=name,
+            ),
+        )
+
+    @server.tool(
+        name="update_filesystem_entry",
+        description="Rename or move a virtual file or folder.",
+        annotations=mutating,
+    )
+    async def update_filesystem_entry_tool(
+        entry_id: Annotated[str, Field(min_length=1)],
+        name: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
+        parent_id: Annotated[str | None, Field(min_length=1)] = None,
+    ) -> FilesystemEntrySummary:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="update_filesystem_entry",
+            clerk_user_id=clerk_user_id,
+            arguments={"entry_id": entry_id, "name": name, "parent_id": parent_id},
+            operation=services.sources.update_filesystem_entry(
+                clerk_user_id=clerk_user_id,
+                entry_id=entry_id,
+                name=name,
+                parent_id=parent_id,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="delete_filesystem_entries",
+        description="Permanently delete virtual files or folders after explicit confirmation.",
+        annotations=destructive,
+    )
+    async def delete_filesystem_entries_tool(
+        entry_ids: list[str],
+        confirm: bool = False,
+    ) -> FilesystemDeleteResponse | dict[str, object]:
+        clerk_user_id = current_mcp_clerk_user_id()
+        if not confirm:
+            return {
+                "confirmation_required": True,
+                "entry_ids": entry_ids,
+                "message": "Ask the user to confirm permanent deletion, then call delete_filesystem_entries again with confirm=true.",
+            }
+        return await _run_logged_tool(
+            tool_name="delete_filesystem_entries",
+            clerk_user_id=clerk_user_id,
+            arguments={"entry_ids": entry_ids, "confirm": confirm},
+            operation=services.sources.delete_filesystem_entries(
+                clerk_user_id=clerk_user_id,
+                entry_ids=entry_ids,
+                confirm=confirm,
             ),
         )
 
@@ -291,12 +411,20 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         text: Annotated[str, Field(min_length=1)] = "",
         tag_ids: list[str] | None = None,
         user_guidance: str | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        virtual_name: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
     ) -> IngestFinalizeResponse:
         clerk_user_id = current_mcp_clerk_user_id()
         return await _run_logged_tool(
             tool_name="ingest_text_source",
             clerk_user_id=clerk_user_id,
-            arguments={"filename": filename, "chars": len(text), "tag_ids": tag_ids or []},
+            arguments={
+                "filename": filename,
+                "chars": len(text),
+                "tag_ids": tag_ids or [],
+                "folder_id": folder_id,
+                "virtual_name": virtual_name,
+            },
             operation=services.sources.ingest_source(
                 clerk_user_id=clerk_user_id,
                 filename=filename,
@@ -305,6 +433,8 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 tag_ids=tag_ids or [],
                 user_guidance=user_guidance,
                 origin_surface="mcp",
+                folder_id=folder_id,
+                virtual_name=virtual_name,
             ),
         )
 
@@ -319,6 +449,8 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         media_type: str | None = None,
         tag_ids: list[str] | None = None,
         user_guidance: str | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        virtual_name: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
     ) -> IngestFinalizeResponse:
         clerk_user_id = current_mcp_clerk_user_id()
         try:
@@ -333,6 +465,8 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 "media_type": media_type,
                 "bytes": len(payload),
                 "tag_ids": tag_ids or [],
+                "folder_id": folder_id,
+                "virtual_name": virtual_name,
             },
             operation=services.sources.ingest_source(
                 clerk_user_id=clerk_user_id,
@@ -342,6 +476,8 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 tag_ids=tag_ids or [],
                 user_guidance=user_guidance,
                 origin_surface="mcp",
+                folder_id=folder_id,
+                virtual_name=virtual_name,
             ),
         )
 

@@ -5,11 +5,12 @@ import logging
 from time import perf_counter
 from typing import Any, cast
 
-from agents import Agent, Runner, function_tool
+from agents import Agent, Runner, StopAtTools, function_tool
 from agents.model_settings import ModelSettings
 from agents.tool import Tool
 from agents.tool_context import ToolContext
 from chatkit.agents import AgentContext as ChatKitAgentContext
+from chatkit.agents import ClientToolCall
 from chatkit.agents import ThreadItemConverter, stream_agent_response
 from chatkit.server import ChatKitServer
 from chatkit.types import Attachment, ChatKitReq, ProgressUpdateEvent, ThreadMetadata, ThreadStreamEvent, UserMessageItem
@@ -40,6 +41,7 @@ MODEL_ALIASES = {
     "powerful": "gpt-5.5",
 }
 MAX_AGENT_TURNS = 20
+STOP_AT_TOOL_NAMES = ["set_file_selection", "reveal_file", "set_file_search", "delete_source", "delete_filesystem_entries"]
 
 ChatKitToolContext = ToolContext[ChatKitAgentContext[VectorstoreChatContext]]
 
@@ -180,6 +182,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             model_settings=_model_settings_override_for_model(requested_model) or ModelSettings(),
             tools=self._build_tools(),
             instructions=self._agent_instructions,
+            tool_use_behavior=StopAtTools(stop_at_tool_names=STOP_AT_TOOL_NAMES),
         )
         result = Runner.run_streamed(
             agent,
@@ -232,37 +235,41 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     ) -> list[ResponseInputItemParam]:
         if not context.selected_source_ids:
             return []
-        source_lines: list[str] = []
-        for source_id in context.selected_source_ids[:8]:
-            try:
-                detail = await self._sources.get_source(
-                    clerk_user_id=context.clerk_user_id,
-                    source_id=source_id,
-                )
-            except Exception:
-                continue
-            source_lines.append(
-                f"- {detail.display_title} ({detail.id}, {detail.source_kind}, "
-                f"{detail.chunk_count} chunks, tags: {', '.join(tag.name for tag in detail.tags) or 'none'})"
-            )
-        if not source_lines:
+        file_inputs = await self._sources.ensure_source_file_inputs(
+            clerk_user_id=context.clerk_user_id,
+            source_ids=context.selected_source_ids,
+        )
+        if not file_inputs:
             return []
+        source_lines = [
+            f"- {item.virtual_path} ({item.source_id}, {item.media_type}, OpenAI file {item.file_id})"
+            for item in file_inputs
+        ]
+        content: list[dict[str, object]] = [
+            {
+                "type": "input_text",
+                "text": (
+                    "The user selected these files in the app explorer. They are attached as input_file content "
+                    "for this turn and should be treated as the primary file scope unless the user asks to widen it. "
+                    f"At most {len(file_inputs)} selected files are attached.\n"
+                    + "\n".join(source_lines)
+                ),
+            }
+        ]
+        content.extend(
+            {
+                "type": "input_file",
+                "file_id": item.file_id,
+            }
+            for item in file_inputs
+        )
         return [
             cast(
                 ResponseInputItemParam,
                 Message(
                     role="user",
                     type="message",
-                    content=[
-                        {
-                            "type": "input_text",
-                            "text": (
-                                "The user currently has these sources selected in the app. "
-                                "Treat them as the first retrieval scope unless the user asks to widen it.\n"
-                                + "\n".join(source_lines)
-                            ),
-                        }
-                    ],
+                    content=cast(Any, content),
                 ),
             )
         ]
@@ -290,6 +297,131 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 page_size=max(1, min(page_size, 50)),
             )
             return response.model_dump(mode="json")
+
+        @function_tool(name_override="list_filesystem")
+        async def list_filesystem_tool(ctx: ChatKitToolContext, folder_id: str | None = None) -> dict[str, object]:
+            """List the children of a virtual filesystem folder."""
+            request_context = ctx.context.request_context
+            response = await self._sources.list_filesystem(
+                clerk_user_id=request_context.clerk_user_id,
+                folder_id=folder_id,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="find_files")
+        async def find_files_tool(
+            ctx: ChatKitToolContext,
+            query: str | None = None,
+            tag_ids: list[str] | None = None,
+            tag_match_mode: str = "all",
+            page_size: int = 20,
+        ) -> dict[str, object]:
+            """Find virtual files and folders by path, filename, tags, and vector-store retrieval."""
+            request_context = ctx.context.request_context
+            response = await self._sources.search_filesystem(
+                clerk_user_id=request_context.clerk_user_id,
+                query=query,
+                tag_ids=tag_ids or [],
+                tag_match_mode="any" if tag_match_mode == "any" else "all",
+                page=1,
+                page_size=max(1, min(page_size, 50)),
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="create_folder")
+        async def create_folder_tool(
+            ctx: ChatKitToolContext,
+            name: str,
+            parent_id: str | None = None,
+        ) -> dict[str, object]:
+            """Create a folder in the virtual filesystem."""
+            request_context = ctx.context.request_context
+            response = await self._sources.create_folder(
+                clerk_user_id=request_context.clerk_user_id,
+                parent_id=parent_id,
+                name=name,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="update_filesystem_entry")
+        async def update_filesystem_entry_tool(
+            ctx: ChatKitToolContext,
+            entry_id: str,
+            name: str | None = None,
+            parent_id: str | None = None,
+        ) -> dict[str, object]:
+            """Rename or move a virtual file or folder."""
+            request_context = ctx.context.request_context
+            response = await self._sources.update_filesystem_entry(
+                clerk_user_id=request_context.clerk_user_id,
+                entry_id=entry_id,
+                name=name,
+                parent_id=parent_id,
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="delete_filesystem_entries")
+        async def delete_filesystem_entries_tool(
+            ctx: ChatKitToolContext,
+            entry_ids: list[str],
+            confirm: bool = False,
+        ) -> dict[str, object]:
+            """Permanently delete virtual files or folders only after explicit user confirmation."""
+            if not confirm:
+                return {
+                    "confirmation_required": True,
+                    "entry_ids": entry_ids,
+                    "message": "Ask the user to confirm permanent deletion, then call delete_filesystem_entries again with confirm=true.",
+                }
+            request_context = ctx.context.request_context
+            response = await self._sources.delete_filesystem_entries(
+                clerk_user_id=request_context.clerk_user_id,
+                entry_ids=entry_ids,
+                confirm=confirm,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="set_file_selection")
+        async def set_file_selection_tool(
+            ctx: ChatKitToolContext,
+            source_ids: list[str],
+            mode: str = "replace",
+        ) -> dict[str, object]:
+            """Ask the client explorer to replace, add to, or remove from the selected files for chat."""
+            normalized_mode = mode if mode in {"replace", "add", "remove"} else "replace"
+            ctx.context.client_tool_call = ClientToolCall(
+                name="set_file_selection",
+                arguments={"source_ids": source_ids[:10], "mode": normalized_mode},
+            )
+            return {"client_tool": "set_file_selection", "source_ids": source_ids[:10], "mode": normalized_mode}
+
+        @function_tool(name_override="reveal_file")
+        async def reveal_file_tool(
+            ctx: ChatKitToolContext,
+            source_id: str | None = None,
+            entry_id: str | None = None,
+        ) -> dict[str, object]:
+            """Ask the client explorer to navigate to and focus a file or folder."""
+            ctx.context.client_tool_call = ClientToolCall(
+                name="reveal_file",
+                arguments={"source_id": source_id, "entry_id": entry_id},
+            )
+            return {"client_tool": "reveal_file", "source_id": source_id, "entry_id": entry_id}
+
+        @function_tool(name_override="set_file_search")
+        async def set_file_search_tool(
+            ctx: ChatKitToolContext,
+            query: str | None = None,
+            tag_ids: list[str] | None = None,
+        ) -> dict[str, object]:
+            """Ask the client explorer to update its query and tag filters."""
+            ctx.context.client_tool_call = ClientToolCall(
+                name="set_file_search",
+                arguments={"query": query, "tag_ids": tag_ids or []},
+            )
+            return {"client_tool": "set_file_search", "query": query, "tag_ids": tag_ids or []}
 
         @function_tool(name_override="list_tags")
         async def list_tags_tool(ctx: ChatKitToolContext) -> list[dict[str, object]]:
@@ -728,6 +860,14 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
 
         return [
             list_sources_tool,
+            list_filesystem_tool,
+            find_files_tool,
+            create_folder_tool,
+            update_filesystem_entry_tool,
+            delete_filesystem_entries_tool,
+            set_file_selection_tool,
+            reveal_file_tool,
+            set_file_search_tool,
             list_tags_tool,
             create_tag_tool,
             update_tag_tool,
@@ -758,13 +898,15 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     async def _agent_instructions(_context: Any, _agent: Any) -> str:
         return (
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
-            "Use the direct app tools to list sources, inspect source details and tags, ingest text snippets, search chunks, "
+            "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search chunks, "
             "branch through related semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
             "to replace its published chunks, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
-            "The app's file explorer is the primary source of file input and selection; use selected_source_ids as the retrieval scope when present. "
+            "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
+            "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
+            "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
             "If a selected source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
-            "Prefer the user's selected sources when present. Only delete a source after explicit user confirmation. "
+            "Prefer the user's selected files when present. Only delete files, folders, or sources after explicit user confirmation. "
             "Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."
         )

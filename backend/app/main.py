@@ -21,6 +21,13 @@ from backend.app.schemas import (
     BranchSearchRequest,
     BranchSearchResponse,
     FileListResponse,
+    FilesystemCreateFolderRequest,
+    FilesystemDeleteRequest,
+    FilesystemDeleteResponse,
+    FilesystemEntrySummary,
+    FilesystemListResponse,
+    FilesystemSearchResponse,
+    FilesystemUpdateEntryRequest,
     FreeformRequest,
     ImageGenerationRequest,
     IngestFinalizeResponse,
@@ -114,11 +121,103 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             page_size=page_size,
         )
 
+    @app.get("/api/filesystem")
+    async def list_filesystem_api(
+        user: AuthenticatedUser = Depends(require_active_web_user),
+        folder_id: str | None = Query(default=None),
+    ) -> FilesystemListResponse:
+        try:
+            return await services.sources.list_filesystem(clerk_user_id=user.clerk_user_id, folder_id=folder_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.get("/api/filesystem/search")
+    async def search_filesystem_api(
+        user: AuthenticatedUser = Depends(require_active_web_user),
+        query: str | None = Query(default=None),
+        tag_ids: list[str] | None = Query(default=None),
+        tag_match_mode: Literal["all", "any"] = Query(default="all"),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=100),
+    ) -> FilesystemSearchResponse:
+        try:
+            return await services.sources.search_filesystem(
+                clerk_user_id=user.clerk_user_id,
+                query=query,
+                tag_ids=tag_ids or [],
+                tag_match_mode=tag_match_mode,
+                page=page,
+                page_size=page_size,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.post("/api/filesystem/folders")
+    async def create_folder_api(
+        payload: FilesystemCreateFolderRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> FilesystemEntrySummary:
+        try:
+            return await services.sources.create_folder(
+                clerk_user_id=user.clerk_user_id,
+                parent_id=payload.parent_id,
+                name=payload.name,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.patch("/api/filesystem/entries/{entry_id}")
+    async def update_filesystem_entry_api(
+        entry_id: str,
+        payload: FilesystemUpdateEntryRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> FilesystemEntrySummary:
+        try:
+            return await services.sources.update_filesystem_entry(
+                clerk_user_id=user.clerk_user_id,
+                entry_id=entry_id,
+                name=payload.name,
+                parent_id=payload.parent_id,
+                origin_surface="web",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.post("/api/filesystem/delete")
+    async def delete_filesystem_entries_api(
+        payload: FilesystemDeleteRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> FilesystemDeleteResponse:
+        try:
+            return await services.sources.delete_filesystem_entries(
+                clerk_user_id=user.clerk_user_id,
+                entry_ids=payload.entry_ids,
+                confirm=payload.confirm,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     @app.post("/api/sources")
     async def upload_source_api(
         file: UploadFile = File(...),
         tag_ids: list[str] | None = Form(default=None),
         user_guidance: str | None = Form(default=None),
+        folder_id: str | None = Form(default=None),
+        virtual_name: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(require_active_web_user),
     ) -> IngestFinalizeResponse:
         payload = await file.read()
@@ -132,6 +231,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 tag_ids=tag_ids or [],
                 user_guidance=user_guidance,
                 origin_surface="web",
+                folder_id=folder_id,
+                virtual_name=virtual_name,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

@@ -1,26 +1,35 @@
 import { ChatKit, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
 import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import type { MouseEvent as ReactMouseEvent } from "react";
 
 import {
   authenticatedFetch,
+  createFolder,
   createTag,
   deleteSource,
+  deleteFilesystemEntries,
   getAuthenticatedUser,
   getChatKitConfig,
   getSource,
+  listFilesystem,
   listSources,
   listTags,
   listTasks,
   previewSemanticSplit,
   readSourceContentBlob,
   resplitSource,
+  searchFilesystem,
   setChatKitMetadataGetter,
+  updateFilesystemEntry,
   updateSourceTags,
   uploadSource,
 } from "./lib/api";
 import type {
   AuthUser,
   ChunkSummary,
+  FilesystemBreadcrumb,
+  FilesystemEntrySummary,
+  FilesystemListResponse,
   SourceDetail,
   SourceSummary,
   SplitPreviewResponse,
@@ -47,9 +56,10 @@ const MODEL_CHOICES = [
 
 const TEXT_PREVIEW_LIMIT = 40_000;
 const CHUNK_PREVIEW_LIMIT = 40;
+const SOURCE_TAG_LIMIT = 8;
+const SELECTED_FILE_LIMIT = 10;
 const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
-const SOURCE_TAG_LIMIT = 8;
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -74,6 +84,570 @@ async function loadAllSources(): Promise<{ sources: SourceSummary[]; totalCount:
 }
 
 export function App({ authMode }: AppProps) {
+  const [user, setUser] = useState<AuthUser | null>(null);
+  const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
+  const [searchEntries, setSearchEntries] = useState<FilesystemEntrySummary[]>([]);
+  const [knownEntries, setKnownEntries] = useState<Record<string, FilesystemEntrySummary>>({});
+  const [tags, setTags] = useState<TagSummary[]>([]);
+  const [tasks, setTasks] = useState<TaskSummary[]>([]);
+  const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [sourceQuery, setSourceQuery] = useState("");
+  const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
+  const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
+  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
+  const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
+  const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
+  const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
+  const [newTagName, setNewTagName] = useState("");
+  const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
+  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
+  const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
+  const [status, setStatus] = useState("Opening files.");
+  const [busy, setBusy] = useState(false);
+
+  const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
+  const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
+  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
+  const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
+  const searching = Boolean(sourceQuery.trim() || selectedExplorerTagIds.length);
+  const visibleEntries = searching ? searchEntries : (filesystem?.entries ?? []);
+  const selectedFileEntries = useMemo(
+    () =>
+      selectedSourceIds.flatMap((sourceId) => {
+        const entry = Object.values(knownEntries).find((item) => item.source_id === sourceId);
+        return entry ? [entry] : [];
+      }),
+    [knownEntries, selectedSourceIds],
+  );
+  const hasActiveTasks = useMemo(() => tasks.some(isActiveTask), [tasks]);
+  const selectedSourceId = selectedSource?.id ?? null;
+  const selectedSourceTagChanged = selectedSource
+    ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
+    : false;
+
+  const cacheEntries = useCallback((entries: FilesystemEntrySummary[]): void => {
+    setKnownEntries((current) => {
+      const next = { ...current };
+      for (const entry of entries) {
+        next[entry.id] = entry;
+      }
+      return next;
+    });
+  }, []);
+
+  const loadFolder = useCallback(
+    async (folderId: string | null): Promise<FilesystemListResponse> => {
+      const response = await listFilesystem({ folderId });
+      setFilesystem(response);
+      setCurrentFolderId(response.current.parent_id === null ? null : response.current.id);
+      cacheEntries([response.current, ...response.entries]);
+      setSearchEntries([]);
+      return response;
+    },
+    [cacheEntries],
+  );
+
+  const refreshExplorer = useCallback(async (): Promise<void> => {
+    if (sourceQuery.trim() || selectedExplorerTagIds.length) {
+      const response = await searchFilesystem({
+        query: sourceQuery,
+        tagIds: selectedExplorerTagIds,
+        tagMatchMode: "all",
+        pageSize: 100,
+      });
+      setSearchEntries(response.entries);
+      cacheEntries(response.entries);
+      setStatus(`Found ${response.total_count} matching entr${response.total_count === 1 ? "y" : "ies"}.`);
+      return;
+    }
+    const response = await loadFolder(currentFolderId);
+    setStatus(`${response.current.path} has ${response.entries.length} entr${response.entries.length === 1 ? "y" : "ies"}.`);
+  }, [cacheEntries, currentFolderId, loadFolder, selectedExplorerTagIds, sourceQuery]);
+
+  const refreshAll = useCallback(async (): Promise<void> => {
+    setBusy(true);
+    try {
+      const [me, tagList, taskList] = await Promise.all([getAuthenticatedUser(), listTags(), listTasks()]);
+      setUser(me);
+      setTags(tagList);
+      setTasks(taskList.tasks);
+      const response = await loadFolder(currentFolderId);
+      setStatus(`Ready at ${response.current.path}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not load the workspace.");
+    } finally {
+      setBusy(false);
+    }
+  }, [currentFolderId, loadFolder]);
+
+  const refreshActivity = useCallback(async (): Promise<void> => {
+    try {
+      const detailPromise = selectedSourceId
+        ? getSource(selectedSourceId).catch(() => null)
+        : Promise.resolve<SourceDetail | null>(null);
+      const [tagList, taskList, detail] = await Promise.all([listTags(), listTasks(), detailPromise]);
+      setTags(tagList);
+      setTasks(taskList.tasks);
+      if (detail) {
+        setSelectedSource(detail);
+      }
+      await refreshExplorer();
+      const activeTask = taskList.tasks.find(isActiveTask);
+      if (activeTask) {
+        setStatus(`${activeTask.kind} ${activeTask.status}: ${activeTask.title}.`);
+      }
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not refresh background activity.");
+    }
+  }, [refreshExplorer, selectedSourceId]);
+
+  useEffect(() => {
+    setChatKitMetadataGetter(() => ({
+      origin: "web",
+      selected_source_ids: selectedSourceIds,
+      selected_virtual_paths: selectedFileEntries.map((entry) => entry.path),
+    }));
+    return () => setChatKitMetadataGetter(null);
+  }, [selectedFileEntries, selectedSourceIds]);
+
+  useEffect(() => {
+    void refreshAll();
+  }, [refreshAll]);
+
+  useEffect(() => {
+    const timeoutId = window.setTimeout(() => {
+      void refreshExplorer();
+    }, 180);
+    return () => window.clearTimeout(timeoutId);
+  }, [refreshExplorer]);
+
+  useEffect(() => {
+    if (!hasActiveTasks) {
+      return undefined;
+    }
+    const intervalId = window.setInterval(() => {
+      void refreshActivity();
+    }, 2_500);
+    return () => window.clearInterval(intervalId);
+  }, [hasActiveTasks, refreshActivity]);
+
+  useEffect(() => {
+    setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
+  }, [selectedSource]);
+
+  const openSource = useCallback(async (sourceId: string): Promise<void> => {
+    setStatus("Loading file preview.");
+    try {
+      const detail = await getSource(sourceId);
+      setSelectedSource(detail);
+      setStatus(`Previewing ${detail.virtual_path ?? detail.display_title}.`);
+    } catch (error) {
+      setSelectedSource(null);
+      setStatus(error instanceof Error ? error.message : "Could not load file detail.");
+    }
+  }, []);
+
+  const syncChatSelection = useCallback(
+    (entryIds: string[]): void => {
+      const readySourceIds = entryIds
+        .map((entryId) => knownEntries[entryId])
+        .filter((entry): entry is FilesystemEntrySummary => Boolean(entry))
+        .filter((entry) => entry.kind === "file" && entry.status === "ready" && Boolean(entry.source_id))
+        .map((entry) => entry.source_id as string)
+        .slice(0, SELECTED_FILE_LIMIT);
+      setSelectedSourceIds(Array.from(new Set(readySourceIds)));
+    },
+    [knownEntries],
+  );
+
+  const chooseEntries = useCallback(
+    (entry: FilesystemEntrySummary, event: ReactMouseEvent): void => {
+      setFocusedEntryId(entry.id);
+      setSelectedEntryIds((current) => {
+        const currentVisibleIds = visibleEntries.map((item) => item.id);
+        let next: string[];
+        if (event.shiftKey && focusedEntryId) {
+          const anchorIndex = currentVisibleIds.indexOf(focusedEntryId);
+          const targetIndex = currentVisibleIds.indexOf(entry.id);
+          if (anchorIndex >= 0 && targetIndex >= 0) {
+            const [start, end] = [anchorIndex, targetIndex].sort((left, right) => left - right);
+            next = currentVisibleIds.slice(start, end + 1);
+          } else {
+            next = [entry.id];
+          }
+        } else if (event.metaKey || event.ctrlKey) {
+          next = current.includes(entry.id) ? current.filter((id) => id !== entry.id) : [...current, entry.id];
+        } else {
+          next = [entry.id];
+        }
+        syncChatSelection(next);
+        return next;
+      });
+      if (entry.source_id) {
+        void openSource(entry.source_id);
+      }
+    },
+    [focusedEntryId, openSource, syncChatSelection, visibleEntries],
+  );
+
+  const openEntry = useCallback(
+    (entry: FilesystemEntrySummary): void => {
+      if (entry.kind === "folder") {
+        setSourceQuery("");
+        setSelectedExplorerTagIds([]);
+        setSelectedEntryIds([]);
+        setSelectedSourceIds([]);
+        setFocusedEntryId(null);
+        void loadFolder(entry.id);
+        return;
+      }
+      if (entry.source_id) {
+        void openSource(entry.source_id);
+      }
+    },
+    [loadFolder, openSource],
+  );
+
+  const goToFolder = useCallback(
+    (folderId: string | null): void => {
+      setSourceQuery("");
+      setSelectedExplorerTagIds([]);
+      setSelectedEntryIds([]);
+      setSelectedSourceIds([]);
+      setFocusedEntryId(null);
+      void loadFolder(folderId);
+    },
+    [loadFolder],
+  );
+
+  const createFolderInCurrentFolder = useCallback(async (): Promise<void> => {
+    const name = window.prompt("Folder name", "New folder")?.trim();
+    if (!name) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await createFolder({ parent_id: filesystem?.current.id ?? null, name });
+      await refreshExplorer();
+      setStatus(`Created ${name}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Folder create failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [filesystem?.current.id, refreshExplorer]);
+
+  const renameFocusedEntry = useCallback(async (): Promise<void> => {
+    const entry = selectedEntryIds.length === 1 ? knownEntries[selectedEntryIds[0]] : null;
+    if (!entry) {
+      return;
+    }
+    const name = window.prompt("Rename", entry.name)?.trim();
+    if (!name || name === entry.name) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await updateFilesystemEntry(entry.id, { name });
+      await refreshExplorer();
+      setStatus(`Renamed ${entry.name} to ${name}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Rename failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [knownEntries, refreshExplorer, selectedEntryIds]);
+
+  const deleteSelectedEntries = useCallback(async (): Promise<void> => {
+    if (!selectedEntryIds.length) {
+      return;
+    }
+    const confirmed = window.confirm(`Permanently delete ${selectedEntryIds.length} selected item${selectedEntryIds.length === 1 ? "" : "s"}?`);
+    if (!confirmed) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await deleteFilesystemEntries({ entry_ids: selectedEntryIds, confirm: true });
+      setSelectedEntryIds([]);
+      setSelectedSourceIds([]);
+      setFocusedEntryId(null);
+      setSelectedSource(null);
+      await refreshExplorer();
+      setStatus("Deleted selected items.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Delete failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshExplorer, selectedEntryIds]);
+
+  const moveEntriesToFolder = useCallback(
+    async (entryIds: string[], folderId: string): Promise<void> => {
+      const movingIds = entryIds.filter((entryId) => entryId !== folderId);
+      if (!movingIds.length) {
+        return;
+      }
+      setBusy(true);
+      try {
+        await Promise.all(movingIds.map((entryId) => updateFilesystemEntry(entryId, { parent_id: folderId })));
+        setSelectedEntryIds([]);
+        setSelectedSourceIds([]);
+        await refreshExplorer();
+        setStatus(`Moved ${movingIds.length} item${movingIds.length === 1 ? "" : "s"}.`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Move failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshExplorer],
+  );
+
+  const chooseFiles = useCallback((files: FileList | null): void => {
+    const nextFiles = Array.from(files ?? []);
+    setPendingFiles(nextFiles);
+    setSplitPreview(null);
+    if (nextFiles.length) {
+      setStatus(`Selected ${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} for upload.`);
+    }
+  }, []);
+
+  const previewPendingSplit = useCallback(async (): Promise<void> => {
+    const [file] = pendingFiles;
+    if (!file) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await previewSemanticSplit(file, uploadGuidance);
+      setSplitPreview(response);
+      setStatus(`Previewed ${response.split.chunks.length} proposed chunk${response.split.chunks.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Split preview failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [pendingFiles, uploadGuidance]);
+
+  const handleUpload = useCallback(async (): Promise<void> => {
+    if (!pendingFiles.length) {
+      return;
+    }
+    setBusy(true);
+    try {
+      for (const file of pendingFiles) {
+        await uploadSource(file, uploadGuidance, [], filesystem?.current.id ?? null);
+      }
+      setPendingFiles([]);
+      setSplitPreview(null);
+      await refreshExplorer();
+      setStatus("Upload queued. Semantic chunks will publish in the background.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Upload failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [filesystem?.current.id, pendingFiles, refreshExplorer, uploadGuidance]);
+
+  const toggleExplorerTag = useCallback((tagId: string): void => {
+    setSelectedExplorerTagIds((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    );
+  }, []);
+
+  const clearExplorerFilters = useCallback((): void => {
+    setSourceQuery("");
+    setSelectedExplorerTagIds([]);
+  }, []);
+
+  const createExplorerTag = useCallback(async (): Promise<void> => {
+    const name = newTagName.trim();
+    if (!name) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await createTag({ name });
+      setTags(await listTags());
+      setNewTagName("");
+      setStatus(`Tag ready: ${response.tag?.name ?? name}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tag create failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [newTagName]);
+
+  const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
+    if (!selectedSource) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await updateSourceTags(selectedSource.id, { tag_ids: selectedSourceTagDraftIds });
+      const detail = await getSource(selectedSource.id);
+      setSelectedSource(detail);
+      setTags(await listTags());
+      setTasks((await listTasks()).tasks);
+      await refreshExplorer();
+      setStatus(`Queued tag reindex for ${response.source.virtual_path ?? response.source.display_title}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Tag update failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshExplorer, selectedSource, selectedSourceTagDraftIds]);
+
+  const resplitSelectedSource = useCallback(async (): Promise<void> => {
+    if (!selectedSource) {
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await resplitSource(selectedSource.id, { user_guidance: uploadGuidance });
+      const detail = await getSource(selectedSource.id);
+      setSelectedSource(detail);
+      setTasks((await listTasks()).tasks);
+      await refreshExplorer();
+      setStatus(`Queued re-split for ${response.source.virtual_path ?? response.source.display_title}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Re-split failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshExplorer, selectedSource, uploadGuidance]);
+
+  const toggleSelectedSourceTagDraft = useCallback((tagId: string): void => {
+    setSelectedSourceTagDraftIds((current) =>
+      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
+    );
+  }, []);
+
+  const handleClientTool = useCallback(
+    async (toolCall: { name: string; params: Record<string, unknown> }): Promise<Record<string, unknown>> => {
+      if (toolCall.name === "set_file_selection") {
+        const rawIds = Array.isArray(toolCall.params.source_ids) ? toolCall.params.source_ids : [];
+        const sourceIds = rawIds.filter((id): id is string => typeof id === "string").slice(0, SELECTED_FILE_LIMIT);
+        const mode = typeof toolCall.params.mode === "string" ? toolCall.params.mode : "replace";
+        setSelectedSourceIds((current) => {
+          if (mode === "add") {
+            return Array.from(new Set([...current, ...sourceIds])).slice(0, SELECTED_FILE_LIMIT);
+          }
+          if (mode === "remove") {
+            return current.filter((id) => !sourceIds.includes(id));
+          }
+          return sourceIds;
+        });
+        const entryIds = Object.values(knownEntries)
+          .filter((entry) => entry.source_id && sourceIds.includes(entry.source_id))
+          .map((entry) => entry.id);
+        if (entryIds.length) {
+          setSelectedEntryIds(entryIds);
+          setFocusedEntryId(entryIds[0]);
+        }
+        return { ok: true, selected_source_ids: sourceIds };
+      }
+      if (toolCall.name === "set_file_search") {
+        const query = typeof toolCall.params.query === "string" ? toolCall.params.query : "";
+        const tagIds = Array.isArray(toolCall.params.tag_ids)
+          ? toolCall.params.tag_ids.filter((id): id is string => typeof id === "string")
+          : [];
+        setSourceQuery(query);
+        setSelectedExplorerTagIds(tagIds);
+        return { ok: true, query, tag_ids: tagIds };
+      }
+      if (toolCall.name === "reveal_file") {
+        const sourceId = typeof toolCall.params.source_id === "string" ? toolCall.params.source_id : null;
+        const entryId = typeof toolCall.params.entry_id === "string" ? toolCall.params.entry_id : null;
+        let entry = entryId ? knownEntries[entryId] : null;
+        if (!entry && sourceId) {
+          entry = Object.values(knownEntries).find((item) => item.source_id === sourceId) ?? null;
+        }
+        if (!entry && sourceId) {
+          const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
+          entry = search.entries[0] ?? null;
+          cacheEntries(search.entries);
+        }
+        if (!entry) {
+          return { ok: false, message: "File was not found in the explorer." };
+        }
+        await loadFolder(entry.parent_id);
+        setSelectedEntryIds([entry.id]);
+        setFocusedEntryId(entry.id);
+        if (entry.source_id) {
+          setSelectedSourceIds([entry.source_id]);
+          await openSource(entry.source_id);
+        }
+        return { ok: true, entry_id: entry.id, source_id: entry.source_id, path: entry.path };
+      }
+      return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
+    },
+    [cacheEntries, knownEntries, loadFolder, openSource],
+  );
+
+  return (
+    <main className="app-shell">
+      <WorkspaceHeader
+        authMode={authMode}
+        busy={busy}
+        status={status}
+        tasks={tasks}
+        user={user}
+        onRefresh={() => void refreshAll()}
+      />
+
+      <section className="workspace-grid" aria-label="Semantic workspace">
+        <FileExplorer
+          breadcrumbs={filesystem?.breadcrumbs ?? []}
+          busy={busy}
+          currentFolder={filesystem?.current ?? null}
+          entries={visibleEntries}
+          focusedEntryId={focusedEntryId}
+          newTagName={newTagName}
+          pendingFiles={pendingFiles}
+          searching={searching}
+          selectedEntryIdSet={selectedEntryIdSet}
+          selectedExplorerTagIdSet={selectedExplorerTagIdSet}
+          selectedFileEntries={selectedFileEntries}
+          selectedSource={selectedSource}
+          selectedSourceIdSet={selectedSourceIdSet}
+          selectedSourceTagChanged={selectedSourceTagChanged}
+          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          sourceQuery={sourceQuery}
+          splitPreview={splitPreview}
+          tags={tags}
+          uploadGuidance={uploadGuidance}
+          onChooseEntries={chooseEntries}
+          onChooseFiles={chooseFiles}
+          onClearFilters={clearExplorerFilters}
+          onCreateFolder={() => void createFolderInCurrentFolder()}
+          onCreateTag={() => void createExplorerTag()}
+          onDeleteSelected={() => void deleteSelectedEntries()}
+          onDropEntries={(entryIds, folderId) => void moveEntriesToFolder(entryIds, folderId)}
+          onGoToFolder={goToFolder}
+          onNewTagNameChange={setNewTagName}
+          onOpenEntry={openEntry}
+          onPreviewSplit={() => void previewPendingSplit()}
+          onRenameSelected={() => void renameFocusedEntry()}
+          onResplit={() => void resplitSelectedSource()}
+          onSaveTags={() => void saveSelectedSourceTags()}
+          onSourceQueryChange={setSourceQuery}
+          onTagToggle={toggleSelectedSourceTagDraft}
+          onToggleExplorerTag={toggleExplorerTag}
+          onUpload={() => void handleUpload()}
+          onUploadGuidanceChange={setUploadGuidance}
+        />
+
+        <aside className="chat-panel" aria-label="Semantic copilot">
+          <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={handleClientTool} />
+        </aside>
+      </section>
+    </main>
+  );
+}
+
+function LegacyApp({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [sources, setSources] = useState<SourceSummary[]>([]);
   const [tags, setTags] = useState<TagSummary[]>([]);
@@ -475,12 +1049,336 @@ export function App({ authMode }: AppProps) {
         />
 
         <aside className="chat-panel" aria-label="Semantic copilot">
-          <ChatPane selectedSourceIds={selectedSourceIds} />
+          <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={async () => ({ ok: false })} />
         </aside>
       </section>
     </main>
   );
 }
+
+const FileExplorer = memo(function FileExplorer({
+  breadcrumbs,
+  busy,
+  currentFolder,
+  entries,
+  focusedEntryId,
+  newTagName,
+  pendingFiles,
+  searching,
+  selectedEntryIdSet,
+  selectedExplorerTagIdSet,
+  selectedFileEntries,
+  selectedSource,
+  selectedSourceIdSet,
+  selectedSourceTagChanged,
+  selectedSourceTagDraftIdSet,
+  sourceQuery,
+  splitPreview,
+  tags,
+  uploadGuidance,
+  onChooseEntries,
+  onChooseFiles,
+  onClearFilters,
+  onCreateFolder,
+  onCreateTag,
+  onDeleteSelected,
+  onDropEntries,
+  onGoToFolder,
+  onNewTagNameChange,
+  onOpenEntry,
+  onPreviewSplit,
+  onRenameSelected,
+  onResplit,
+  onSaveTags,
+  onSourceQueryChange,
+  onTagToggle,
+  onToggleExplorerTag,
+  onUpload,
+  onUploadGuidanceChange,
+}: {
+  breadcrumbs: FilesystemBreadcrumb[];
+  busy: boolean;
+  currentFolder: FilesystemEntrySummary | null;
+  entries: FilesystemEntrySummary[];
+  focusedEntryId: string | null;
+  newTagName: string;
+  pendingFiles: File[];
+  searching: boolean;
+  selectedEntryIdSet: Set<string>;
+  selectedExplorerTagIdSet: Set<string>;
+  selectedFileEntries: FilesystemEntrySummary[];
+  selectedSource: SourceDetail | null;
+  selectedSourceIdSet: Set<string>;
+  selectedSourceTagChanged: boolean;
+  selectedSourceTagDraftIdSet: Set<string>;
+  sourceQuery: string;
+  splitPreview: SplitPreviewResponse | null;
+  tags: TagSummary[];
+  uploadGuidance: string;
+  onChooseEntries: (entry: FilesystemEntrySummary, event: ReactMouseEvent) => void;
+  onChooseFiles: (files: FileList | null) => void;
+  onClearFilters: () => void;
+  onCreateFolder: () => void;
+  onCreateTag: () => void;
+  onDeleteSelected: () => void;
+  onDropEntries: (entryIds: string[], folderId: string) => void;
+  onGoToFolder: (folderId: string | null) => void;
+  onNewTagNameChange: (value: string) => void;
+  onOpenEntry: (entry: FilesystemEntrySummary) => void;
+  onPreviewSplit: () => void;
+  onRenameSelected: () => void;
+  onResplit: () => void;
+  onSaveTags: () => void;
+  onSourceQueryChange: (value: string) => void;
+  onTagToggle: (tagId: string) => void;
+  onToggleExplorerTag: (tagId: string) => void;
+  onUpload: () => void;
+  onUploadGuidanceChange: (value: string) => void;
+}) {
+  const selectedCount = selectedEntryIdSet.size;
+  const selectedFileLabel =
+    selectedFileEntries.length === 1 ? "1 file selected" : `${selectedFileEntries.length} files selected`;
+  const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
+  return (
+    <aside className="explorer-pane filesystem-pane" aria-label="Files">
+      <div className="explorer-commandbar">
+        <button type="button" className="secondary-button" onClick={() => onGoToFolder(currentFolder?.parent_id ?? null)} disabled={busy || !currentFolder?.parent_id}>
+          Up
+        </button>
+        <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy || searching}>
+          New Folder
+        </button>
+        <button type="button" className="secondary-button" onClick={onRenameSelected} disabled={busy || selectedCount !== 1}>
+          Rename
+        </button>
+        <button type="button" className="secondary-button danger-button" onClick={onDeleteSelected} disabled={busy || !selectedCount}>
+          Delete
+        </button>
+        <div className="explorer-selection-summary" title={selectedFileEntries.map((entry) => entry.path).join(", ")}>
+          <strong>{selectedFileLabel}</strong>
+          <span>{selectedFileEntries.slice(0, 3).map((entry) => entry.name).join(", ") || "No ready files"}</span>
+        </div>
+      </div>
+
+      <div className="explorer-filterbar">
+        <label className="filesystem-query">
+          <span>Query</span>
+          <input
+            value={sourceQuery}
+            onChange={(event) => onSourceQueryChange(event.currentTarget.value)}
+            placeholder="Search files and paths"
+          />
+        </label>
+        <div className="tag-strip filesystem-tags" aria-label="Tags">
+          {tags.map((tag) => (
+            <button
+              key={tag.id}
+              type="button"
+              aria-pressed={selectedExplorerTagIdSet.has(tag.id)}
+              className={selectedExplorerTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
+              onClick={() => onToggleExplorerTag(tag.id)}
+            >
+              {tag.name}
+            </button>
+          ))}
+          {!tags.length ? <span>No tags</span> : null}
+        </div>
+        <button type="button" className="secondary-button" onClick={onClearFilters} disabled={!searching}>
+          Clear
+        </button>
+        <div className="tag-create-row compact-tag-create">
+          <input
+            aria-label="New tag name"
+            value={newTagName}
+            onChange={(event) => onNewTagNameChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onCreateTag();
+              }
+            }}
+            placeholder="New tag"
+          />
+          <button type="button" className="secondary-button" onClick={onCreateTag} disabled={busy || !newTagName.trim()}>
+            Add
+          </button>
+        </div>
+      </div>
+
+      <nav className="breadcrumb-row" aria-label="Folder path">
+        {breadcrumbs.map((crumb, index) => {
+          const current = index === breadcrumbs.length - 1;
+          return (
+            <button
+              key={crumb.id}
+              type="button"
+              className={current ? "breadcrumb-button current" : "breadcrumb-button"}
+              onClick={() => {
+                if (!current) {
+                  onGoToFolder(crumb.id);
+                }
+              }}
+              disabled={current}
+            >
+              {crumb.name || "Files"}
+            </button>
+          );
+        })}
+      </nav>
+
+      <div className="filesystem-layout">
+        <section className="file-browser" aria-label="File list">
+          <div className="file-list-header">
+            <span>Name</span>
+            <span>Tags</span>
+            <span>Status</span>
+            <span>Size</span>
+            <span>Modified</span>
+          </div>
+          <div className="file-rows" role="treegrid" aria-label="Files and folders">
+            {entries.map((entry) => (
+              <FileEntryRow
+                key={entry.id}
+                entry={entry}
+                dragEntryIds={dragEntryIds.length ? dragEntryIds : [entry.id]}
+                focused={focusedEntryId === entry.id}
+                selected={selectedEntryIdSet.has(entry.id) || (entry.source_id ? selectedSourceIdSet.has(entry.source_id) : false)}
+                onChoose={onChooseEntries}
+                onDropEntries={onDropEntries}
+                onOpen={onOpenEntry}
+              />
+            ))}
+            {!entries.length ? <div className="empty-file-list">{searching ? "No matching entries." : "Folder is empty."}</div> : null}
+          </div>
+
+          <section className="upload-strip filesystem-upload" aria-label="Upload source">
+            <label className="file-picker">
+              <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
+              <span>{pendingFiles.length ? `${pendingFiles.length} selected` : "Choose files"}</span>
+            </label>
+            <textarea
+              className="compact-textarea"
+              value={uploadGuidance}
+              onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
+              placeholder="Semantic splitting guidance"
+            />
+            <div className="button-row">
+              <button type="button" className="secondary-button" onClick={onPreviewSplit} disabled={busy || !pendingFiles.length}>
+                Preview
+              </button>
+              <button type="button" onClick={onUpload} disabled={busy || !pendingFiles.length}>
+                Upload
+              </button>
+            </div>
+            {pendingFiles.length ? <p className="pending-file-list">{pendingFiles.map((file) => file.name).join(", ")}</p> : null}
+            {splitPreview ? (
+              <div className="split-preview-summary">
+                <strong>{splitPreview.split.chunks.length} proposed chunks</strong>
+                <span>{splitPreview.split.tags.join(", ") || "no tags"}</span>
+              </div>
+            ) : null}
+          </section>
+        </section>
+
+        <div className="explorer-detail" aria-label="File detail">
+          <SourcePreview
+            busy={busy}
+            selectedSource={selectedSource}
+            selectedSourceTagChanged={selectedSourceTagChanged}
+            selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+            tags={tags}
+            uploadGuidance={uploadGuidance}
+            onSaveTags={onSaveTags}
+            onTagToggle={onTagToggle}
+            onUploadGuidanceChange={onUploadGuidanceChange}
+            onResplit={onResplit}
+          />
+        </div>
+      </div>
+    </aside>
+  );
+});
+
+const FileEntryRow = memo(function FileEntryRow({
+  dragEntryIds,
+  entry,
+  focused,
+  selected,
+  onChoose,
+  onDropEntries,
+  onOpen,
+}: {
+  dragEntryIds: string[];
+  entry: FilesystemEntrySummary;
+  focused: boolean;
+  selected: boolean;
+  onChoose: (entry: FilesystemEntrySummary, event: ReactMouseEvent) => void;
+  onDropEntries: (entryIds: string[], folderId: string) => void;
+  onOpen: (entry: FilesystemEntrySummary) => void;
+}) {
+  const rowClassName = [
+    selected ? "selected-file-row" : "",
+    focused ? "active-file-row" : "",
+    entry.kind === "folder" ? "folder-row" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  return (
+    <div
+      role="row"
+      tabIndex={0}
+      className={rowClassName || undefined}
+      draggable
+      onClick={(event) => onChoose(entry, event)}
+      onDoubleClick={() => onOpen(entry)}
+      onDragStart={(event) => {
+        event.dataTransfer.setData("application/x-entry-ids", JSON.stringify(dragEntryIds.includes(entry.id) ? dragEntryIds : [entry.id]));
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      onDragOver={(event) => {
+        if (entry.kind === "folder") {
+          event.preventDefault();
+          event.dataTransfer.dropEffect = "move";
+        }
+      }}
+      onDrop={(event) => {
+        if (entry.kind !== "folder") {
+          return;
+        }
+        event.preventDefault();
+        const payload = event.dataTransfer.getData("application/x-entry-ids");
+        const parsed = safeJsonStringArray(payload);
+        if (parsed.length) {
+          onDropEntries(parsed, entry.id);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          onOpen(entry);
+        }
+      }}
+    >
+      <span role="cell" className="filesystem-name-cell">
+        <span className={entry.kind === "folder" ? "entry-icon folder-icon" : "entry-icon file-icon"}>{entry.kind === "folder" ? "" : entryTypeLabel(entry)}</span>
+        <span>
+          <strong>{entry.name || "Files"}</strong>
+          <small>{entry.path}</small>
+        </span>
+      </span>
+      <span role="cell" className="file-tag-list">
+        {entry.tags.slice(0, 2).map((tag) => (
+          <span key={tag.id}>{tag.name}</span>
+        ))}
+        {entry.tags.length > 2 ? <span>+{entry.tags.length - 2}</span> : null}
+        {entry.kind === "file" && !entry.tags.length ? <span>untagged</span> : null}
+      </span>
+      <span role="cell">{entry.status ? <span className={`status-badge status-${entry.status}`}>{entry.status}</span> : ""}</span>
+      <span role="cell" className="muted-cell">{entry.byte_size === null ? "" : formatBytes(entry.byte_size)}</span>
+      <span role="cell" className="muted-cell">{formatDate(entry.updated_at)}</span>
+    </div>
+  );
+});
 
 function WorkspaceHeader({
   authMode,
@@ -930,7 +1828,7 @@ function SourcePreview({
     return (
       <section className="source-preview empty-preview">
         <h2>Select a file to preview it.</h2>
-        <p>Open files here, then use the file checkboxes to scope ChatKit.</p>
+        <p>Selected ready files become the ChatKit file scope.</p>
       </section>
     );
   }
@@ -1111,6 +2009,23 @@ const ChunkRow = memo(function ChunkRow({ chunk }: { chunk: ChunkSummary }) {
   );
 });
 
+function entryTypeLabel(entry: FilesystemEntrySummary): string {
+  if (entry.kind === "folder") {
+    return "";
+  }
+  const extension = entry.name.split(".").pop()?.slice(0, 4).toUpperCase();
+  return extension && extension !== entry.name.toUpperCase() ? extension : (entry.source_kind ?? "file").slice(0, 4).toUpperCase();
+}
+
+function safeJsonStringArray(value: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
 function sameStringSet(left: string[], right: string[]): boolean {
   if (left.length !== right.length) {
     return false;
@@ -1187,7 +2102,13 @@ function formatLocator(chunk: ChunkSummary): string {
   return chunk.strategy_label;
 }
 
-const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceIds: string[] }) {
+const ChatPane = memo(function ChatPane({
+  onClientTool,
+  selectedSourceIds,
+}: {
+  onClientTool: (toolCall: { name: string; params: Record<string, unknown> }) => Promise<Record<string, unknown>>;
+  selectedSourceIds: string[];
+}) {
   const chatKitConfig = getChatKitConfig();
   const selectedFileScopeLabel =
     selectedSourceIds.length === 1 ? "Ask about the selected file." : `Ask about the ${selectedSourceIds.length} selected files.`;
@@ -1233,8 +2154,9 @@ const ChatPane = memo(function ChatPane({ selectedSourceIds }: { selectedSourceI
       threadItemActions: {
         feedback: false,
       },
+      onClientTool,
     }),
-    [chatKitConfig.domainKey, chatKitConfig.url, selectedFileScopeLabel, selectedSourceIds.length],
+    [chatKitConfig.domainKey, chatKitConfig.url, onClientTool, selectedFileScopeLabel, selectedSourceIds.length],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;

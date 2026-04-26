@@ -10,6 +10,102 @@
 - [x] Implement the current baseline phases below.
 - [x] Keep this file updated as phases move from planned to complete.
 
+## Current Implementation Pass: Virtual Filesystem Explorer Rebuild
+
+Status: completed.
+
+Intent:
+
+Replace the source-list pane with a normal, DB-backed virtual filesystem explorer. Files still map to stored bucket objects, OpenAI Files API originals, OpenAI vector-store chunk files, and app-owned source/chunk records, but the user-facing model is now folders, paths, tags, query, preview, and selected files for ChatKit.
+
+Decisions:
+
+- Use explicit folder rows in a new `filesystem_entry` table.
+- Keep `SourceFile` as the app-core record for ingested files and link each file entry one-to-one to a source.
+- Allow duplicate file display titles across folders; path uniqueness is now enforced by `(library_id, normalized_path)`.
+- Keep deletes permanent with explicit confirmation.
+- Cap selected ready files sent to ChatKit at 10.
+- Send selected files to ChatKit as OpenAI `input_file` items using `user_data` original file uploads; vector-store search remains the discovery and tag-filter path.
+- Keep tags as app-owned metadata and expose them as filterable OpenAI vector-store attributes using canonical `tags` plus bounded exact-match slots.
+
+Tasks:
+
+- [x] Add virtual filesystem ORM models, Alembic migration, root/folder/source backfill, and source path fields.
+- [x] Add REST APIs for listing folders, searching filesystem entries, creating folders, renaming/moving entries, and permanent recursive deletes.
+- [x] Update `SourceService.ingest_source` so uploads land in the current virtual folder and create file entries.
+- [x] Update vector attributes to v3 with `virtual_path` and `virtual_name` while staying within the 16-key OpenAI metadata limit.
+- [x] Add selected-file OpenAI file-input preparation for ChatKit, including re-uploading legacy originals as `user_data` when needed.
+- [x] Add ChatKit tools for filesystem listing/search/mutation and client-tool coordination (`set_file_selection`, `reveal_file`, `set_file_search`).
+- [x] Add matching MCP tools and capability matrix entries for filesystem operations.
+- [x] Rebuild the web Files pane as a compact explorer with breadcrumbs, rows, query, tags, create folder, rename, delete, drag-to-folder move, upload, and preview.
+- [x] Wire ChatKit client tools into the web explorer.
+- [x] Run `npm run typecheck`.
+- [x] Run `./.venv/bin/pyright`.
+- [x] Run focused backend migration/vector/contract tests.
+- [x] Run `npm run build`.
+- [x] Update/verify Playwright explorer coverage.
+- [x] Commit this virtual filesystem pass.
+
+Implementation notes:
+
+- The new explorer is intentionally operational: a compact toolbar, breadcrumbs, list rows, tags/query controls, current-folder upload, and a preview pane.
+- ChatKit attachments remain hidden in the web composer; selected ready files are supplied by explorer selection and attached server-side as `input_file` content.
+- Rename and move queue reindex tasks for ready files with published chunks so vector-store metadata does not drift from virtual paths.
+- Recursive folder deletion deletes descendant sources through the existing OpenAI/bucket cleanup path before deleting folder rows.
+- In-process source task concurrency now defaults to one runner because live vector-store publishing showed intermittent OpenAI vector-store file polling failures when multiple sources published chunks concurrently.
+- Verification completed:
+  - `npm run typecheck`
+  - `npm run build`
+  - `./.venv/bin/pyright`
+  - `./.venv/bin/pytest tests/test_migrations.py tests/test_vector_attributes.py tests/integration/test_app_contracts.py -q`
+  - `npm run test:e2e -- --grep "workspace shell"`
+  - `npm run test:e2e -- --project=chromium-desktop --grep "explorer-selected"`
+
+## Planned Feature: Research Importer For Fast Library Seeding
+
+Status: planned.
+
+Note:
+
+This section was written by a separate agent while another agent was actively implementing related work. The currently implementing agent should also keep `plan.md` updated as decisions change, phases complete, or implementation details diverge.
+
+Intent:
+
+Add a persistent in-app research importer that can quickly seed a user's library from a small starting point, then discover and queue related references for review. The first supported flow should prioritize public URLs, PDFs/arXiv-style links, pasted text, uploaded files, and manually exported LinkedIn article content. Do not build authenticated LinkedIn scraping in v1 because the LinkedIn activity page is login-gated from this environment and scraping it would be brittle.
+
+Decisions:
+
+- Build this as an app backend feature, not a one-off Codex skill or hosted-container workflow.
+- Keep `SourceService.ingest_source` as the canonical path for creating sources, chunks, tags, tasks, and OpenAI vector-store files.
+- Use OpenAI `web_search` for discovery, query expansion, and cited candidate finding, but keep fetching, normalization, dedupe, approval state, ingestion, and provenance in our backend.
+- Use a review queue before reference ingestion. The initial seed may be ingested directly; discovered references should be pending until approved.
+- Default expansion should be bounded: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task unless settings are changed.
+- Defer deep-research/report-first flows to a later enhancement. They can eventually produce a curated bibliography that feeds the same importer.
+
+Implementation outline:
+
+- Add a `ResearchImportService` that accepts seeds as public URL, PDF/arXiv URL, uploaded file, pasted text, or exported LinkedIn HTML/text.
+- Add persistent candidate records with URL, title, source type, depth, parent candidate/source, rationale, score, status, linked source ID, provenance metadata, and content hash.
+- Add provenance metadata to source records, likely through a `SourceFile.metadata_json` column, including original URL, DOI/arXiv ID when known, import task/candidate IDs, parent source, content hash, and fetch timestamp.
+- Add fetch/normalize helpers:
+  - PDFs store original PDF bytes.
+  - HTML pages become cleaned Markdown or plain text.
+  - arXiv abstract URLs resolve to PDFs when possible.
+  - LinkedIn imports accept pasted/exported content only.
+  - Paywalls, login walls, and anti-bot gates should not be bypassed.
+- Add REST endpoints to create an import task, read task candidates, approve/reject candidates, and ingest approved candidates.
+- Expose matching ChatKit and MCP tools for starting imports, listing candidates, approving/rejecting candidates, and ingesting approved candidates.
+- Add a web UI "Research import" panel near upload with seed input, bounded depth/candidate controls, task progress, and candidate approve/reject/ingest actions.
+- Update `backend/app/core/capabilities.py`, Pydantic schemas, frontend TypeScript contracts, and task kind unions to include `research_import`.
+
+Test plan:
+
+- Integration test that a pasted/text seed with explicit URLs creates a `research_import` task, ingests the seed when requested, and leaves references as pending candidates.
+- Integration test that approving candidates and ingesting approved items creates normal source records through `SourceService.ingest_source`.
+- Unit tests for URL/PDF/arXiv/HTML normalization, dedupe/content hash behavior, and LinkedIn exported HTML cleanup.
+- Contract tests for REST schemas, frontend types, ChatKit/MCP tool names, capability matrix, and migrations.
+- Existing ingest, search, QA, vector attribute, PDF batch, and Playwright checks should continue to pass.
+
 ## Current Implementation Pass: Explorer Plus ChatKit Teardown/Rebuild
 
 Status: completed.

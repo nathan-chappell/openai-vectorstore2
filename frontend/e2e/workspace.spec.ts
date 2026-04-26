@@ -35,7 +35,6 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await page.goto("/");
 
   await expect(page.getByText("Local dev auth")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Files", exact: true })).toBeVisible();
   if (testInfo.project.name === "chromium-desktop") {
     await expect(page.getByText("Recent Tasks")).toBeVisible();
   }
@@ -43,9 +42,9 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".explorer-detail")).toBeVisible();
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.locator("openai-chatkit")).toBeVisible();
-  await expect(page.getByPlaceholder("Search files, tags, type, status")).toBeVisible();
-  await expect(page.getByText("0 files for chat")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Select visible" })).toBeDisabled();
+  await expect(page.getByPlaceholder("Search files and paths")).toBeVisible();
+  await expect(page.getByText("0 files selected")).toBeVisible();
+  await expect(page.getByRole("button", { name: "New Folder" })).toBeEnabled();
   await expect(page.getByText("Choose files")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
 
@@ -64,11 +63,11 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await page.goto("/");
     await expect(page.getByText("Local dev auth")).toBeVisible();
     await waitForChatKit(page);
-    await page.locator(".upload-strip textarea").fill("Preserve the named fields and short notes as retrievable facts.");
+    await page.locator(".filesystem-upload textarea").fill("Preserve the named fields and short notes as retrievable facts.");
 
-    await page.locator(".upload-strip input[type='file']").setInputFiles(samplePaths);
+    await page.locator(".filesystem-upload input[type='file']").setInputFiles(samplePaths);
     await expect(page.getByText("2 selected")).toBeVisible();
-    await page.locator(".upload-strip").getByRole("button", { name: "Upload" }).click();
+    await page.locator(".filesystem-upload").getByRole("button", { name: "Upload" }).click();
 
     const queuedSources = await Promise.all(
       sampleFilenames.map((filename) => waitForSourceRecordByFilename(request, filename, 60_000)),
@@ -79,14 +78,13 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
       expect(source.status).toBe("ready");
     }
     await page.getByRole("button", { name: "Refresh" }).click();
-    for (const source of readySources) {
-      await expect(page.getByLabel(`Select ${source.display_title} for chat`)).toBeVisible();
-      await page.getByLabel(`Select ${source.display_title} for chat`).check();
-    }
-    await expect(page.getByText("2 files for chat")).toBeVisible();
-    await expect(page.locator(".chat-scope-strip")).toContainText(readySources[0].display_title);
-    await page.locator(".file-name-button").filter({ hasText: readySources[0].display_title }).click();
+    await page.locator(".file-rows [role='row']").filter({ hasText: readySources[0].original_filename }).click();
     await expect(page.locator(".explorer-detail")).toContainText("Cobalt Maple");
+    await page.locator(".file-rows [role='row']").filter({ hasText: readySources[1].original_filename }).click({
+      modifiers: ["Control"],
+    });
+    await expect(page.getByText("2 files selected")).toBeVisible();
+    await expect(page.locator(".explorer-selection-summary")).toContainText(readySources[0].original_filename);
     await page.screenshot({ path: testInfo.outputPath("workspace-sample-library.png"), fullPage: true });
 
     await sendChatKitMessage(

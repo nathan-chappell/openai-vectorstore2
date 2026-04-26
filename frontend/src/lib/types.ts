@@ -42,6 +42,9 @@ export type ChunkLocator = {
 
 export type SourceSummary = {
   id: string;
+  filesystem_entry_id: string | null;
+  virtual_name: string | null;
+  virtual_path: string | null;
   display_title: string;
   original_filename: string;
   media_type: string;
@@ -54,6 +57,68 @@ export type SourceSummary = {
   updated_at: string;
   tags: TagSummary[];
   openai_original_file_id: string | null;
+  openai_original_file_purpose: string | null;
+};
+
+export type FilesystemEntryKind = "folder" | "file";
+
+export type FilesystemEntrySummary = {
+  id: string;
+  kind: FilesystemEntryKind;
+  name: string;
+  path: string;
+  parent_id: string | null;
+  source_id: string | null;
+  source_kind: SourceKind | null;
+  media_type: string | null;
+  status: SourceStatus | null;
+  byte_size: number | null;
+  chunk_count: number | null;
+  tags: TagSummary[];
+  openai_original_file_id: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type FilesystemBreadcrumb = {
+  id: string;
+  name: string;
+  path: string;
+};
+
+export type FilesystemListResponse = {
+  current: FilesystemEntrySummary;
+  breadcrumbs: FilesystemBreadcrumb[];
+  entries: FilesystemEntrySummary[];
+};
+
+export type FilesystemSearchResponse = {
+  query: string | null;
+  entries: FilesystemEntrySummary[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+export type FilesystemCreateFolderRequest = {
+  parent_id?: string | null;
+  name: string;
+};
+
+export type FilesystemUpdateEntryRequest = {
+  name?: string | null;
+  parent_id?: string | null;
+};
+
+export type FilesystemDeleteRequest = {
+  entry_ids: string[];
+  confirm: boolean;
+};
+
+export type FilesystemDeleteResponse = {
+  deleted_entry_ids: string[];
+  deleted_source_ids: string[];
 };
 
 export type ChunkSummary = {

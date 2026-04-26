@@ -11,6 +11,7 @@ OpenAIAttributes: TypeAlias = dict[str, OpenAIAttributeValue]
 
 SourceKind: TypeAlias = Literal["pdf", "text", "conversation", "image", "audio", "video", "other"]
 SourceStatus: TypeAlias = Literal["processing", "ready", "failed"]
+FilesystemEntryKind: TypeAlias = Literal["folder", "file"]
 TaskKind: TypeAlias = Literal[
     "ingest", "resplit", "reindex", "qa", "freeform", "branch_search", "image_gen", "voice_gen"
 ]
@@ -84,6 +85,9 @@ class SemanticSplitResult(BaseModel):
 
 class LibrarySourceSummary(BaseModel):
     id: str
+    filesystem_entry_id: str | None = None
+    virtual_name: str | None = None
+    virtual_path: str | None = None
     display_title: str
     original_filename: str
     media_type: str
@@ -96,6 +100,66 @@ class LibrarySourceSummary(BaseModel):
     updated_at: datetime
     tags: list[TagSummary] = Field(default_factory=list)
     openai_original_file_id: str | None = None
+    openai_original_file_purpose: str | None = None
+
+
+class FilesystemEntrySummary(BaseModel):
+    id: str
+    kind: FilesystemEntryKind
+    name: str
+    path: str
+    parent_id: str | None = None
+    source_id: str | None = None
+    source_kind: SourceKind | None = None
+    media_type: str | None = None
+    status: SourceStatus | None = None
+    byte_size: int | None = None
+    chunk_count: int | None = None
+    tags: list[TagSummary] = Field(default_factory=list)
+    openai_original_file_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class FilesystemBreadcrumb(BaseModel):
+    id: str
+    name: str
+    path: str
+
+
+class FilesystemListResponse(BaseModel):
+    current: FilesystemEntrySummary
+    breadcrumbs: list[FilesystemBreadcrumb] = Field(default_factory=list)
+    entries: list[FilesystemEntrySummary] = Field(default_factory=list)
+
+
+class FilesystemSearchResponse(BaseModel):
+    query: str | None = None
+    entries: list[FilesystemEntrySummary] = Field(default_factory=list)
+    total_count: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class FilesystemCreateFolderRequest(BaseModel):
+    parent_id: str | None = None
+    name: str = Field(min_length=1, max_length=255)
+
+
+class FilesystemUpdateEntryRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=255)
+    parent_id: str | None = None
+
+
+class FilesystemDeleteRequest(BaseModel):
+    entry_ids: list[str] = Field(min_length=1, max_length=100)
+    confirm: bool = False
+
+
+class FilesystemDeleteResponse(BaseModel):
+    deleted_entry_ids: list[str] = Field(default_factory=list)
+    deleted_source_ids: list[str] = Field(default_factory=list)
 
 
 class ChunkSummary(BaseModel):

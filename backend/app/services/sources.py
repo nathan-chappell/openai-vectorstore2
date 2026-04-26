@@ -21,7 +21,17 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.models import AppTask, AppUser, SemanticChunk, SourceFile, SourceTagLink, Tag, UserLibrary, new_id
+from backend.app.models import (
+    AppTask,
+    AppUser,
+    FilesystemEntry,
+    SemanticChunk,
+    SourceFile,
+    SourceTagLink,
+    Tag,
+    UserLibrary,
+    new_id,
+)
 from backend.app.schemas import (
     BranchSearchLevel,
     BranchSearchRequest,
@@ -30,6 +40,11 @@ from backend.app.schemas import (
     ChunkLocator,
     ChunkSummary,
     FileListResponse,
+    FilesystemBreadcrumb,
+    FilesystemDeleteResponse,
+    FilesystemEntrySummary,
+    FilesystemListResponse,
+    FilesystemSearchResponse,
     IngestFinalizeResponse,
     LibrarySourceDetail,
     LibrarySourceSummary,
@@ -84,7 +99,8 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
-VECTOR_ATTRIBUTES_VERSION = 2
+VECTOR_ATTRIBUTES_VERSION = 3
+CHAT_FILE_INPUT_LIMIT = 10
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
 
 
@@ -101,6 +117,16 @@ class PdfTextBatch:
         if self.start_page == self.end_page:
             return f"page {self.start_page}"
         return f"pages {self.start_page}-{self.end_page}"
+
+
+@dataclass(frozen=True, slots=True)
+class SourceFileInput:
+    source_id: str
+    file_id: str
+    filename: str
+    virtual_path: str
+    display_title: str
+    media_type: str
 
 
 class SourceService:
@@ -346,6 +372,9 @@ class SourceService:
                     for source in sources
                     if normalized_query in source.display_title.casefold()
                     or normalized_query in source.original_filename.casefold()
+                    or normalized_query in source.id.casefold()
+                    or normalized_query in _virtual_name(source).casefold()
+                    or normalized_query in _virtual_path(source).casefold()
                     or normalized_query in source.media_type.casefold()
                     or normalized_query in source.source_kind.casefold()
                 ]
@@ -371,6 +400,415 @@ class SourceService:
                 page_size=page_size,
                 has_more=end < len(sources),
             )
+
+    async def list_filesystem(self, *, clerk_user_id: str, folder_id: str | None = None) -> FilesystemListResponse:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            library = await self._library_for_user(session, app_user=app_user)
+            root = await self._root_entry_for_library(session, library=library)
+            folder = (
+                root
+                if folder_id is None
+                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=folder_id)
+            )
+            if folder.kind != "folder":
+                raise ValueError("Only folders can be listed.")
+            entries = (
+                (
+                    await session.execute(
+                        select(FilesystemEntry)
+                        .where(FilesystemEntry.library_id == library.id, FilesystemEntry.parent_id == folder.id)
+                        .options(
+                            selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
+                            selectinload(FilesystemEntry.source_file)
+                            .selectinload(SourceFile.tag_links)
+                            .selectinload(SourceTagLink.tag),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            await session.commit()
+            return FilesystemListResponse(
+                current=self._filesystem_entry_summary(folder),
+                breadcrumbs=await self._breadcrumbs_for_entry(session, entry=folder),
+                entries=[self._filesystem_entry_summary(entry) for entry in _sort_filesystem_entries(entries)],
+            )
+
+    async def search_filesystem(
+        self,
+        *,
+        clerk_user_id: str,
+        query: str | None,
+        tag_ids: list[str],
+        tag_match_mode: TagMatchMode,
+        page: int,
+        page_size: int,
+    ) -> FilesystemSearchResponse:
+        normalized_query = query.casefold().strip() if isinstance(query, str) else ""
+        vector_source_ids: list[str] = []
+        if normalized_query:
+            hits = await self.search_chunks(
+                clerk_user_id=clerk_user_id,
+                request=SearchRequest(
+                    query=normalized_query,
+                    tag_ids=tag_ids,
+                    tag_match_mode=tag_match_mode,
+                    max_results=min(24, max(page * page_size, page_size)),
+                ),
+            )
+            vector_source_ids = list(dict.fromkeys(hit.source_file_id for hit in hits))
+
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            library = await self._library_for_user(session, app_user=app_user)
+            await self._root_entry_for_library(session, library=library)
+            await session.commit()
+            entries = (
+                (
+                    await session.execute(
+                        select(FilesystemEntry)
+                        .where(
+                            FilesystemEntry.library_id == library.id,
+                            FilesystemEntry.normalized_path != "/",
+                        )
+                        .options(
+                            selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
+                            selectinload(FilesystemEntry.source_file)
+                            .selectinload(SourceFile.tag_links)
+                            .selectinload(SourceTagLink.tag),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            selected_tag_ids = set(tag_ids)
+            vector_source_id_set = set(vector_source_ids)
+
+            def matches_entry(entry: FilesystemEntry) -> bool:
+                source = entry.source_file
+                if selected_tag_ids:
+                    if source is None:
+                        return False
+                    source_tag_ids = {link.tag_id for link in source.tag_links}
+                    if tag_match_mode == "all" and not selected_tag_ids.issubset(source_tag_ids):
+                        return False
+                    if tag_match_mode == "any" and not (selected_tag_ids & source_tag_ids):
+                        return False
+                if not normalized_query:
+                    return True
+                name_matches = normalized_query in entry.name.casefold() or normalized_query in entry.path.casefold()
+                source_matches = (
+                    source is not None
+                    and (
+                        normalized_query in source.display_title.casefold()
+                        or normalized_query in source.original_filename.casefold()
+                        or normalized_query in source.id.casefold()
+                        or normalized_query in source.media_type.casefold()
+                        or normalized_query in source.source_kind.casefold()
+                        or source.id in vector_source_id_set
+                    )
+                )
+                return name_matches or source_matches
+
+            matches = [entry for entry in entries if matches_entry(entry)]
+            start = max(page - 1, 0) * page_size
+            end = start + page_size
+            page_entries = _sort_filesystem_entries(matches)[start:end]
+            return FilesystemSearchResponse(
+                query=query,
+                entries=[self._filesystem_entry_summary(entry) for entry in page_entries],
+                total_count=len(matches),
+                page=page,
+                page_size=page_size,
+                has_more=end < len(matches),
+            )
+
+    async def create_folder(
+        self,
+        *,
+        clerk_user_id: str,
+        parent_id: str | None,
+        name: str,
+    ) -> FilesystemEntrySummary:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to create folders.")
+            library = await self._library_for_user(session, app_user=app_user)
+            root = await self._root_entry_for_library(session, library=library)
+            parent = (
+                root
+                if parent_id is None
+                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=parent_id)
+            )
+            if parent.kind != "folder":
+                raise ValueError("Folders can only be created inside folders.")
+            cleaned_name = _clean_entry_name(name)
+            await self._assert_unique_child_name(session, parent=parent, name=cleaned_name, excluded_entry_id=None)
+            now = _utcnow()
+            entry = FilesystemEntry(
+                id=new_id(),
+                library_id=library.id,
+                parent_id=parent.id,
+                kind="folder",
+                name=cleaned_name,
+                normalized_name=_normalize_entry_name(cleaned_name),
+                path=_join_entry_path(parent.path, cleaned_name),
+                normalized_path=_normalize_entry_path(_join_entry_path(parent.path, cleaned_name)),
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(entry)
+            library.updated_at = now
+            await session.commit()
+            await session.refresh(entry)
+            logger.info(
+                "filesystem_folder_created clerk_user_id=%s entry_id=%s path=%s",
+                clerk_user_id,
+                entry.id,
+                entry.path,
+            )
+            return self._filesystem_entry_summary(entry)
+
+    async def update_filesystem_entry(
+        self,
+        *,
+        clerk_user_id: str,
+        entry_id: str,
+        name: str | None,
+        parent_id: str | None,
+        origin_surface: str,
+        origin_thread_id: str | None = None,
+    ) -> FilesystemEntrySummary:
+        await self._database.ensure_ready()
+        reindex_source_ids: list[str] = []
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to update filesystem entries.")
+            entry = await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=entry_id)
+            if entry.parent_id is None:
+                raise ValueError("The root folder cannot be renamed or moved.")
+            library = entry.library
+            new_parent = entry.parent
+            if parent_id is not None and parent_id != entry.parent_id:
+                new_parent = await self._filesystem_entry_for_user(
+                    session, clerk_user_id=clerk_user_id, entry_id=parent_id
+                )
+                if new_parent.kind != "folder":
+                    raise ValueError("Entries can only be moved into folders.")
+                if entry.kind == "folder":
+                    await self._assert_not_descendant(session, entry=entry, candidate_parent=new_parent)
+            if new_parent is None:
+                raise ValueError("A non-root entry must have a parent folder.")
+            new_name = _clean_entry_name(name) if name is not None else entry.name
+            await self._assert_unique_child_name(
+                session,
+                parent=new_parent,
+                name=new_name,
+                excluded_entry_id=entry.id,
+            )
+            old_path = entry.path
+            old_normalized_path = entry.normalized_path
+            new_path = _join_entry_path(new_parent.path, new_name)
+            now = _utcnow()
+            moved_or_renamed = entry.parent_id != new_parent.id or entry.name != new_name
+            if moved_or_renamed:
+                if entry.kind == "folder":
+                    descendants = (
+                        (
+                            await session.execute(
+                                select(FilesystemEntry)
+                                .where(
+                                    FilesystemEntry.library_id == library.id,
+                                    FilesystemEntry.normalized_path.like(f"{old_normalized_path.rstrip('/')}/%"),
+                                )
+                                .options(
+                                    selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
+                                    selectinload(FilesystemEntry.source_file)
+                                    .selectinload(SourceFile.tag_links)
+                                    .selectinload(SourceTagLink.tag),
+                                )
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                else:
+                    descendants = []
+                entry.parent_id = new_parent.id
+                entry.name = new_name
+                entry.normalized_name = _normalize_entry_name(new_name)
+                entry.path = new_path
+                entry.normalized_path = _normalize_entry_path(new_path)
+                entry.updated_at = now
+                if entry.source_file is not None:
+                    entry.source_file.display_title = Path(new_name).stem or new_name
+                    entry.source_file.updated_at = now
+                    if entry.source_file.status == "ready" and entry.source_file.chunks:
+                        reindex_source_ids.append(entry.source_file.id)
+                for descendant in descendants:
+                    relative_path = descendant.path[len(old_path.rstrip("/")) :].lstrip("/")
+                    descendant.path = _join_entry_path(new_path, relative_path)
+                    descendant.normalized_path = _normalize_entry_path(descendant.path)
+                    descendant.updated_at = now
+                    if descendant.source_file is not None:
+                        descendant.source_file.updated_at = now
+                        if descendant.source_file.status == "ready" and descendant.source_file.chunks:
+                            reindex_source_ids.append(descendant.source_file.id)
+                library.updated_at = now
+            await session.commit()
+            await session.refresh(entry)
+            summary = self._filesystem_entry_summary(entry)
+            logger.info(
+                "filesystem_entry_updated clerk_user_id=%s entry_id=%s path=%s reindex_sources=%s",
+                clerk_user_id,
+                entry.id,
+                entry.path,
+                len(set(reindex_source_ids)),
+            )
+
+        for source_id in list(dict.fromkeys(reindex_source_ids)):
+            source_detail = await self.get_source(clerk_user_id=clerk_user_id, source_id=source_id)
+            await self.update_source_tags(
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                tag_ids=[tag.id for tag in source_detail.tags],
+                origin_surface=origin_surface,
+                origin_thread_id=origin_thread_id,
+            )
+        return summary
+
+    async def delete_filesystem_entries(
+        self,
+        *,
+        clerk_user_id: str,
+        entry_ids: list[str],
+        confirm: bool,
+    ) -> FilesystemDeleteResponse:
+        if not confirm:
+            raise ValueError("Permanent delete requires confirmation.")
+        await self._database.ensure_ready()
+        ordered_entry_ids = list(dict.fromkeys(entry_id.strip() for entry_id in entry_ids if entry_id.strip()))
+        source_ids: list[str] = []
+        folder_entry_ids: list[str] = []
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to delete filesystem entries.")
+            library = await self._library_for_user(session, app_user=app_user)
+            for requested_entry_id in ordered_entry_ids:
+                entry = await self._filesystem_entry_for_user(
+                    session, clerk_user_id=clerk_user_id, entry_id=requested_entry_id
+                )
+                if entry.parent_id is None:
+                    raise ValueError("The root folder cannot be deleted.")
+                scoped_entries = [entry]
+                if entry.kind == "folder":
+                    descendants = (
+                        (
+                            await session.execute(
+                                select(FilesystemEntry)
+                                .where(
+                                    FilesystemEntry.library_id == library.id,
+                                    FilesystemEntry.normalized_path.like(f"{entry.normalized_path.rstrip('/')}/%"),
+                                )
+                                .options(selectinload(FilesystemEntry.source_file))
+                            )
+                        )
+                        .scalars()
+                        .all()
+                    )
+                    scoped_entries.extend(descendants)
+                for scoped_entry in scoped_entries:
+                    if scoped_entry.source_file_id is not None:
+                        source_ids.append(scoped_entry.source_file_id)
+                    elif scoped_entry.kind == "folder":
+                        folder_entry_ids.append(scoped_entry.id)
+
+        deleted_source_ids: list[str] = []
+        for source_id in list(dict.fromkeys(source_ids)):
+            deleted_source_ids.append(await self.delete_source(clerk_user_id=clerk_user_id, source_id=source_id))
+
+        async with self._database.session() as session:
+            remaining_folders = (
+                (
+                    await session.execute(
+                        select(FilesystemEntry)
+                        .where(FilesystemEntry.id.in_(list(dict.fromkeys(folder_entry_ids))))
+                        .order_by(FilesystemEntry.normalized_path.desc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            deleted_entry_ids: list[str] = []
+            for folder in remaining_folders:
+                deleted_entry_ids.append(folder.id)
+                await session.delete(folder)
+            await session.commit()
+        logger.info(
+            "filesystem_entries_deleted clerk_user_id=%s entries=%s sources=%s",
+            clerk_user_id,
+            len(set([*ordered_entry_ids, *folder_entry_ids])),
+            len(deleted_source_ids),
+        )
+        return FilesystemDeleteResponse(
+            deleted_entry_ids=list(dict.fromkeys([*ordered_entry_ids, *folder_entry_ids])),
+            deleted_source_ids=deleted_source_ids,
+        )
+
+    async def ensure_source_file_inputs(
+        self,
+        *,
+        clerk_user_id: str,
+        source_ids: list[str],
+        limit: int = CHAT_FILE_INPUT_LIMIT,
+    ) -> list[SourceFileInput]:
+        await self._database.ensure_ready()
+        bounded_source_ids = list(dict.fromkeys(source_id.strip() for source_id in source_ids if source_id.strip()))[
+            : max(0, limit)
+        ]
+        output: list[SourceFileInput] = []
+        async with self._database.session() as session:
+            for source_id in bounded_source_ids:
+                try:
+                    source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+                except FileNotFoundError:
+                    continue
+                if source.status != "ready":
+                    continue
+                if source.openai_original_file_id is None or source.openai_original_file_purpose != "user_data":
+                    payload = await self._storage.get_bytes(key=source.storage_key)
+                    old_file_id = source.openai_original_file_id
+                    source.openai_original_file_id = await self._openai.upload_file_bytes(
+                        filename=_virtual_name(source),
+                        payload=payload,
+                        purpose="user_data",
+                    )
+                    source.openai_original_file_purpose = "user_data"
+                    source.updated_at = _utcnow()
+                    await session.commit()
+                    if old_file_id is not None:
+                        await self._openai.delete_file(file_id=old_file_id)
+                output.append(
+                    SourceFileInput(
+                        source_id=source.id,
+                        file_id=source.openai_original_file_id,
+                        filename=_virtual_name(source),
+                        virtual_path=_virtual_path(source),
+                        display_title=source.display_title,
+                        media_type=source.media_type,
+                    )
+                )
+            await session.commit()
+        return output
 
     async def list_tags(self, *, clerk_user_id: str) -> list[TagSummary]:
         await self._database.ensure_ready()
@@ -574,6 +1012,8 @@ class SourceService:
                 .where(AppTask.source_file_id == source.id)
                 .values(source_file_id=None, updated_at=_utcnow())
             )
+            if source.filesystem_entry is not None:
+                await session.delete(source.filesystem_entry)
             await session.delete(source)
             await session.commit()
             logger.info(
@@ -596,6 +1036,8 @@ class SourceService:
         user_guidance: str | None,
         origin_surface: str,
         origin_thread_id: str | None = None,
+        folder_id: str | None = None,
+        virtual_name: str | None = None,
     ) -> IngestFinalizeResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
@@ -604,6 +1046,14 @@ class SourceService:
                 raise PermissionError("The active user is not allowed to ingest sources.")
             library = await self._library_for_user(session, app_user=app_user)
             await self._ensure_vector_store(session, library=library, app_user=app_user)
+            root = await self._root_entry_for_library(session, library=library)
+            parent = (
+                root
+                if folder_id is None
+                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=folder_id)
+            )
+            if parent.kind != "folder":
+                raise ValueError("Sources can only be uploaded into folders.")
 
             selected_tag_ids = bounded_tag_ids(tag_ids)
             media_type = guess_media_type(filename=filename, declared_media_type=declared_media_type)
@@ -614,11 +1064,13 @@ class SourceService:
                 media_type=media_type,
                 payload=payload,
             )
-            display_title = await self._unique_source_title(
+            entry_name = await self._unique_child_name(
                 session,
-                library_id=library.id,
-                base_title=Path(filename).stem or filename,
+                parent=parent,
+                base_name=_clean_entry_name(virtual_name or filename),
             )
+            display_title = Path(entry_name).stem or entry_name
+            now = _utcnow()
             source = SourceFile(
                 library_id=library.id,
                 uploaded_by_user_id=app_user.id,
@@ -630,11 +1082,27 @@ class SourceService:
                 byte_size=stored.byte_size,
                 storage_provider=stored.provider,
                 storage_key=stored.key,
-                created_at=_utcnow(),
-                updated_at=_utcnow(),
+                created_at=now,
+                updated_at=now,
             )
             session.add(source)
             await session.flush()
+            entry_path = _join_entry_path(parent.path, entry_name)
+            filesystem_entry = FilesystemEntry(
+                id=new_id(),
+                library_id=library.id,
+                parent_id=parent.id,
+                source_file_id=source.id,
+                kind="file",
+                name=entry_name,
+                normalized_name=_normalize_entry_name(entry_name),
+                path=entry_path,
+                normalized_path=_normalize_entry_path(entry_path),
+                created_at=now,
+                updated_at=now,
+            )
+            source.filesystem_entry = filesystem_entry
+            session.add(filesystem_entry)
             task = AppTask(
                 user_id=app_user.id,
                 library_id=library.id,
@@ -651,6 +1119,9 @@ class SourceService:
                     "byte_size": len(payload),
                     "tag_ids": selected_tag_ids,
                     "user_guidance": user_guidance,
+                    "folder_id": parent.id,
+                    "virtual_name": entry_name,
+                    "virtual_path": entry_path,
                 },
                 state_json={"stage": "queued", "source_id": source.id},
                 created_at=_utcnow(),
@@ -659,6 +1130,7 @@ class SourceService:
             session.add(task)
             await session.commit()
             await session.refresh(source)
+            await session.refresh(filesystem_entry)
             await session.refresh(task)
             logger.info(
                 "source_ingest_queued clerk_user_id=%s source_id=%s task_id=%s kind=%s bytes=%s",
@@ -918,10 +1390,11 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
                 source.openai_original_file_id = await self._openai.upload_file_bytes(
-                    filename=source.original_filename,
+                    filename=_virtual_name(source),
                     payload=payload,
                     purpose=_openai_file_purpose(source_kind=source_kind),
                 )
+                source.openai_original_file_purpose = _openai_file_purpose(source_kind=source_kind)
                 task.state_json = {
                     "stage": "extracting_text",
                     "source_id": source.id,
@@ -999,14 +1472,15 @@ class SourceService:
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        original_filename=source.original_filename,
+                        virtual_path=_virtual_path(source),
+                        virtual_name=_virtual_name(source),
                         source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in merged_tags],
                     )
                     chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
                     chunk.openai_file_id = await self._openai.attach_chunk_to_vector_store(
                         vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{source.original_filename}.chunk-{chunk.sequence}.md",
+                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
                         text_content=render_chunk_markdown(source=source, chunk=chunk),
                         attributes=attributes,
                     )
@@ -1221,10 +1695,11 @@ class SourceService:
                     task.updated_at = _utcnow()
                     await session.commit()
                     source.openai_original_file_id = await self._openai.upload_file_bytes(
-                        filename=source.original_filename,
+                        filename=_virtual_name(source),
                         payload=payload,
                         purpose=_openai_file_purpose(source_kind=source_kind),
                     )
+                    source.openai_original_file_purpose = _openai_file_purpose(source_kind=source_kind)
                     task.state_json = {
                         "stage": "replacing_old_chunks",
                         "source_id": source.id,
@@ -1282,14 +1757,15 @@ class SourceService:
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        original_filename=source.original_filename,
+                        virtual_path=_virtual_path(source),
+                        virtual_name=_virtual_name(source),
                         source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in merged_tags],
                     )
                     chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
                     chunk.openai_file_id = await self._openai.attach_chunk_to_vector_store(
                         vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{source.original_filename}.chunk-{chunk.sequence}.md",
+                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
                         text_content=render_chunk_markdown(source=source, chunk=chunk),
                         attributes=attributes,
                     )
@@ -1509,13 +1985,14 @@ class SourceService:
                         source_id=source.id,
                         chunk_id=chunk.id,
                         source_kind=source.source_kind,
-                        original_filename=source.original_filename,
+                        virtual_path=_virtual_path(source),
+                        virtual_name=_virtual_name(source),
                         source_created_at=source.created_at,
                         tag_slugs=[tag.slug for tag in selected_tags],
                     )
                     new_file_id = await self._openai.attach_chunk_to_vector_store(
                         vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{source.original_filename}.chunk-{chunk.sequence}.md",
+                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
                         text_content=render_chunk_markdown(source=source, chunk=chunk),
                         attributes=attributes,
                     )
@@ -1791,7 +2268,9 @@ class SourceService:
             .where(UserLibrary.user_id == app_user.id)
             .options(
                 selectinload(UserLibrary.sources).selectinload(SourceFile.chunks),
+                selectinload(UserLibrary.sources).selectinload(SourceFile.filesystem_entry),
                 selectinload(UserLibrary.sources).selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
+                selectinload(UserLibrary.filesystem_entries),
                 selectinload(UserLibrary.tags).selectinload(Tag.source_links),
             )
         )
@@ -1812,6 +2291,120 @@ class SourceService:
     async def library_for_user(self, session: Any, *, app_user: AppUser) -> UserLibrary:
         return await self._library_for_user(session, app_user=app_user)
 
+    async def _root_entry_for_library(self, session: Any, *, library: UserLibrary) -> FilesystemEntry:
+        root = await session.scalar(
+            select(FilesystemEntry)
+            .where(FilesystemEntry.library_id == library.id, FilesystemEntry.normalized_path == "/")
+            .options(selectinload(FilesystemEntry.library), selectinload(FilesystemEntry.children))
+        )
+        if root is not None:
+            return root
+        now = _utcnow()
+        root = FilesystemEntry(
+            id=new_id(),
+            library_id=library.id,
+            kind="folder",
+            name="",
+            normalized_name="",
+            path="/",
+            normalized_path="/",
+            created_at=now,
+            updated_at=now,
+        )
+        session.add(root)
+        await session.flush()
+        return root
+
+    async def _filesystem_entry_for_user(
+        self,
+        session: Any,
+        *,
+        clerk_user_id: str,
+        entry_id: str,
+    ) -> FilesystemEntry:
+        app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+        entry = await session.scalar(
+            select(FilesystemEntry)
+            .join(UserLibrary, UserLibrary.id == FilesystemEntry.library_id)
+            .where(FilesystemEntry.id == entry_id, UserLibrary.user_id == app_user.id)
+            .options(
+                selectinload(FilesystemEntry.library),
+                selectinload(FilesystemEntry.parent),
+                selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
+                selectinload(FilesystemEntry.source_file)
+                .selectinload(SourceFile.tag_links)
+                .selectinload(SourceTagLink.tag),
+            )
+        )
+        if entry is None:
+            raise FileNotFoundError("Filesystem entry not found.")
+        return entry
+
+    async def _breadcrumbs_for_entry(self, session: Any, *, entry: FilesystemEntry) -> list[FilesystemBreadcrumb]:
+        entries = (
+            (await session.execute(select(FilesystemEntry).where(FilesystemEntry.library_id == entry.library_id)))
+            .scalars()
+            .all()
+        )
+        entries_by_id = {item.id: item for item in entries}
+        chain: list[FilesystemEntry] = []
+        cursor: FilesystemEntry | None = entry
+        while cursor is not None:
+            chain.append(cursor)
+            cursor = entries_by_id.get(cursor.parent_id) if cursor.parent_id is not None else None
+        chain.reverse()
+        return [
+            FilesystemBreadcrumb(id=item.id, name=item.name or "Files", path=item.path)
+            for item in chain
+        ]
+
+    async def _assert_unique_child_name(
+        self,
+        session: Any,
+        *,
+        parent: FilesystemEntry,
+        name: str,
+        excluded_entry_id: str | None,
+    ) -> None:
+        candidate_path = _join_entry_path(parent.path, name)
+        existing_id = await session.scalar(
+            select(FilesystemEntry.id).where(
+                FilesystemEntry.library_id == parent.library_id,
+                FilesystemEntry.normalized_path == _normalize_entry_path(candidate_path),
+            )
+        )
+        if existing_id is not None and existing_id != excluded_entry_id:
+            raise ValueError("Another entry already exists at that path.")
+
+    async def _unique_child_name(self, session: Any, *, parent: FilesystemEntry, base_name: str) -> str:
+        candidate = _clean_entry_name(base_name)
+        suffix = 2
+        while True:
+            existing_id = await session.scalar(
+                select(FilesystemEntry.id).where(
+                    FilesystemEntry.library_id == parent.library_id,
+                    FilesystemEntry.normalized_path == _normalize_entry_path(_join_entry_path(parent.path, candidate)),
+                )
+            )
+            if existing_id is None:
+                return candidate
+            candidate = _suffix_entry_name(base_name, suffix)
+            suffix += 1
+
+    async def _assert_not_descendant(
+        self,
+        session: Any,
+        *,
+        entry: FilesystemEntry,
+        candidate_parent: FilesystemEntry,
+    ) -> None:
+        del session
+        if candidate_parent.id == entry.id:
+            raise ValueError("A folder cannot be moved into itself.")
+        descendant_prefix = f"{entry.normalized_path.rstrip('/')}/"
+        if candidate_parent.normalized_path.startswith(descendant_prefix):
+            raise ValueError("A folder cannot be moved into one of its descendants.")
+
     async def _ensure_vector_store(self, session: Any, *, library: UserLibrary, app_user: AppUser) -> None:
         if library.openai_vector_store_id is not None:
             return
@@ -1831,6 +2424,7 @@ class SourceService:
             .options(
                 selectinload(SourceFile.chunks),
                 selectinload(SourceFile.library),
+                selectinload(SourceFile.filesystem_entry),
                 selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
             )
         )
@@ -1872,6 +2466,7 @@ class SourceService:
             .options(
                 selectinload(SourceFile.chunks),
                 selectinload(SourceFile.library),
+                selectinload(SourceFile.filesystem_entry),
                 selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
             )
         )
@@ -2064,6 +2659,9 @@ class SourceService:
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
         return LibrarySourceSummary(
             id=source.id,
+            filesystem_entry_id=source.filesystem_entry.id if source.filesystem_entry is not None else None,
+            virtual_name=_virtual_name(source),
+            virtual_path=_virtual_path(source),
             display_title=source.display_title,
             original_filename=source.original_filename,
             media_type=source.media_type,
@@ -2079,6 +2677,7 @@ class SourceService:
                 for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
             ],
             openai_original_file_id=source.openai_original_file_id,
+            openai_original_file_purpose=source.openai_original_file_purpose,
         )
 
     def _source_detail(self, source: SourceFile) -> LibrarySourceDetail:
@@ -2089,6 +2688,39 @@ class SourceService:
             storage_key=source.storage_key,
             ingest_strategy=source.ingest_strategy,
             chunks=[self._chunk_summary(chunk) for chunk in sorted(source.chunks, key=lambda item: item.sequence)],
+        )
+
+    def _filesystem_entry_summary(self, entry: FilesystemEntry) -> FilesystemEntrySummary:
+        source = entry.source_file
+        if source is None:
+            return FilesystemEntrySummary(
+                id=entry.id,
+                kind=cast(Any, entry.kind),
+                name=entry.name,
+                path=entry.path,
+                parent_id=entry.parent_id,
+                created_at=entry.created_at,
+                updated_at=entry.updated_at,
+            )
+        return FilesystemEntrySummary(
+            id=entry.id,
+            kind=cast(Any, entry.kind),
+            name=entry.name,
+            path=entry.path,
+            parent_id=entry.parent_id,
+            source_id=source.id,
+            source_kind=cast(SourceKind, source.source_kind),
+            media_type=source.media_type,
+            status=cast(SourceStatus, source.status),
+            byte_size=source.byte_size,
+            chunk_count=len(source.chunks),
+            tags=[
+                self._tag_summary(link.tag)
+                for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
+            ],
+            openai_original_file_id=source.openai_original_file_id,
+            created_at=entry.created_at,
+            updated_at=entry.updated_at,
         )
 
     def _chunk_summary(self, chunk: SemanticChunk) -> ChunkSummary:
@@ -2147,7 +2779,8 @@ def build_vector_attributes(
     source_id: str,
     chunk_id: str,
     source_kind: str,
-    original_filename: str,
+    virtual_path: str,
+    virtual_name: str,
     source_created_at: datetime,
     tag_slugs: list[str],
 ) -> dict[str, str | float | bool]:
@@ -2157,9 +2790,9 @@ def build_vector_attributes(
         "source_id": source_id,
         "chunk_id": chunk_id,
         "source_kind": source_kind,
-        "filename": original_filename[:256],
+        "virtual_path": virtual_path[:256],
+        "virtual_name": virtual_name[:256],
         "created_at": created_at.timestamp(),
-        "created_date": created_at.date().isoformat(),
         "tags": _tag_metadata_value(tag_slugs),
     }
     for index, slug in enumerate(tag_slugs[:TAG_SLOT_COUNT], start=1):
@@ -2204,6 +2837,7 @@ def render_chunk_markdown(*, source: SourceFile, chunk: SemanticChunk) -> str:
         f"# {chunk.title}",
         "",
         f"Source: {source.display_title}",
+        f"Virtual path: {_virtual_path(source)}",
         f"Original filename: {source.original_filename}",
         f"Locator: {_chunk_locator(chunk).label()}",
         f"Strategy: {chunk.strategy_label}",
@@ -2444,6 +3078,53 @@ def _tag_metadata_value(tag_slugs: Sequence[str]) -> str:
     return ",".join(output)
 
 
+def _clean_entry_name(value: str) -> str:
+    cleaned = value.replace("\\", "/").split("/")[-1].strip()
+    if cleaned in {"", ".", ".."}:
+        raise ValueError("Entry name is required.")
+    return cleaned[:255]
+
+
+def _normalize_entry_name(value: str) -> str:
+    return _clean_entry_name(value).casefold()
+
+
+def _normalize_entry_path(value: str) -> str:
+    path = "/" + "/".join(part for part in value.replace("\\", "/").split("/") if part)
+    return path.casefold()
+
+
+def _join_entry_path(parent_path: str, name: str) -> str:
+    parent_parts = [part for part in parent_path.replace("\\", "/").split("/") if part]
+    name_parts = [part for part in name.replace("\\", "/").split("/") if part]
+    joined = "/".join([*parent_parts, *name_parts])
+    return f"/{joined}" if joined else "/"
+
+
+def _suffix_entry_name(base_name: str, suffix: int) -> str:
+    cleaned = _clean_entry_name(base_name)
+    if "." in cleaned and not cleaned.startswith("."):
+        stem, extension = cleaned.rsplit(".", 1)
+        return f"{stem} ({suffix}).{extension}"[:255]
+    return f"{cleaned} ({suffix})"[:255]
+
+
+def _sort_filesystem_entries(entries: Sequence[FilesystemEntry]) -> list[FilesystemEntry]:
+    return sorted(entries, key=lambda entry: (0 if entry.kind == "folder" else 1, entry.name.casefold(), entry.id))
+
+
+def _virtual_name(source: SourceFile) -> str:
+    if source.filesystem_entry is not None:
+        return source.filesystem_entry.name
+    return source.original_filename
+
+
+def _virtual_path(source: SourceFile) -> str:
+    if source.filesystem_entry is not None:
+        return source.filesystem_entry.path
+    return f"/{source.original_filename}"
+
+
 def _as_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=UTC)
@@ -2451,9 +3132,8 @@ def _as_utc(value: datetime) -> datetime:
 
 
 def _openai_file_purpose(*, source_kind: str) -> FilePurpose:
-    if source_kind == "image":
-        return "vision"
-    return "assistants"
+    del source_kind
+    return "user_data"
 
 
 def _task_summary(task: AppTask) -> TaskSummary:

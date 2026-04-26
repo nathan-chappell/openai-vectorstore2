@@ -169,15 +169,29 @@ class OpenAIGateway:
         with NamedTemporaryFile("w", suffix=".md", encoding="utf-8", delete=False) as temp_file:
             temp_path = Path(temp_file.name)
             temp_file.write(text_content)
+        uploaded_id: str | None = None
         try:
             with temp_path.open("rb") as file_handle:
                 uploaded = await self._client.files.create(file=file_handle, purpose="assistants")
+                uploaded_id = str(uploaded.id)
             await self._client.vector_stores.files.create_and_poll(
                 vector_store_id=vector_store_id,
                 file_id=uploaded.id,
                 attributes=attributes,
                 poll_interval_ms=self._settings.openai_poll_interval_ms,
             )
+        except Exception:
+            if uploaded_id is not None:
+                try:
+                    await self._client.files.delete(uploaded_id)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "openai_vector_chunk_attach_cleanup_failed vector_store_id=%s file_id=%s error=%s",
+                        vector_store_id,
+                        uploaded_id,
+                        cleanup_error,
+                    )
+            raise
         finally:
             temp_path.unlink(missing_ok=True)
         logger.info(
