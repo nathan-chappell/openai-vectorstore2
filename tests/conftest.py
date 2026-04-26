@@ -94,15 +94,18 @@ class FakeOpenAIGateway:
         return SemanticSplitResult(strategy_label="fake_semantic", tags=tags, chunks=chunks)
 
     async def discover_research_candidates(self, *, query: str, max_candidates: int) -> ResearchDiscoveryResult:
-        del query
+        followup = "Follow-up discovery" in query
+        prefix = "followup-reference" if followup else "reference"
+        description_prefix = "followup reference" if followup else "example reference"
+        title_prefix = "Follow-up reference" if followup else "Example reference"
         candidates = [
             ResearchDiscoveryCandidateDraft(
-                url=f"https://example.com/reference-{index}.txt",
-                title=f"Example reference {index}",
+                url=f"https://example.com/{prefix}-{index}.txt",
+                title=f"{title_prefix} {index}",
                 source_type="url",
-                description=f"Short description for example reference {index}.",
-                summary=f"Summary for example reference {index} in a research library.",
-                suggested_tags=["research", f"reference-{index}"],
+                description=f"Short description for {description_prefix} {index}.",
+                summary=f"Summary for {description_prefix} {index} in a research library.",
+                suggested_tags=["research", f"{prefix}-{index}"],
                 authors=[f"Author {index}"],
                 published_at="2024",
                 rationale="Fake discovered reference for importer tests.",

@@ -176,34 +176,82 @@ class ResearchImportService:
                     provenance["target_folder_id"] = target_folder_id
                     candidate_input["provenance"] = provenance
 
+            remaining_slots = payload.max_pending_candidates
+            if remaining_slots > 0 and candidate_inputs:
+                persisted, duplicates = await self._persist_candidate_batch(
+                    clerk_user_id=clerk_user_id,
+                    task_id=task.id,
+                    candidate_inputs=candidate_inputs[:remaining_slots],
+                )
+                candidates.extend(persisted)
+                duplicate_count += duplicates
+
+            next_depth = 2
+            frontier = [candidate for candidate in candidates if candidate.depth == 1]
+            while (
+                payload.discover_references
+                and payload.max_candidates_per_source > 0
+                and next_depth <= payload.max_depth
+                and frontier
+                and len(candidates) < payload.max_pending_candidates
+            ):
+                remaining_slots = payload.max_pending_candidates - len(candidates)
+                followup_inputs = await self._candidate_inputs_from_frontier(
+                    parents=frontier,
+                    request=payload,
+                    depth=next_depth,
+                    remaining_slots=remaining_slots,
+                )
+                if target_folder_id is not None:
+                    for candidate_input in followup_inputs:
+                        provenance = cast(dict[str, object], candidate_input.get("provenance") or {})
+                        provenance["target_folder_id"] = target_folder_id
+                        candidate_input["provenance"] = provenance
+                if not followup_inputs:
+                    break
+                persisted, duplicates = await self._persist_candidate_batch(
+                    clerk_user_id=clerk_user_id,
+                    task_id=task.id,
+                    candidate_inputs=followup_inputs[:remaining_slots],
+                )
+                duplicate_count += duplicates
+                logger.info(
+                    "research_import_expansion_completed clerk_user_id=%s task_id=%s depth=%s parents=%s candidates=%s duplicates=%s",
+                    clerk_user_id,
+                    task.id,
+                    next_depth,
+                    len(frontier),
+                    len(persisted),
+                    duplicates,
+                )
+                if not persisted:
+                    break
+                candidates.extend(persisted)
+                frontier = [candidate for candidate in persisted if candidate.depth == next_depth]
+                next_depth += 1
+
+            max_depth_reached = max((candidate.depth for candidate in candidates), default=0)
             async with self._database.session() as session:
                 task = await self._task_for_user(session, clerk_user_id=clerk_user_id, task_id=task.id)
-                app_user, library = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
-                persisted, duplicate_count = await self._persist_candidate_inputs(
-                    session=session,
-                    app_user=app_user,
-                    library=library,
-                    task=task,
-                    candidate_inputs=candidate_inputs[: payload.max_pending_candidates],
-                )
                 task.status = "completed"
                 task.completed_at = _utcnow()
                 task.state_json = {
                     "stage": "completed",
-                    "candidate_count": len(persisted),
+                    "candidate_count": len(candidates),
                     "duplicate_count": duplicate_count,
+                    "max_depth_reached": max_depth_reached,
                     "seed_source_id": seed_source.source.id if seed_source is not None else None,
                     "target_folder_id": target_folder_id,
                 }
                 task.result_json = {
-                    "candidate_count": len(persisted),
+                    "candidate_count": len(candidates),
                     "duplicate_count": duplicate_count,
+                    "max_depth_reached": max_depth_reached,
                     "seed_source_id": seed_source.source.id if seed_source is not None else None,
                     "target_folder_id": target_folder_id,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
-                candidates = [self._candidate_summary(candidate) for candidate in persisted]
                 task_summary = _research_task_summary(task)
         except Exception:
             async with self._database.session() as session:
@@ -250,7 +298,7 @@ class ResearchImportService:
             tag_ids=payload.tag_ids,
             folder_id=payload.folder_id,
             folder_name=payload.folder_name,
-            ingest_seed=seed_type not in {"topic", "paper"},
+            ingest_seed=True,
             discover_references=payload.discover_references,
             max_depth=payload.max_depth,
             max_candidates_per_source=payload.max_candidates_per_source,
@@ -294,6 +342,27 @@ class ResearchImportService:
             ingested=ingested,
             duplicate_count=import_response.duplicate_count,
         )
+
+    async def _persist_candidate_batch(
+        self,
+        *,
+        clerk_user_id: str,
+        task_id: str,
+        candidate_inputs: list[dict[str, object]],
+    ) -> tuple[list[ResearchImportCandidateSummary], int]:
+        if not candidate_inputs:
+            return [], 0
+        async with self._database.session() as session:
+            task = await self._task_for_user(session, clerk_user_id=clerk_user_id, task_id=task_id)
+            app_user, library = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
+            persisted, duplicate_count = await self._persist_candidate_inputs(
+                session=session,
+                app_user=app_user,
+                library=library,
+                task=task,
+                candidate_inputs=candidate_inputs,
+            )
+            return [self._candidate_summary(candidate) for candidate in persisted], duplicate_count
 
     async def list_candidates(
         self,
@@ -501,7 +570,7 @@ class ResearchImportService:
                     "content_hash": None,
                 }
             )
-        if request.discover_references and request.max_candidates_per_source > 0:
+        if request.discover_references and request.max_depth > 0 and request.max_candidates_per_source > 0:
             discovery_query = _discovery_query(seed_material=seed_material, request=request)
             discovery = await self._openai.discover_research_candidates(
                 query=discovery_query,
@@ -531,6 +600,60 @@ class ResearchImportService:
                         "content_hash": None,
                     }
                 )
+        return candidates
+
+    async def _candidate_inputs_from_frontier(
+        self,
+        *,
+        parents: list[ResearchImportCandidateSummary],
+        request: ResearchImportCreateRequest,
+        depth: int,
+        remaining_slots: int,
+    ) -> list[dict[str, object]]:
+        candidates: list[dict[str, object]] = []
+        per_parent_limit = min(
+            request.max_candidates_per_source,
+            self._settings.research_import_max_candidates_per_source,
+        )
+        if per_parent_limit <= 0 or remaining_slots <= 0:
+            return candidates
+        for parent in parents:
+            if len(candidates) >= remaining_slots:
+                break
+            discovery = await self._openai.discover_research_candidates(
+                query=_followup_discovery_query(parent=parent, request=request, depth=depth),
+                max_candidates=min(per_parent_limit, remaining_slots - len(candidates)),
+            )
+            for item in discovery.candidates:
+                candidates.append(
+                    {
+                        "source_type": item.source_type,
+                        "url": item.url,
+                        "normalized_url": _normalize_url(item.url),
+                        "title": item.title,
+                        "description": item.description,
+                        "summary": item.summary,
+                        "suggested_tags": item.suggested_tags,
+                        "authors": item.authors,
+                        "published_at": item.published_at,
+                        "doi": item.doi,
+                        "arxiv_id": item.arxiv_id,
+                        "rationale": item.rationale,
+                        "score": item.score,
+                        "depth": depth,
+                        "parent_candidate_id": parent.id,
+                        "provenance": _discovery_provenance(item)
+                        | {
+                            "discovery_depth": depth,
+                            "parent_candidate_id": parent.id,
+                            "parent_candidate_title": parent.title,
+                            "parent_candidate_url": parent.normalized_url or parent.url,
+                        },
+                        "content_hash": None,
+                    }
+                )
+                if len(candidates) >= remaining_slots:
+                    break
         return candidates
 
     async def _persist_candidate_inputs(
@@ -600,6 +723,8 @@ class ResearchImportService:
                 library_id=library.id,
                 user_id=app_user.id,
                 task_id=task.id,
+                parent_candidate_id=cast(str | None, item.get("parent_candidate_id")),
+                parent_source_file_id=cast(str | None, item.get("parent_source_file_id")),
                 status="pending",
                 source_type=str(item["source_type"]),
                 url=cast(str | None, item.get("url")),
@@ -1073,6 +1198,38 @@ def _discovery_query(*, seed_material: ResearchMaterial, request: ResearchImport
             f"Seed type: {request.seed_type}",
             f"URL: {seed_material.normalized_url}" if seed_material.normalized_url else None,
             trimmed,
+        ]
+        if part
+    )
+
+
+def _followup_discovery_query(
+    *,
+    parent: ResearchImportCandidateSummary,
+    request: ResearchImportCreateRequest,
+    depth: int,
+) -> str:
+    metadata_parts = [
+        f"Parent title: {parent.title}",
+        f"Parent URL: {parent.normalized_url or parent.url}" if parent.normalized_url or parent.url else None,
+        f"Description: {parent.description}" if parent.description else None,
+        f"Summary: {parent.summary}" if parent.summary else None,
+        f"Authors: {', '.join(parent.authors)}" if parent.authors else None,
+        f"Published: {parent.published_at}" if parent.published_at else None,
+        f"DOI: {parent.doi}" if parent.doi else None,
+        f"arXiv: {parent.arxiv_id}" if parent.arxiv_id else None,
+        f"Suggested tags: {', '.join(parent.suggested_tags)}" if parent.suggested_tags else None,
+    ]
+    return "\n".join(
+        part
+        for part in [
+            "Follow-up discovery for a bounded research library.",
+            "Find public references that are cited by, foundational to, or directly related to this parent candidate.",
+            "Prefer original papers, arXiv/PDF pages, official project docs, datasets, and high-signal articles.",
+            "Avoid duplicate versions of the parent candidate and avoid login-gated or paywalled pages when public alternatives exist.",
+            f"Original seed type: {request.seed_type}",
+            f"Discovery depth: {depth}",
+            *metadata_parts,
         ]
         if part
     )

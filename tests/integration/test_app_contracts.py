@@ -424,6 +424,42 @@ async def test_http_research_library_build_creates_reviewable_foldered_library(
 
 
 @pytest.mark.asyncio
+async def test_http_research_library_build_expands_followup_candidates(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            build = await client.post(
+                "/api/research/library-builds",
+                headers=auth_headers,
+                json={
+                    "seed_type": "paper",
+                    "query": "Attention Is All You Need",
+                    "auto_ingest": False,
+                    "max_depth": 2,
+                    "max_sources": 4,
+                    "max_candidates_per_source": 2,
+                },
+            )
+            assert build.status_code == 200
+            payload = build.json()
+            assert len(payload["candidates"]) == 4
+            first_hop = [candidate for candidate in payload["candidates"] if candidate["depth"] == 1]
+            followups = [candidate for candidate in payload["candidates"] if candidate["depth"] == 2]
+            assert len(first_hop) == 2
+            assert len(followups) == 2
+            first_hop_ids = {candidate["id"] for candidate in first_hop}
+            assert {candidate["parent_candidate_id"] for candidate in followups} <= first_hop_ids
+            assert followups[0]["title"].startswith("Follow-up reference")
+            assert followups[0]["provenance"]["discovery_depth"] == 2
+
+
+@pytest.mark.asyncio
 async def test_http_research_candidate_approval_ingests_through_source_service(
     configured_settings: AppSettings,
     fake_openai: None,
