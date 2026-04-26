@@ -32,6 +32,7 @@ def test_configure_logging_writes_plain_file(tmp_path: Path) -> None:
         assert "INFO" in contents
         assert "tests.logging file logging smoke" in contents
         assert "\x1b[" not in contents
+        assert logging.getLogger("uvicorn.access").level >= logging.WARNING
     finally:
         for handler in logging.getLogger().handlers[:]:
             logging.getLogger().removeHandler(handler)
@@ -78,10 +79,10 @@ def test_openai_response_logging_includes_platform_url(tmp_path: Path) -> None:
             handler.flush()
 
         contents = log_path.read_text(encoding="utf-8")
-        assert "openai_response_completed operation=test_operation" in contents
-        assert "response_id=resp_test123" in contents
+        assert "openai response operation=test_operation" in contents
+        assert "response=resp_test123" in contents
         assert "openai_log_url=https://platform.openai.com/logs/resp_test123" in contents
-        assert "request_id=req_test123" in contents
+        assert "request=req_test123" in contents
     finally:
         for handler in logging.getLogger().handlers[:]:
             logging.getLogger().removeHandler(handler)
@@ -127,7 +128,8 @@ async def test_http_requests_are_logged_to_file(
             handler.flush()
 
         contents = log_path.read_text(encoding="utf-8")
-        assert "http_request_completed method=GET path=/health status_code=200" in contents
+        assert "backend.app.main GET /health (" in contents
+        assert "status_code=200" not in contents
     finally:
         for handler in logging.getLogger().handlers[:]:
             logging.getLogger().removeHandler(handler)

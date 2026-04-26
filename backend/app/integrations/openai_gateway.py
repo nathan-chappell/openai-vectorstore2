@@ -480,8 +480,8 @@ def log_openai_response(*, operation: str, response: object, duration_ms: float)
     conversation_id = _conversation_id_from_response(response)
     usage = getattr(response, "usage", None)
     logger.info(
-        "openai_response_completed operation=%s response_id=%s openai_log_url=%s conversation_id=%s "
-        "conversation_log_url=%s model=%s status=%s request_id=%s total_tokens=%s duration_ms=%.1f",
+        "openai response operation=%s response=%s openai_log_url=%s conversation=%s "
+        "conversation_log_url=%s model=%s status=%s request=%s tokens=%s (%.1fms)",
         operation,
         response_id,
         openai_platform_log_url(response_id),

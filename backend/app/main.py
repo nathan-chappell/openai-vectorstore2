@@ -98,15 +98,13 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         started_at = perf_counter()
         method = request.method
         path = request.url.path
-        client_host = request.client.host if request.client is not None else None
         try:
             response = await call_next(request)
         except Exception:
             logger.exception(
-                "http_request_failed method=%s path=%s client=%s duration_ms=%.1f",
+                "%s %s failed (%.1fms)",
                 method,
                 path,
-                client_host,
                 (perf_counter() - started_at) * 1000,
             )
             raise
@@ -117,14 +115,10 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             log_method = logger.error
         elif response.status_code >= 400:
             log_method = logger.warning
-        log_method(
-            "http_request_completed method=%s path=%s status_code=%s client=%s duration_ms=%.1f",
-            method,
-            path,
-            response.status_code,
-            client_host,
-            duration_ms,
-        )
+        if 200 <= response.status_code < 300:
+            log_method("%s %s (%.1fms)", method, path, duration_ms)
+        else:
+            log_method("%s %s -> %s (%.1fms)", method, path, response.status_code, duration_ms)
         return response
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"], include_in_schema=False)
@@ -606,8 +600,15 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     ) -> Response:
         started_at = perf_counter()
         raw_request = await request.body()
+        request_summary = services.chatkit_server.request_log_summary(raw_request)
+        request_label = (
+            f"{request_summary.op} thread={request_summary.thread_id}"
+            if request_summary.thread_id is not None
+            else request_summary.op
+        )
         logger.info(
-            "chatkit_http_request_started clerk_user_id=%s bytes=%s",
+            "chatkit %s received user=%s bytes=%s",
+            request_label,
             user.clerk_user_id,
             len(raw_request),
         )
@@ -623,7 +624,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             result = await services.chatkit_server.process(raw_request, context)
         except Exception:
             logger.exception(
-                "chatkit_http_request_failed clerk_user_id=%s bytes=%s duration_ms=%.1f",
+                "chatkit %s failed user=%s bytes=%s (%.1fms)",
+                request_label,
                 user.clerk_user_id,
                 len(raw_request),
                 (perf_counter() - started_at) * 1000,
@@ -631,14 +633,16 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             raise
         if isinstance(result, StreamingResult):
             logger.info(
-                "chatkit_http_stream_started clerk_user_id=%s bytes=%s duration_ms=%.1f",
+                "chatkit %s streaming user=%s bytes=%s (%.1fms)",
+                request_label,
                 user.clerk_user_id,
                 len(raw_request),
                 (perf_counter() - started_at) * 1000,
             )
             return StreamingResponse(result, media_type="text/event-stream")
         logger.info(
-            "chatkit_http_request_completed clerk_user_id=%s bytes=%s response_bytes=%s duration_ms=%.1f",
+            "chatkit %s completed user=%s bytes=%s response_bytes=%s (%.1fms)",
+            request_label,
             user.clerk_user_id,
             len(raw_request),
             len(result.json),

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Mapping
+from dataclasses import dataclass
+import json
 import logging
 from time import perf_counter
 from typing import Any, cast
@@ -72,6 +74,28 @@ CHATKIT_PROGRESS_ICON_ALIASES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class ChatKitRequestLogSummary:
+    op: str
+    thread_id: str | None = None
+
+
+def chatkit_request_log_summary(raw_request: bytes | str) -> ChatKitRequestLogSummary:
+    try:
+        parsed = json.loads(raw_request)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return ChatKitRequestLogSummary(op="unknown")
+    if not isinstance(parsed, dict):
+        return ChatKitRequestLogSummary(op="unknown")
+    raw_op = parsed.get("type")
+    op = raw_op if isinstance(raw_op, str) and raw_op else "unknown"
+    params = parsed.get("params")
+    if not isinstance(params, dict):
+        return ChatKitRequestLogSummary(op=op)
+    thread_id = params.get("thread_id")
+    return ChatKitRequestLogSummary(op=op, thread_id=thread_id if isinstance(thread_id, str) and thread_id else None)
+
+
 def chatkit_progress_update_event(icon: str, text: str) -> ProgressUpdateEvent:
     normalized_icon = icon.strip()
     if not normalized_icon:
@@ -129,6 +153,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             selected_source_ids=_string_list(metadata.get("selected_source_ids")),
             thread_origin=_string_or_none(metadata.get("origin")),
         )
+
+    def request_log_summary(self, raw_request: bytes | str) -> ChatKitRequestLogSummary:
+        return chatkit_request_log_summary(raw_request)
 
     def build_user_context(
         self,
@@ -210,7 +237,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             agent_input = selected_source_context + agent_input
 
         logger.info(
-            "chat_turn_started thread_id=%s model=%s selected_sources=%s",
+            "chat turn started thread=%s model=%s selected_sources=%s",
             thread.id,
             requested_model,
             len(context.selected_source_ids),
@@ -240,8 +267,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         except Exception:
             partial_response_ids = [response.response_id for response in result.raw_responses if response.response_id]
             logger.error(
-                "chat_turn_failed thread_id=%s model=%s response_id=%s response_ids=%s openai_log_url=%s "
-                "openai_log_urls=%s duration_ms=%.1f",
+                "chat turn failed thread=%s model=%s response=%s responses=%s openai_log_url=%s "
+                "openai_log_urls=%s (%.1fms)",
                 thread.id,
                 requested_model,
                 result.last_response_id,
@@ -257,8 +284,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             if raw_response.response_id is None:
                 continue
             logger.info(
-                "chat_openai_response_observed thread_id=%s model=%s response_index=%s response_id=%s "
-                "openai_log_url=%s request_id=%s",
+                "chat openai response thread=%s model=%s #%s response=%s openai_log_url=%s request=%s",
                 thread.id,
                 requested_model,
                 response_index,
@@ -269,8 +295,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
 
         conversation_id = cast(str | None, getattr(result, "_conversation_id", None))
         logger.info(
-            "chat_turn_completed thread_id=%s model=%s response_id=%s response_ids=%s openai_log_url=%s "
-            "openai_log_urls=%s conversation_id=%s conversation_log_url=%s duration_ms=%.1f",
+            "chat turn completed thread=%s model=%s response=%s responses=%s openai_log_url=%s "
+            "openai_log_urls=%s conversation=%s conversation_log_url=%s (%.1fms)",
             thread.id,
             requested_model,
             result.last_response_id,

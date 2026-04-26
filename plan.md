@@ -48,6 +48,7 @@ Implementation tasks:
 - [x] Keep Alembic startup logging from replacing the app file handler, then add app-owned FastAPI request completion/failure logging so every HTTP hit reaches the configured backend file log.
 - [x] Stabilize the ChatKit client-tool callback so research-builder UI updates do not trigger React nested update loops.
 - [x] Normalize all ChatKit progress icons through the validation-safe wrapper.
+- [x] Make routine request logs compact, suppress duplicate uvicorn access noise, and keep OpenAI response/conversation log URLs easy to scan.
 
 Follow-up verification completed:
 

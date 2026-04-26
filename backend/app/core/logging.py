@@ -63,7 +63,7 @@ def configure_logging(
         file_handler.setFormatter(AnsiStrippingFormatter("%(asctime)s %(levelname)-8s %(name)s %(message)s"))
         root.addHandler(file_handler)
 
-    for logger_name in ["httpx", "openai", "sqlalchemy.engine"]:
+    for logger_name in ["httpx", "openai", "sqlalchemy.engine", "uvicorn.access"]:
         logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
 
     for logger_name, logger_value in list(root.manager.loggerDict.items()):

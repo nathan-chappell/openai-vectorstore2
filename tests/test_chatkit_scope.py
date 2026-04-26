@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.chatkit.server import chatkit_progress_update_event, selected_scope
+from backend.app.chatkit.server import chatkit_progress_update_event, chatkit_request_log_summary, selected_scope
 from backend.app.chatkit.store import VectorstoreChatContext
 
 
@@ -37,3 +37,19 @@ def test_chatkit_progress_update_event_maps_research_icons() -> None:
     assert chatkit_progress_update_event("copy-check", "Duplicate").icon == "lucide:copy-check"
     assert chatkit_progress_update_event("alert-circle", "Failed").icon == "info"
     assert chatkit_progress_update_event("search", "Search").icon == "lucide:search"
+
+
+def test_chatkit_request_log_summary_extracts_op_and_thread() -> None:
+    summary = chatkit_request_log_summary(
+        b'{"type":"threads.add_user_message","params":{"thread_id":"chat_123","input":{"content":"hi"}}}'
+    )
+
+    assert summary.op == "threads.add_user_message"
+    assert summary.thread_id == "chat_123"
+
+
+def test_chatkit_request_log_summary_tolerates_invalid_payloads() -> None:
+    summary = chatkit_request_log_summary(b"not-json")
+
+    assert summary.op == "unknown"
+    assert summary.thread_id is None
