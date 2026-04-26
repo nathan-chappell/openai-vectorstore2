@@ -373,7 +373,8 @@ class SourceService:
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             library = await self._library_for_user(session, app_user=app_user)
-            selected_tag_ids = set(tag_ids)
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+            selected_tag_ids = {tag.id for tag in selected_tags}
             normalized_query = query.casefold().strip() if isinstance(query, str) else ""
             sources = sorted(library.sources, key=lambda source: source.created_at, reverse=True)
             if normalized_query:
@@ -497,7 +498,8 @@ class SourceService:
                 .scalars()
                 .all()
             )
-            selected_tag_ids = set(tag_ids)
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+            selected_tag_ids = {tag.id for tag in selected_tags}
             vector_source_id_set = set(vector_source_ids)
 
             def matches_entry(entry: FilesystemEntry) -> bool:
@@ -1106,7 +1108,9 @@ class SourceService:
             if parent.kind != "folder":
                 raise ValueError("Sources can only be uploaded into folders.")
 
-            selected_tag_ids = bounded_tag_ids(tag_ids)
+            selected_tag_inputs = bounded_tag_ids(tag_ids)
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
+            selected_tag_ids = [tag.id for tag in selected_tags]
             media_type = guess_media_type(filename=filename, declared_media_type=declared_media_type)
             source_kind = classify_source_kind(filename=filename, media_type=media_type)
             stored = await self._storage.put_bytes(
@@ -1281,8 +1285,9 @@ class SourceService:
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
             raw_tag_ids = list(tag_ids) if tag_ids is not None else [link.tag_id for link in source.tag_links]
-            selected_tag_ids = bounded_tag_ids(raw_tag_ids)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
+            selected_tag_inputs = bounded_tag_ids(raw_tag_ids)
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
+            selected_tag_ids = [tag.id for tag in selected_tags]
             replaced_chunk_count = len(source.chunks)
             source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
             previous_status = source.status
@@ -1353,8 +1358,9 @@ class SourceService:
             library = source.library
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
-            selected_tag_ids = bounded_tag_ids(tag_ids)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_ids)
+            selected_tag_inputs = bounded_tag_ids(tag_ids)
+            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
+            selected_tag_ids = [tag.id for tag in selected_tags]
             previous_status = source.status
             previous_error_message = source.error_message
             previous_tag_ids = [link.tag_id for link in source.tag_links]
@@ -2585,15 +2591,24 @@ class SourceService:
         return new_file_id
 
     async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[Tag]:
-        if not tag_ids:
+        tag_identifiers = bounded_tag_ids(tag_ids)
+        if not tag_identifiers:
             return []
         records = (
-            (await session.execute(select(Tag).where(Tag.library_id == library_id, Tag.id.in_(tag_ids))))
+            (
+                await session.execute(
+                    select(Tag).where(
+                        Tag.library_id == library_id,
+                        or_(Tag.id.in_(tag_identifiers), Tag.slug.in_(tag_identifiers)),
+                    )
+                )
+            )
             .scalars()
             .all()
         )
-        if len(records) != len(set(tag_ids)):
-            raise ValueError("One or more tag IDs are invalid for this library.")
+        resolved_identifiers = {tag.id for tag in records} | {tag.slug for tag in records}
+        if any(identifier not in resolved_identifiers for identifier in tag_identifiers):
+            raise ValueError("One or more tag identifiers are invalid for this library.")
         return sorted(records, key=lambda tag: tag.name.casefold())
 
     async def _ensure_auto_tags(self, session: Any, *, library: UserLibrary, tag_names: list[str]) -> list[Tag]:

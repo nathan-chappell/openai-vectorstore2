@@ -16,11 +16,15 @@ from chatkit.types import (
 from backend.app.chatkit.server import (
     apply_agent_thread_title,
     clean_thread_title,
+    chatkit_source_deeplink,
     chatkit_model_settings_for_model,
     chatkit_metadata_with_openai_state,
     chatkit_openai_state,
     chatkit_progress_update_event,
     chatkit_request_log_summary,
+    compact_chatkit_hit_payload,
+    compact_chatkit_source_payload,
+    compact_chatkit_tag,
     pending_chatkit_thread_items,
     selected_scope,
 )
@@ -133,6 +137,72 @@ def test_apply_agent_thread_title_updates_title_and_metadata() -> None:
     assert thread.metadata["existing"] == "value"
     assert thread.metadata["agent_thread_title"] == "Selected file context fixes"
     assert isinstance(thread.metadata["agent_thread_title_updated_at"], str)
+
+
+def test_chatkit_source_deeplink_points_to_source() -> None:
+    assert chatkit_source_deeplink("source_123") == "chatkit-link://source?source_id=source_123"
+    assert chatkit_source_deeplink("source_123", locator={"type": "page_range", "start_page": 4, "end_page": 5}) == (
+        "chatkit-link://source?source_id=source_123&locator=pp.+4-5"
+    )
+
+
+def test_compact_chatkit_tag_keeps_slug_and_optional_name() -> None:
+    assert compact_chatkit_tag({"id": "tag_1", "name": "Multi Head Attention", "slug": "multi-head-attention"}) == {
+        "slug": "multi-head-attention",
+        "name": "Multi Head Attention",
+    }
+
+
+def test_compact_chatkit_source_payload_keeps_citation_fields_only() -> None:
+    compact = compact_chatkit_source_payload(
+        {
+            "id": "source_1",
+            "display_title": "Attention Is All You Need",
+            "original_filename": "1706.03762.pdf",
+            "source_kind": "pdf",
+            "status": "ready",
+            "virtual_path": "/Research/attention/Attention Is All You Need.pdf",
+            "summary": "Transformer paper summary.",
+            "openai_vector_file_id": "file_ignored",
+            "tags": [{"id": "tag_1", "name": "Transformer", "slug": "transformer"}],
+        }
+    )
+
+    assert compact == {
+        "id": "source_1",
+        "type": "pdf",
+        "name": "Attention Is All You Need",
+        "path": "/Research/attention/Attention Is All You Need.pdf",
+        "status": "ready",
+        "summary": "Transformer paper summary.",
+        "tags": ["transformer"],
+        "citation_link": "chatkit-link://source?source_id=source_1",
+    }
+
+
+def test_compact_chatkit_hit_payload_adds_source_link_and_locator_label() -> None:
+    compact = compact_chatkit_hit_payload(
+        {
+            "chunk_id": "chunk_1",
+            "source_file_id": "source_1",
+            "source_title": "Attention Is All You Need",
+            "score": 0.87,
+            "title": "Multi-head attention",
+            "summary": "Describes scaled dot-product attention.",
+            "text": "x" * 1500,
+            "tags": ["attention"],
+            "locator": {"type": "page_range", "start_page": 3, "end_page": 3},
+            "attributes": {"debug": "ignored"},
+        }
+    )
+
+    assert compact["id"] == "source_1"
+    assert compact["locator"] == "p. 3"
+    assert compact["citation_link"] == "chatkit-link://source?source_id=source_1&locator=p.+3"
+    assert compact["tags"] == ["attention"]
+    assert isinstance(compact["text"], str)
+    assert len(compact["text"]) == 1200
+    assert "attributes" not in compact
 
 
 def test_pending_chatkit_items_replays_history_before_conversation_exists() -> None:

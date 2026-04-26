@@ -8,6 +8,7 @@ import json
 import logging
 from time import perf_counter
 from typing import Any, cast
+from urllib.parse import urlencode
 
 from agents import Agent, Runner, StopAtTools, function_tool
 from agents.model_settings import ModelSettings
@@ -62,6 +63,8 @@ MAX_AGENT_TURNS = 20
 CHATKIT_SELECTED_FILE_INPUT_LIMIT = 2
 CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES = 250_000
 CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES = 350_000
+CHATKIT_TEXT_SNIPPET_MAX_CHARS = 1_200
+CHATKIT_DETAIL_CHUNK_LIMIT = 8
 THREAD_TITLE_MAX_CHARS = 72
 STOP_AT_TOOL_NAMES = [
     "set_file_selection",
@@ -566,7 +569,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 page=1,
                 page_size=max(1, min(page_size, 50)),
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_file_list_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="list_filesystem")
         async def list_filesystem_tool(ctx: ChatKitToolContext, folder_id: str | None = None) -> dict[str, object]:
@@ -576,7 +579,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 folder_id=folder_id,
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_filesystem_list_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="find_files")
         async def find_files_tool(
@@ -596,7 +599,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 page=1,
                 page_size=max(1, min(page_size, 50)),
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_filesystem_search_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="create_folder")
         async def create_folder_tool(
@@ -611,7 +614,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 parent_id=parent_id,
                 name=name,
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_filesystem_entry(response.model_dump(mode="json"))
 
         @function_tool(name_override="update_filesystem_entry")
         async def update_filesystem_entry_tool(
@@ -630,7 +633,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_filesystem_entry(response.model_dump(mode="json"))
 
         @function_tool(name_override="delete_filesystem_entries")
         async def delete_filesystem_entries_tool(
@@ -694,11 +697,11 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             return {"client_tool": "set_file_search", "query": query, "tag_ids": tag_ids or []}
 
         @function_tool(name_override="list_tags")
-        async def list_tags_tool(ctx: ChatKitToolContext) -> list[dict[str, object]]:
-            """List available auto and manual tags for filtering retrieval."""
+        async def list_tags_tool(ctx: ChatKitToolContext) -> dict[str, object]:
+            """List available auto and manual tag slugs for filtering retrieval."""
             request_context = ctx.context.request_context
             tags = await self._sources.list_tags(clerk_user_id=request_context.clerk_user_id)
-            return [tag.model_dump(mode="json") for tag in tags]
+            return {"tags": [compact_chatkit_tag(tag.model_dump(mode="json")) for tag in tags]}
 
         @function_tool(name_override="create_tag")
         async def create_tag_tool(ctx: ChatKitToolContext, name: str, color: str | None = None) -> dict[str, object]:
@@ -709,7 +712,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 name=name,
                 color=color,
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_tag_mutation_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="update_tag")
         async def update_tag_tool(
@@ -734,7 +737,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Tag updated. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_tag_mutation_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="delete_tag")
         async def delete_tag_tool(ctx: ChatKitToolContext, tag_id: str, confirm: bool = False) -> dict[str, object]:
@@ -758,7 +761,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Tag deleted. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_tag_mutation_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="get_source_detail")
         async def get_source_detail_tool(ctx: ChatKitToolContext, source_id: str) -> dict[str, object]:
@@ -768,7 +771,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 source_id=source_id,
             )
-            return detail.model_dump(mode="json")
+            return compact_chatkit_source_detail_payload(detail.model_dump(mode="json"))
 
         @function_tool(name_override="ingest_text_source")
         async def ingest_text_source_tool(
@@ -801,7 +804,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Source {response.source.id[:8]} queued for ingestion as {task_label}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_ingest_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="search_chunks")
         async def search_chunks_tool(
@@ -833,7 +836,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Found {len(response.hits)} file match{'' if len(response.hits) == 1 else 'es'} across {source_count} source{'' if source_count == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_search_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="branch_search")
         async def branch_search_tool(
@@ -867,7 +870,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Explored {len(response.levels)} level{'' if len(response.levels) == 1 else 's'} with {hit_count} hit{'' if hit_count == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_branch_search_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="preview_semantic_split")
         async def preview_semantic_split_tool(
@@ -895,7 +898,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     f"{len(response.split.tags)} tag{'' if len(response.split.tags) == 1 else 's'}, strategy {response.ingest_strategy}."
                 ),
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_split_preview_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="start_research_import")
         async def start_research_import_tool(
@@ -942,7 +945,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_research_import_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="build_research_library")
         async def build_research_library_tool(
@@ -994,6 +997,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
             )
             payload = response.model_dump(mode="json")
+            compact_payload = compact_chatkit_research_build_payload(payload)
             ctx.context.client_tool_call = ClientToolCall(
                 name="show_research_builder",
                 arguments={
@@ -1005,7 +1009,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     "result": payload,
                 },
             )
-            return payload
+            return compact_payload
 
         @function_tool(name_override="list_research_candidates")
         async def list_research_candidates_tool(
@@ -1033,7 +1037,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 name="show_research_builder",
                 arguments={"task_id": task_id, "candidates": payload["candidates"]},
             )
-            return payload
+            return compact_chatkit_research_candidate_list_payload(payload)
 
         @function_tool(name_override="update_research_candidate_status")
         async def update_research_candidate_status_tool(
@@ -1056,7 +1060,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 name="show_research_builder",
                 arguments={"task_id": task_id, "candidates": payload["candidates"]},
             )
-            return payload
+            return {"candidates": [compact_chatkit_research_candidate(item) for item in payload["candidates"]]}
 
         @function_tool(name_override="ingest_research_candidates")
         async def ingest_research_candidates_tool(
@@ -1099,7 +1103,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     "ingested": payload["ingested"],
                 },
             )
-            return payload
+            return compact_chatkit_research_ingest_payload(payload)
 
         @function_tool(name_override="answer_research_library")
         async def answer_research_library_tool(
@@ -1214,7 +1218,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Research answer ready with {len(response.hits)} cited match{'' if len(response.hits) == 1 else 'es'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="resplit_source")
         async def resplit_source_tool(
@@ -1242,7 +1246,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Re-split queued for source {response.source.id[:8]} as {task_label}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_ingest_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="update_source_tags")
         async def update_source_tags_tool(
@@ -1268,7 +1272,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Tag reindex queued for source {response.source.id[:8]} as {task_label}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_ingest_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="delete_source")
         async def delete_source_tool(
@@ -1317,7 +1321,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 kind=task_kind,
                 limit=max(1, min(limit, 50)),
             )
-            return response.model_dump(mode="json")
+            return {"tasks": [compact_chatkit_task_payload(item) for item in response.model_dump(mode="json")["tasks"]]}
 
         @function_tool(name_override="get_task")
         async def get_task_tool(ctx: ChatKitToolContext, task_id: str) -> dict[str, object]:
@@ -1327,7 +1331,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 task_id=task_id,
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_task_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="answer_from_library")
         async def answer_from_library_tool(
@@ -1358,7 +1362,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Grounded answer complete as task {response.task_id[:8]} with {len(response.hits)} citation{'' if len(response.hits) == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="freeform_from_library")
         async def freeform_from_library_tool(
@@ -1391,7 +1395,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Draft complete as task {response.task_id[:8]} with {len(response.hits)} retrieved chunk{'' if len(response.hits) == 1 else 's'}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="generate_image_from_library")
         async def generate_image_from_library_tool(
@@ -1423,7 +1427,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Image generation complete as task {response.task_id[:8]}{asset_text}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
         @function_tool(name_override="generate_voice_from_library")
         async def generate_voice_from_library_tool(
@@ -1459,7 +1463,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Voice generation complete as task {response.task_id[:8]}{asset_text}.",
             )
-            return response.model_dump(mode="json")
+            return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
         return [
             name_thread_tool,
@@ -1516,6 +1520,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "The app's file explorer is the primary source of file input and selection; selected files are retrieval scope first, and only small ready files may be attached to a user turn as OpenAI file inputs. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Research build tools update the browser's research builder panel so the user can inspect candidate, duplicate, download, and indexing state. "
+            "Tool results are intentionally compact: source/file records expose id, name, type, description, summary, tag slugs, and a citation_link when available. "
+            "When citing evidence, use markdown links with the provided citation_link, for example [Source title](chatkit-link://source?source_id=...). "
+            "Those links reveal the source in the file explorer when clicked. "
+            "Treat tag slugs as the stable tag identifiers; tag filter arguments named tag_ids accept tag slugs as well as legacy tag IDs. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
             "If a selected source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
@@ -1574,12 +1582,460 @@ def selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | No
     return list(context.selected_source_ids)
 
 
+def chatkit_source_deeplink(source_id: str, *, locator: object | None = None) -> str:
+    params: dict[str, str] = {"source_id": source_id}
+    locator_label = _locator_label(locator)
+    if locator_label is not None:
+        params["locator"] = locator_label
+    return f"chatkit-link://source?{urlencode(params)}"
+
+
+def compact_chatkit_tag(value: object) -> dict[str, str]:
+    tag = _mapping_or_empty(value)
+    slug = _string_or_none(tag.get("slug")) or _string_or_none(tag.get("name")) or _string_or_none(tag.get("id"))
+    if slug is None:
+        return {}
+    output = {"slug": slug}
+    name = _string_or_none(tag.get("name"))
+    if name is not None and name != slug:
+        output["name"] = name
+    return output
+
+
+def compact_chatkit_file_list_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "sources": [compact_chatkit_source_payload(source) for source in _mapping_list(payload.get("sources"))],
+            "total_count": payload.get("total_count"),
+            "page": payload.get("page"),
+            "page_size": payload.get("page_size"),
+            "has_more": payload.get("has_more"),
+        }
+    )
+
+
+def compact_chatkit_filesystem_list_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "current": compact_chatkit_filesystem_entry(payload.get("current")),
+            "breadcrumbs": [_breadcrumb_payload(item) for item in _mapping_list(payload.get("breadcrumbs"))],
+            "entries": [compact_chatkit_filesystem_entry(entry) for entry in _mapping_list(payload.get("entries"))],
+        }
+    )
+
+
+def compact_chatkit_filesystem_search_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "query": payload.get("query"),
+            "entries": [compact_chatkit_filesystem_entry(entry) for entry in _mapping_list(payload.get("entries"))],
+            "total_count": payload.get("total_count"),
+            "page": payload.get("page"),
+            "page_size": payload.get("page_size"),
+            "has_more": payload.get("has_more"),
+        }
+    )
+
+
+def compact_chatkit_filesystem_entry(value: object) -> dict[str, object]:
+    entry = _mapping_or_empty(value)
+    source_id = _string_or_none(entry.get("source_id"))
+    entry_type = _string_or_none(entry.get("source_kind")) or _string_or_none(entry.get("kind"))
+    output = _drop_none(
+        {
+            "id": _string_or_none(entry.get("id")),
+            "type": entry_type,
+            "name": _string_or_none(entry.get("name")),
+            "path": _string_or_none(entry.get("path")),
+            "source_id": source_id,
+            "status": _string_or_none(entry.get("status")),
+            "description": _trim_text(entry.get("description"), limit=600),
+            "summary": _trim_text(entry.get("summary"), limit=900),
+            "tags": _compact_tag_slugs(entry.get("tags")) or _string_list(entry.get("suggested_tags")),
+            "citation_link": chatkit_source_deeplink(source_id) if source_id is not None else None,
+        }
+    )
+    return output
+
+
+def compact_chatkit_source_payload(value: object) -> dict[str, object]:
+    source = _mapping_or_empty(value)
+    source_id = _string_or_none(source.get("id")) or _string_or_none(source.get("source_id"))
+    name = (
+        _string_or_none(source.get("display_title"))
+        or _string_or_none(source.get("virtual_name"))
+        or _string_or_none(source.get("original_filename"))
+        or _string_or_none(source.get("name"))
+    )
+    source_type = _string_or_none(source.get("source_kind")) or _string_or_none(source.get("media_type"))
+    return _drop_none(
+        {
+            "id": source_id,
+            "type": source_type,
+            "name": name,
+            "path": _string_or_none(source.get("virtual_path")),
+            "status": _string_or_none(source.get("status")),
+            "description": _trim_text(source.get("description"), limit=600),
+            "summary": _trim_text(source.get("summary"), limit=900),
+            "tags": _compact_tag_slugs(source.get("tags")) or _string_list(source.get("suggested_tags")),
+            "citation_link": chatkit_source_deeplink(source_id) if source_id is not None else None,
+        }
+    )
+
+
+def compact_chatkit_source_detail_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    chunks = _mapping_list(payload.get("chunks"))
+    output = compact_chatkit_source_payload(payload)
+    output["total_chunks"] = len(chunks)
+    output["chunks"] = [compact_chatkit_chunk_payload(chunk) for chunk in chunks[:CHATKIT_DETAIL_CHUNK_LIMIT]]
+    return output
+
+
+def compact_chatkit_chunk_payload(value: object) -> dict[str, object]:
+    chunk = _mapping_or_empty(value)
+    locator = chunk.get("locator")
+    return _drop_none(
+        {
+            "id": _string_or_none(chunk.get("id")) or _string_or_none(chunk.get("chunk_id")),
+            "sequence": chunk.get("sequence"),
+            "title": _string_or_none(chunk.get("title")),
+            "summary": _trim_text(chunk.get("summary"), limit=700),
+            "text": _trim_text(chunk.get("text"), limit=CHATKIT_TEXT_SNIPPET_MAX_CHARS),
+            "locator": _locator_label(locator) or locator,
+            "keywords": _string_list(chunk.get("keywords")),
+        }
+    )
+
+
+def compact_chatkit_hit_payload(value: object) -> dict[str, object]:
+    hit = _mapping_or_empty(value)
+    source_id = _string_or_none(hit.get("source_file_id")) or _string_or_none(hit.get("source_id"))
+    locator = hit.get("locator")
+    return _drop_none(
+        {
+            "id": source_id,
+            "type": "source",
+            "name": _string_or_none(hit.get("source_title")),
+            "chunk_id": _string_or_none(hit.get("chunk_id")),
+            "title": _string_or_none(hit.get("title")),
+            "summary": _trim_text(hit.get("summary"), limit=700),
+            "text": _trim_text(hit.get("text"), limit=CHATKIT_TEXT_SNIPPET_MAX_CHARS),
+            "tags": _compact_tag_slugs(hit.get("tags")),
+            "locator": _locator_label(locator) or locator,
+            "score": hit.get("score"),
+            "citation_link": chatkit_source_deeplink(source_id, locator=locator) if source_id is not None else None,
+        }
+    )
+
+
+def compact_chatkit_search_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "query": _string_or_none(payload.get("query")),
+            "hits": [compact_chatkit_hit_payload(hit) for hit in _mapping_list(payload.get("hits"))],
+        }
+    )
+
+
+def compact_chatkit_branch_search_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "query": _string_or_none(payload.get("query")),
+            "descend": payload.get("descend"),
+            "max_width": payload.get("max_width"),
+            "levels": [
+                _drop_none(
+                    {
+                        "depth": level.get("depth"),
+                        "hits": [compact_chatkit_hit_payload(hit) for hit in _mapping_list(level.get("hits"))],
+                    }
+                )
+                for level in _mapping_list(payload.get("levels"))
+            ],
+        }
+    )
+
+
+def compact_chatkit_split_preview_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    split = _mapping_or_empty(payload.get("split"))
+    return _drop_none(
+        {
+            "name": _string_or_none(payload.get("filename")),
+            "type": _string_or_none(payload.get("source_kind")) or _string_or_none(payload.get("media_type")),
+            "byte_size": payload.get("byte_size"),
+            "ingest_strategy": _string_or_none(payload.get("ingest_strategy")),
+            "extracted_character_count": payload.get("extracted_character_count"),
+            "tags": _string_list(split.get("tags")),
+            "chunks": [compact_chatkit_chunk_payload(chunk) for chunk in _mapping_list(split.get("chunks"))],
+        }
+    )
+
+
+def compact_chatkit_ingest_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "source": compact_chatkit_source_payload(payload.get("source")),
+            "task": compact_chatkit_task_payload(payload.get("task")),
+        }
+    )
+
+
+def compact_chatkit_tag_mutation_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    tag = payload.get("tag")
+    return _drop_none(
+        {
+            "tag": compact_chatkit_tag(tag) if isinstance(tag, Mapping) else None,
+            "tasks": [compact_chatkit_task_payload(task) for task in _mapping_list(payload.get("tasks"))],
+        }
+    )
+
+
+def compact_chatkit_action_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "task_id": _string_or_none(payload.get("task_id")),
+            "type": _string_or_none(payload.get("kind")),
+            "answer": _string_or_none(payload.get("answer")),
+            "sources": [compact_chatkit_hit_payload(hit) for hit in _mapping_list(payload.get("hits"))],
+            "asset": _compact_asset_payload(payload.get("asset")),
+            "source_status": payload.get("source_status") if isinstance(payload.get("source_status"), Mapping) else None,
+        }
+    )
+
+
+def compact_chatkit_task_payload(value: object) -> dict[str, object]:
+    task = _mapping_or_empty(value)
+    if not task:
+        return {}
+    result = task.get("result_json")
+    return _drop_none(
+        {
+            "id": _string_or_none(task.get("id")),
+            "type": _string_or_none(task.get("kind")),
+            "status": _string_or_none(task.get("status")),
+            "title": _string_or_none(task.get("title")),
+            "source_id": _string_or_none(task.get("source_file_id")),
+            "error_message": _trim_text(task.get("error_message"), limit=900),
+            "state": task.get("state_json") if isinstance(task.get("state_json"), Mapping) else None,
+            "result": _compact_task_result_payload(result),
+            "created_at": _string_or_none(task.get("created_at")),
+            "updated_at": _string_or_none(task.get("updated_at")),
+            "completed_at": _string_or_none(task.get("completed_at")),
+        }
+    )
+
+
+def compact_chatkit_research_import_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "task": compact_chatkit_task_payload(payload.get("task")),
+            "seed_source": compact_chatkit_source_payload(payload.get("seed_source")),
+            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "duplicate_count": payload.get("duplicate_count"),
+            "target_folder_id": _string_or_none(payload.get("target_folder_id")),
+        }
+    )
+
+
+def compact_chatkit_research_build_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "task": compact_chatkit_task_payload(payload.get("task")),
+            "target_folder_id": _string_or_none(payload.get("target_folder_id")),
+            "seed_source": compact_chatkit_source_payload(payload.get("seed_source")),
+            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "ingested": [compact_chatkit_ingest_payload(item) for item in _mapping_list(payload.get("ingested"))],
+            "duplicate_count": payload.get("duplicate_count"),
+        }
+    )
+
+
+def compact_chatkit_research_candidate_list_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "total_count": payload.get("total_count"),
+            "page": payload.get("page"),
+            "page_size": payload.get("page_size"),
+            "has_more": payload.get("has_more"),
+        }
+    )
+
+
+def compact_chatkit_research_ingest_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "ingested": [compact_chatkit_ingest_payload(item) for item in _mapping_list(payload.get("ingested"))],
+            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+        }
+    )
+
+
+def compact_chatkit_research_candidate(value: object) -> dict[str, object]:
+    candidate = _mapping_or_empty(value)
+    source_id = _string_or_none(candidate.get("linked_source_file_id"))
+    return _drop_none(
+        {
+            "id": _string_or_none(candidate.get("id")),
+            "task_id": _string_or_none(candidate.get("task_id")),
+            "status": _string_or_none(candidate.get("status")),
+            "type": _string_or_none(candidate.get("source_type")),
+            "name": _string_or_none(candidate.get("title")),
+            "url": _string_or_none(candidate.get("url")),
+            "description": _trim_text(candidate.get("description"), limit=600),
+            "summary": _trim_text(candidate.get("summary"), limit=900),
+            "tags": _string_list(candidate.get("suggested_tags")),
+            "authors": _string_list(candidate.get("authors")),
+            "published_at": _string_or_none(candidate.get("published_at")),
+            "doi": _string_or_none(candidate.get("doi")),
+            "arxiv_id": _string_or_none(candidate.get("arxiv_id")),
+            "depth": candidate.get("depth"),
+            "parent_id": _string_or_none(candidate.get("parent_candidate_id")),
+            "source_id": source_id,
+            "error_message": _trim_text(candidate.get("error_message"), limit=900),
+            "citation_link": chatkit_source_deeplink(source_id) if source_id is not None else None,
+        }
+    )
+
+
 def _title_from_user_message(item: UserMessageItem) -> str | None:
     text_parts = [part.text.strip() for part in item.content if getattr(part, "type", None) == "text"]
     combined = " ".join(part for part in text_parts if part).strip()
     if not combined:
         return None
     return combined if len(combined) <= 72 else combined[:69].rstrip() + "..."
+
+
+def _mapping_or_empty(value: object) -> Mapping[str, object]:
+    if isinstance(value, Mapping):
+        return {str(key): item for key, item in value.items()}
+    return {}
+
+
+def _mapping_list(value: object) -> list[Mapping[str, object]]:
+    if not isinstance(value, list):
+        return []
+    return [_mapping_or_empty(item) for item in value if isinstance(item, Mapping)]
+
+
+def _drop_none(value: Mapping[str, object | None]) -> dict[str, object]:
+    return {key: item for key, item in value.items() if item is not None}
+
+
+def _trim_text(value: object, *, limit: int) -> str | None:
+    text = _string_or_none(value)
+    if text is None:
+        return None
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 3)].rstrip() + "..."
+
+
+def _compact_tag_slugs(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    for item in value:
+        slug: str | None
+        if isinstance(item, Mapping):
+            mapping = _mapping_or_empty(item)
+            slug = _string_or_none(mapping.get("slug")) or _string_or_none(mapping.get("name")) or _string_or_none(mapping.get("id"))
+        else:
+            slug = _string_or_none(item)
+        if slug is not None and slug not in output:
+            output.append(slug)
+    return output
+
+
+def _breadcrumb_payload(value: object) -> dict[str, object]:
+    breadcrumb = _mapping_or_empty(value)
+    return _drop_none(
+        {
+            "id": _string_or_none(breadcrumb.get("id")),
+            "name": _string_or_none(breadcrumb.get("name")),
+            "path": _string_or_none(breadcrumb.get("path")),
+        }
+    )
+
+
+def _compact_asset_payload(value: object) -> dict[str, object] | None:
+    asset = _mapping_or_empty(value)
+    if not asset:
+        return None
+    return _drop_none(
+        {
+            "id": _string_or_none(asset.get("id")),
+            "type": _string_or_none(asset.get("kind")),
+            "name": _string_or_none(asset.get("filename")),
+            "media_type": _string_or_none(asset.get("media_type")),
+            "byte_size": asset.get("byte_size"),
+            "download_url": _string_or_none(asset.get("download_url")),
+        }
+    )
+
+
+def _compact_task_result_payload(value: object) -> object | None:
+    result = _mapping_or_empty(value)
+    if not result:
+        return None
+    if "answer" in result or "hits" in result:
+        return compact_chatkit_action_payload(result)
+    if "asset" in result:
+        return _drop_none({"asset": _compact_asset_payload(result.get("asset"))})
+    if "source" in result or "task" in result:
+        return compact_chatkit_ingest_payload(result)
+    return {
+        key: item
+        for key, item in result.items()
+        if key in {"stage", "source_id", "task_id", "candidate_id", "openai_response_id", "openai_conversation_id"}
+    } or None
+
+
+def _locator_label(value: object) -> str | None:
+    locator = _mapping_or_empty(value)
+    locator_type = _string_or_none(locator.get("type"))
+    if locator_type == "page_range":
+        start_page = _int_or_none(locator.get("start_page"))
+        end_page = _int_or_none(locator.get("end_page"))
+        if start_page is not None:
+            return f"p. {start_page}" if end_page in {None, start_page} else f"pp. {start_page}-{end_page}"
+    if locator_type == "line_range":
+        start_line = _int_or_none(locator.get("start_line"))
+        end_line = _int_or_none(locator.get("end_line"))
+        if start_line is not None:
+            return f"line {start_line}" if end_line in {None, start_line} else f"lines {start_line}-{end_line}"
+    if locator_type == "time_range":
+        start_seconds = _float_or_none(locator.get("start_seconds"))
+        end_seconds = _float_or_none(locator.get("end_seconds"))
+        if start_seconds is not None and end_seconds is not None:
+            return f"{start_seconds:.1f}s-{end_seconds:.1f}s"
+    return "generated" if locator_type == "generated" else None
+
+
+def _int_or_none(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _float_or_none(value: object) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    return None
 
 
 def chatkit_model_settings_for_model(model: str | None, *, compact_threshold: int | None) -> ModelSettings:

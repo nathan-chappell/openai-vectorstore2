@@ -42,7 +42,7 @@ Acceptance criteria:
 
 ### 2. Evidence Annotations
 
-Status: planned.
+Status: first pass implemented; needs browser verification.
 
 Goal:
 
@@ -52,9 +52,17 @@ Goal:
 
 Implementation notes:
 
-- Prefer native ChatKit annotations if custom source annotations are supported.
-- If native inline annotations are not available, build a compact evidence widget with source chips that call `reveal_file`.
-- Keep source IDs, file IDs, locators, and task IDs in structured tool results.
+- ChatKit-facing retrieval and answer tools now return compact source records with source ID, name, type, path, description, summary, tag slugs, locator, and `citation_link`.
+- The agent is instructed to cite evidence with markdown links that use `chatkit-link://source?...`.
+- The frontend handles ChatKit deeplink events and composer entity clicks by revealing the matching file in Explorer.
+- Composer entity search can find files/folders and insert clickable file tags.
+- Native output annotation support still needs live verification; the current baseline uses ChatKit deeplinks and entity callbacks.
+
+Next:
+
+- Verify a grounded ChatKit answer in the browser and confirm citation clicks reveal the source.
+- If ChatKit exposes richer output annotations for custom source entities, replace or augment markdown links with native annotations.
+- Consider an evidence widget for answer summaries that need a stable source list outside prose.
 
 ### 3. ChatKit Stability Verification
 
@@ -86,6 +94,48 @@ Add Playwright coverage for normal file-library work:
 - Select files and ask ChatKit a grounded question.
 - Reveal a source from ChatKit or Library view.
 - Delete files and folders with progress/status feedback.
+
+### 5. Usage Credits And Stripe-Ready Billing
+
+Status: planned; mirror the working `../plodai` approach before adding payment automation.
+
+PlodAI reference setup:
+
+- Clerk sign-up creates the account, but app access is still gated by manual activation.
+- Clerk metadata carries `active`, `role`, and `credit_floor_usd`; activation sets a default negative floor so a newly activated user can try the product before payments exist.
+- The database stores `user_credit_balances`, `credit_grants`, and `cost_events`.
+- Admin endpoints and an admin UI list Clerk users, show activation/balance state, activate/deactivate users, and grant manual USD credit with an audit note.
+- ChatKit usage is converted to a platform cost by applying a multiplier to OpenAI token/transcription pricing, accumulated into thread metadata, recorded as cost events, and deducted from the user's credit balance.
+- Non-admin users are blocked when their current credit reaches the configured floor; admins bypass the paid-user gate.
+- Stripe is not implemented there yet; the manual grant ledger is the bridge that can later receive payment-created credits.
+
+Decision:
+
+- Bring the same account monetization model here: manual activation first, free trial credit on activation, prepaid USD credit balances, cost-event debits, and a configurable markup over underlying OpenAI API cost.
+- Start with a default markup in the `1.2x` to `1.5x` range, exposed as settings rather than hardcoded, so the business rule can change without a migration.
+- Treat Stripe as a future credit-funding source, not as the first implementation dependency. The first pass should make the ledger, admin grant flow, and usage debiting correct even when all credits are granted manually.
+- Cover every expensive OpenAI-backed path, not only ChatKit text turns: ChatKit agent runs, transcription/voice if enabled, image generation, research discovery/answers, source-file vector uploads/searches where measurable, and any future generation actions.
+
+Implementation notes:
+
+- Reuse this repo's existing Clerk and `AppUser` foundation: `private_metadata` already provides `active` and `role`, and local `AppUser` records already mirror Clerk identity.
+- Add billing metadata support for a per-user credit floor, activation defaults, and admin-only active/role/balance management without weakening the local-dev auth path.
+- Add app-owned billing tables with migrations and drift tests: current balance, manual/admin credit grants, cost events with user/thread/task/source/action/openai response IDs when available, pricing version, raw usage summary, platform multiplier, and optional Stripe/payment reference fields for later.
+- Add a `BillingService` or equivalent boundary that can grant credits, compute marked-up cost, record idempotent debits, enforce balance floors, and expose concise balance/status responses to web, ChatKit, MCP, and tests.
+- Centralize OpenAI pricing data and model it as configuration/versioned constants. Unknown models should log a warning and choose a deliberate policy: block, charge zero with an audit event, or require an explicit fallback price.
+- Gate billable user operations before starting long work where possible, then record actual cost after completion using the logged response IDs and usage data already captured by the OpenAI/ChatKit observability layer.
+- Add admin REST endpoints and a compact admin view for user search, activation/deactivation, manual credit grants with notes, balance display, recent grants/costs, and low/empty credit status.
+- Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding Stripe checkout until the ledger is proven.
+- Prepare Stripe integration by reserving fields for payment provider, checkout/session/payment intent IDs, payment status, and credit amount, then later add webhook-driven credit grants with idempotency.
+
+Acceptance criteria:
+
+- A signed-up Clerk user remains blocked until manually activated.
+- Activating a user grants or exposes a default free-usage allowance, after which the user can use normal library and ChatKit workflows.
+- Billable OpenAI usage creates auditable cost events, debits the user's balance using the configured markup, and leaves enough identifiers to reconcile a charge against app logs and OpenAI platform logs.
+- Users at or below their credit floor receive a clear payment/credit-required response before new expensive work starts.
+- Admins can search users, activate/deactivate accounts, grant credit with a note, and inspect balances without direct database edits.
+- Tests cover activation gating, admin grants, debit idempotency, cost calculations, low-credit blocking, local-dev/admin bypass behavior, and the contract surface exposed to the frontend.
 
 ## Completed Baseline
 
@@ -138,6 +188,8 @@ Status: complete for the current baseline.
 - ChatKit treats selected files as retrieval scope first; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
 - ChatKit Responses requests enable server-side context compaction with a configurable compact threshold.
 - ChatKit can name threads early through a side-effect tool that updates thread title metadata.
+- ChatKit tool responses are compacted to avoid passing OpenAI file IDs, full tag objects, raw metadata, and bulky result payloads back through conversation state.
+- Tag slugs are treated as stable tag identifiers for ChatKit; backend tag-filter paths accept tag slugs as well as legacy tag IDs.
 
 ### Logging And Debugging
 
@@ -204,7 +256,7 @@ Targeted checks to keep using:
 
 - Should split-derived chunks stay inspection-only, or should they get an advanced vector workflow later?
 - Should the public API rename `search_chunks` / `ChunkHit` now that normal retrieval is source-file based?
-- Should ChatKit source annotations use native inline annotations, a custom evidence widget, or both?
+- Should ChatKit source annotations move beyond deeplink markdown once native custom output annotations are verified?
 - Should MCP eventually add a higher-level `ask_library_agent` tool, or stay primitive-tool-first until a host needs an agent wrapper?
 
 ## Completed History

@@ -911,12 +911,13 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             assert alpha_tag.status_code == 200
             assert bravo_tag.status_code == 200
             alpha_tag_id = alpha_tag.json()["tag"]["id"]
+            alpha_tag_slug = alpha_tag.json()["tag"]["slug"]
             bravo_tag_id = bravo_tag.json()["tag"]["id"]
             alpha_upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
-                data={"tag_ids": alpha_tag_id},
+                data={"tag_ids": alpha_tag_slug},
             )
             assert alpha_upload.status_code == 200
             alpha_payload = alpha_upload.json()
@@ -947,7 +948,7 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             alpha_search = await client.post(
                 "/api/search",
                 headers=auth_headers,
-                json={"query": "retrieval", "tag_ids": [alpha_tag_id], "max_results": 8},
+                json={"query": "retrieval", "tag_ids": [alpha_tag_slug], "max_results": 8},
             )
             assert alpha_search.status_code == 200
             assert {hit["source_file_id"] for hit in alpha_search.json()["hits"]} == {alpha_source_id}
@@ -957,7 +958,7 @@ async def test_http_search_honors_tag_source_and_kind_filters(
                 headers=auth_headers,
                 json={
                     "query": "retrieval",
-                    "tag_ids": [alpha_tag_id, bravo_tag_id],
+                    "tag_ids": [alpha_tag_slug, bravo_tag_id],
                     "tag_match_mode": "any",
                     "max_results": 8,
                 },

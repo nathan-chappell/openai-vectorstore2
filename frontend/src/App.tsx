@@ -1,4 +1,4 @@
-import { ChatKit, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
+import { ChatKit, type Entity, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   CSSProperties,
@@ -79,6 +79,10 @@ type ResearchBuilderSeedKind = Extract<ResearchSeedKind, "topic" | "paper">;
 type DeleteDialogState = {
   entries: FilesystemEntrySummary[];
   phase: "confirming" | "deleting";
+};
+type RevealTarget = {
+  sourceId?: string | null;
+  entryId?: string | null;
 };
 const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
   { id: "topic", label: "Topic" },
@@ -216,6 +220,7 @@ export function App({ authMode }: AppProps) {
   const workspaceGridRef = useRef<HTMLElement | null>(null);
   const previewGridRef = useRef<HTMLDivElement | null>(null);
   const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
+  const tagsRef = useRef<TagSummary[]>([]);
   const clientToolUiQueueRef = useRef<Array<() => void | Promise<void>>>([]);
   const clientToolUiFlushRef = useRef<number | null>(null);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
@@ -363,6 +368,10 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     knownEntriesRef.current = knownEntries;
   }, [knownEntries]);
+
+  useEffect(() => {
+    tagsRef.current = tags;
+  }, [tags]);
 
   useEffect(
     () => () => {
@@ -796,6 +805,84 @@ export function App({ authMode }: AppProps) {
     );
   }, []);
 
+  const revealFileInExplorer = useCallback(
+    async ({ sourceId, entryId }: RevealTarget): Promise<Record<string, unknown>> => {
+      const entriesById = knownEntriesRef.current;
+      let searchedEntries: FilesystemEntrySummary[] = [];
+      let entry = entryId ? entriesById[entryId] : null;
+      if (!entry && sourceId) {
+        entry = Object.values(entriesById).find((item) => item.source_id === sourceId) ?? null;
+      }
+      if (!entry && sourceId) {
+        const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
+        searchedEntries = search.entries;
+        entry = search.entries[0] ?? null;
+      }
+      if (!entry) {
+        setStatus("File was not found in the explorer.");
+        return { ok: false, message: "File was not found in the explorer." };
+      }
+      const revealedEntry = entry;
+      scheduleClientToolUiUpdate(async () => {
+        if (searchedEntries.length) {
+          cacheEntries(searchedEntries);
+        }
+        await loadFolder(revealedEntry.parent_id);
+        setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
+        setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
+        setSelectionAnchorEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
+        if (revealedEntry.source_id) {
+          setSelectedSourceIds((current) =>
+            sameStringArray(current, [revealedEntry.source_id as string]) ? current : [revealedEntry.source_id as string],
+          );
+          await openSource(revealedEntry.source_id);
+        } else {
+          setSelectedSourceIds((current) => (current.length ? [] : current));
+          setSelectedSource(null);
+          setStatus(`Opened ${revealedEntry.path}.`);
+        }
+      });
+      return { ok: true, entry_id: revealedEntry.id, source_id: revealedEntry.source_id, path: revealedEntry.path };
+    },
+    [cacheEntries, loadFolder, openSource, scheduleClientToolUiUpdate],
+  );
+
+  const searchChatEntities = useCallback(
+    async (query: string): Promise<Entity[]> => {
+      const response = await searchFilesystem({ query, pageSize: 12 });
+      cacheEntries(response.entries);
+      return response.entries.map((entry) => {
+        const data: Record<string, string> = {
+          entry_id: entry.id,
+          kind: entry.kind,
+          path: entry.path,
+        };
+        if (entry.source_id) {
+          data.source_id = entry.source_id;
+        }
+        return {
+          id: entry.source_id ?? entry.id,
+          title: entry.path,
+          icon: entry.kind === "folder" ? "lucide:folder" : "lucide:file-text",
+          interactive: true,
+          group: entry.kind === "folder" ? "Folders" : "Files",
+          data,
+        };
+      });
+    },
+    [cacheEntries],
+  );
+
+  const revealChatEntity = useCallback(
+    (entity: Entity): void => {
+      void revealFileInExplorer({
+        sourceId: entity.data?.source_id ?? null,
+        entryId: entity.data?.entry_id ?? (!entity.data?.source_id ? entity.id : null),
+      });
+    },
+    [revealFileInExplorer],
+  );
+
   const handleClientTool = useCallback(
     async (toolCall: { name: string; params: Record<string, unknown> }): Promise<Record<string, unknown>> => {
       if (toolCall.name === "set_file_selection") {
@@ -825,47 +912,23 @@ export function App({ authMode }: AppProps) {
       }
       if (toolCall.name === "set_file_search") {
         const query = typeof toolCall.params.query === "string" ? toolCall.params.query : "";
-        const tagIds = Array.isArray(toolCall.params.tag_ids)
+        const rawTagIds = Array.isArray(toolCall.params.tag_ids)
           ? toolCall.params.tag_ids.filter((id): id is string => typeof id === "string")
           : [];
+        const tagIds = rawTagIds.map((tagId) => {
+          const tag = tagsRef.current.find((candidate) => candidate.id === tagId || candidate.slug === tagId);
+          return tag?.id ?? tagId;
+        });
         scheduleClientToolUiUpdate(() => {
           setSourceQuery((current) => current === query ? current : query);
           setSelectedExplorerTagIds((current) => (sameStringArray(current, tagIds) ? current : tagIds));
         });
-        return { ok: true, query, tag_ids: tagIds };
+        return { ok: true, query, tag_ids: tagIds, requested_tags: rawTagIds };
       }
       if (toolCall.name === "reveal_file") {
         const sourceId = typeof toolCall.params.source_id === "string" ? toolCall.params.source_id : null;
         const entryId = typeof toolCall.params.entry_id === "string" ? toolCall.params.entry_id : null;
-        const entriesById = knownEntriesRef.current;
-        let searchedEntries: FilesystemEntrySummary[] = [];
-        let entry = entryId ? entriesById[entryId] : null;
-        if (!entry && sourceId) {
-          entry = Object.values(entriesById).find((item) => item.source_id === sourceId) ?? null;
-        }
-        if (!entry && sourceId) {
-          const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
-          searchedEntries = search.entries;
-          entry = search.entries[0] ?? null;
-        }
-        if (!entry) {
-          return { ok: false, message: "File was not found in the explorer." };
-        }
-        const revealedEntry = entry;
-        scheduleClientToolUiUpdate(async () => {
-          if (searchedEntries.length) {
-            cacheEntries(searchedEntries);
-          }
-          await loadFolder(revealedEntry.parent_id);
-          setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
-          setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
-          setSelectionAnchorEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
-          if (revealedEntry.source_id) {
-            setSelectedSourceIds((current) => (sameStringArray(current, [revealedEntry.source_id as string]) ? current : [revealedEntry.source_id as string]));
-            await openSource(revealedEntry.source_id);
-          }
-        });
-        return { ok: true, entry_id: entry.id, source_id: entry.source_id, path: entry.path };
+        return await revealFileInExplorer({ sourceId, entryId });
       }
       if (toolCall.name === "show_research_builder") {
         const query = typeof toolCall.params.query === "string" ? toolCall.params.query : null;
@@ -933,7 +996,7 @@ export function App({ authMode }: AppProps) {
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },
-    [cacheEntries, loadFolder, openSource, scheduleClientToolUiUpdate],
+    [loadFolder, revealFileInExplorer, scheduleClientToolUiUpdate],
   );
 
   const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -1080,7 +1143,12 @@ export function App({ authMode }: AppProps) {
         />
 
         <aside className="chat-panel" aria-label="AI file assistant">
-          <ChatPane onClientTool={handleClientTool} />
+          <ChatPane
+            onClientTool={handleClientTool}
+            onEntityClick={revealChatEntity}
+            onEntitySearch={searchChatEntities}
+            onRevealFile={revealFileInExplorer}
+          />
         </aside>
       </section>
       {deleteDialog ? (
@@ -1499,7 +1567,12 @@ function LegacyApp({ authMode }: AppProps) {
         />
 
         <aside className="chat-panel" aria-label="AI file assistant">
-          <ChatPane onClientTool={async () => ({ ok: false })} />
+          <ChatPane
+            onClientTool={async () => ({ ok: false })}
+            onEntityClick={() => undefined}
+            onEntitySearch={async () => []}
+            onRevealFile={async () => ({ ok: false })}
+          />
         </aside>
       </section>
     </main>
@@ -3058,12 +3131,36 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
   return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || tagName === "BUTTON";
 }
 
+function stringFromUnknown(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
 const ChatPane = memo(function ChatPane({
+  onEntityClick,
+  onEntitySearch,
   onClientTool,
+  onRevealFile,
 }: {
+  onEntityClick: (entity: Entity) => void;
+  onEntitySearch: (query: string) => Promise<Entity[]>;
   onClientTool: (toolCall: { name: string; params: Record<string, unknown> }) => Promise<Record<string, unknown>>;
+  onRevealFile: (target: RevealTarget) => Promise<Record<string, unknown>>;
 }) {
   const chatKitConfig = getChatKitConfig();
+  const handleDeeplink = useCallback(
+    (event: { name: string; data?: Record<string, unknown> }): void => {
+      const sourceIdFromName = event.name.startsWith("source/")
+        ? decodeURIComponent(event.name.slice("source/".length))
+        : null;
+      if (!sourceIdFromName && !["source", "file", "reveal_file", "reveal_source"].includes(event.name)) {
+        return;
+      }
+      const sourceId = stringFromUnknown(event.data?.source_id ?? event.data?.sourceId ?? event.data?.id) ?? sourceIdFromName;
+      const entryId = stringFromUnknown(event.data?.entry_id ?? event.data?.entryId);
+      void onRevealFile({ sourceId, entryId });
+    },
+    [onRevealFile],
+  );
   const options = useMemo<UseChatKitOptions>(
     () => ({
       api: {
@@ -3115,9 +3212,15 @@ const ChatPane = memo(function ChatPane({
       threadItemActions: {
         feedback: false,
       },
+      entities: {
+        onTagSearch: onEntitySearch,
+        showComposerMenu: true,
+        onClick: onEntityClick,
+      },
+      onDeeplink: handleDeeplink,
       onClientTool,
     }),
-    [chatKitConfig.domainKey, chatKitConfig.url, onClientTool],
+    [chatKitConfig.domainKey, chatKitConfig.url, handleDeeplink, onClientTool, onEntityClick, onEntitySearch],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;
