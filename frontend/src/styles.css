@@ -940,7 +940,7 @@ pre {
 
 .explorer-commandbar {
   display: grid;
-  grid-template-columns: repeat(4, auto) minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 0.35rem;
   align-items: center;
   border-bottom: 1px solid var(--line);

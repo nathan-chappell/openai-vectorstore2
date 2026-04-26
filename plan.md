@@ -249,6 +249,8 @@ Completed in this pass:
 - Added a pinned ChatKit composer tool and starter prompt for research builds, making ChatKit the primary start point.
 - Added candidate progress bars in the research panel and file-status progress bars in the file browser for processing/ready/failed states.
 - Updated capability descriptions, ChatKit instructions, MCP Apps copy, TypeScript contracts, and Playwright coverage for the direct-build workflow.
+- Added compact file-browser keyboard shortcuts for rename, navigate-up, and delete, and trimmed those buttons from the explorer command bar.
+- Added a Playwright escape hatch, `PLAYWRIGHT_REUSE_EXISTING_SERVER=true`, so local tests can reuse an already-running dev backend instead of colliding with it.
 
 Verification completed in this pass:
 
@@ -259,6 +261,7 @@ Verification completed in this pass:
 - `npm run build`
 - `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "research library builder directly"`
 - `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "workspace shell"`
+- `PLAYWRIGHT_REUSE_EXISTING_SERVER=true OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "file explorer shortcuts|workspace shell"`
 
 ## Browser And Design Fix Queue
 
@@ -269,7 +272,7 @@ Status: active intake; implement items as concrete plans arrive.
 - [x] Add a draggable horizontal splitter between the explorer/preview region and ChatKit, with sensible min/max widths and persisted preference.
 - [ ] Keep the file explorer dense, fast, and familiar: normal folder/file rows, tight metadata, simple affordances, no marketing-style cards or explanatory copy.
 - [x] Validate hidden-preview and splitter fixes with Playwright desktop and mobile screenshots before marking complete.
-- [ ] Add compact file-browser keyboard shortcuts: `F2` renames the focused item, `Backspace` navigates up one folder, and `Delete` deletes the current selection.
+- [x] Add compact file-browser keyboard shortcuts: `F2` renames the focused item, `Backspace` navigates up one folder, and `Delete` deletes the current selection.
 - [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
 ## Near-Term Follow-Ups

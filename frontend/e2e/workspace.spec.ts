@@ -155,7 +155,10 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator("openai-chatkit")).toBeVisible();
   await expect(page.getByPlaceholder("Find by name, path, tag, or indexed text")).toBeVisible();
   await expect(page.getByText("0 indexed files selected")).toBeVisible();
-  await expect(page.getByRole("button", { name: "New Folder" })).toBeEnabled();
+  await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "New Folder" })).toBeEnabled();
+  await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Up" })).toHaveCount(0);
+  await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Rename" })).toHaveCount(0);
+  await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Delete" })).toHaveCount(0);
   await expect(page.getByText("Add files")).toBeVisible();
   await expect(page.locator(".research-builder-strip")).toBeVisible();
   await expect(page.getByPlaceholder("Topic or paper title")).toBeVisible();
@@ -172,6 +175,112 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   }
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
+});
+
+test("file explorer shortcuts rename, navigate up, and delete", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop", "Keyboard shortcut coverage is desktop-focused.");
+
+  let fileName = "shortcut-note.txt";
+  let deleted = false;
+  const rootEntry = filesystemEntry({
+    id: "root",
+    kind: "folder",
+    name: "Files",
+    path: "/",
+  });
+  const shortcutFolder = filesystemEntry({
+    id: "folder-shortcuts",
+    kind: "folder",
+    name: "Shortcuts",
+    path: "/Shortcuts",
+    parent_id: "root",
+  });
+  const shortcutFile = (): FixtureRecord =>
+    filesystemEntry({
+      id: "entry-shortcut-note",
+      kind: "file",
+      name: fileName,
+      path: `/Shortcuts/${fileName}`,
+      parent_id: shortcutFolder.id,
+      source_id: null,
+      source_kind: "text",
+      media_type: "text/plain",
+      status: "ready",
+      byte_size: 128,
+    });
+
+  await page.route("**/api/filesystem/entries/**", async (route) => {
+    expect(route.request().method()).toBe("PATCH");
+    const payload = route.request().postDataJSON() as { name?: string };
+    expect(payload.name).toBe("renamed-shortcut-note.txt");
+    fileName = payload.name;
+    await route.fulfill({ json: shortcutFile() });
+  });
+  await page.route("**/api/filesystem/delete", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    const payload = route.request().postDataJSON() as { entry_ids: string[]; confirm: boolean };
+    expect(payload).toEqual({ entry_ids: ["entry-shortcut-note"], confirm: true });
+    deleted = true;
+    await route.fulfill({ json: { deleted_entry_ids: ["entry-shortcut-note"], deleted_source_ids: [] } });
+  });
+  await page.route("**/api/filesystem**", async (route) => {
+    const url = new URL(route.request().url());
+    if (
+      url.pathname.includes("/filesystem/entries/") ||
+      url.pathname.endsWith("/filesystem/delete") ||
+      url.pathname.endsWith("/filesystem/search")
+    ) {
+      await route.fallback();
+      return;
+    }
+    const folderId = url.searchParams.get("folder_id");
+    if (folderId === shortcutFolder.id) {
+      await route.fulfill({
+        json: {
+          current: shortcutFolder,
+          breadcrumbs: [
+            { id: rootEntry.id, name: "Files", path: "/" },
+            { id: shortcutFolder.id, name: shortcutFolder.name, path: shortcutFolder.path },
+          ],
+          entries: deleted ? [] : [shortcutFile()],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        current: rootEntry,
+        breadcrumbs: [{ id: rootEntry.id, name: "Files", path: "/" }],
+        entries: [shortcutFolder],
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.locator(".file-rows [role='row']").filter({ hasText: "Shortcuts" }).dblclick();
+  await expect(page.locator(".breadcrumb-row")).toContainText("Shortcuts");
+
+  await page.locator(".file-rows [role='row']").filter({ hasText: fileName }).click();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("prompt");
+    await dialog.accept("renamed-shortcut-note.txt");
+  });
+  await page.keyboard.press("F2");
+  await expect(page.locator(".file-rows")).toContainText("renamed-shortcut-note.txt");
+
+  await page.locator(".file-rows [role='row']").filter({ hasText: "renamed-shortcut-note.txt" }).click();
+  await page.keyboard.press("Backspace");
+  await expect(page.locator(".breadcrumb-row")).not.toContainText("Shortcuts");
+
+  await page.locator(".file-rows [role='row']").filter({ hasText: "Shortcuts" }).dblclick();
+  await page.locator(".file-rows [role='row']").filter({ hasText: "renamed-shortcut-note.txt" }).click();
+  page.once("dialog", async (dialog) => {
+    expect(dialog.type()).toBe("confirm");
+    await dialog.accept();
+  });
+  await page.keyboard.press("Delete");
+  await expect(page.locator(".file-rows")).toContainText("Folder is empty.");
+  await page.screenshot({ path: testInfo.outputPath("workspace-shortcuts.png"), fullPage: true });
 });
 
 test("research library builder directly indexes a candidate", async ({ page }, testInfo) => {

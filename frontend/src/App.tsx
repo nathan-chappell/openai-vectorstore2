@@ -1,6 +1,11 @@
 import { ChatKit, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
+import type {
+  CSSProperties,
+  KeyboardEvent as ReactKeyboardEvent,
+  MouseEvent as ReactMouseEvent,
+  PointerEvent as ReactPointerEvent,
+} from "react";
 
 import {
   authenticatedFetch,
@@ -1389,22 +1394,38 @@ const FileExplorer = memo(function FileExplorer({
   const selectedFileLabel =
     selectedFileEntries.length === 1 ? "1 indexed file selected" : `${selectedFileEntries.length} indexed files selected`;
   const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
+  const handleExplorerKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLElement>): void => {
+      if (busy || isEditableShortcutTarget(event.target)) {
+        return;
+      }
+      if (event.key === "F2" && selectedCount === 1) {
+        event.preventDefault();
+        onRenameSelected();
+        return;
+      }
+      if (event.key === "Backspace" && currentFolder?.parent_id) {
+        event.preventDefault();
+        onGoToFolder(currentFolder.parent_id);
+        return;
+      }
+      if (event.key === "Delete" && selectedCount > 0) {
+        event.preventDefault();
+        onDeleteSelected();
+      }
+    },
+    [busy, currentFolder?.parent_id, onDeleteSelected, onGoToFolder, onRenameSelected, selectedCount],
+  );
   return (
-    <aside className="explorer-pane filesystem-pane" aria-label="Files">
+    <aside className="explorer-pane filesystem-pane" aria-label="Files" onKeyDown={handleExplorerKeyDown}>
       <div className="explorer-commandbar">
-        <button type="button" className="secondary-button" onClick={() => onGoToFolder(currentFolder?.parent_id ?? null)} disabled={busy || !currentFolder?.parent_id}>
-          Up
-        </button>
         <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy || searching}>
           New Folder
         </button>
-        <button type="button" className="secondary-button" onClick={onRenameSelected} disabled={busy || selectedCount !== 1}>
-          Rename
-        </button>
-        <button type="button" className="secondary-button danger-button" onClick={onDeleteSelected} disabled={busy || !selectedCount}>
-          Delete
-        </button>
-        <div className="explorer-selection-summary" title={selectedFileEntries.map((entry) => entry.path).join(", ")}>
+        <div
+          className="explorer-selection-summary"
+          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "F2 rename, Backspace up, Delete remove selected"}
+        >
           <strong>{selectedFileLabel}</strong>
           <span>{selectedFileEntries.slice(0, 3).map((entry) => entry.name).join(", ") || "No ready files"}</span>
         </div>
@@ -1739,7 +1760,10 @@ const FileEntryRow = memo(function FileEntryRow({
       tabIndex={0}
       className={rowClassName || undefined}
       draggable
-      onClick={(event) => onChoose(entry, event)}
+      onClick={(event) => {
+        event.currentTarget.focus();
+        onChoose(entry, event);
+      }}
       onDoubleClick={() => onOpen(entry)}
       onDragStart={(event) => {
         event.dataTransfer.setData("application/x-entry-ids", JSON.stringify(dragEntryIds.includes(entry.id) ? dragEntryIds : [entry.id]));
@@ -2533,6 +2557,14 @@ function readStoredWorkspaceSplit(): number {
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
+}
+
+function isEditableShortcutTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+  const tagName = target.tagName;
+  return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || tagName === "BUTTON";
 }
 
 const ChatPane = memo(function ChatPane({

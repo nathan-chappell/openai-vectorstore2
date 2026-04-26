@@ -44,6 +44,7 @@ const frontendEnv: Record<string, string> = {
   ...baseEnv,
   ...clerkDisabledEnv,
 };
+const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 
 export default defineConfig({
   testDir: "frontend/e2e",
@@ -59,14 +60,14 @@ export default defineConfig({
       command: "./.venv/bin/uvicorn backend.app.main:create_fastapi_app --factory --host 127.0.0.1 --port 8000",
       url: "http://127.0.0.1:8000/health",
       timeout: 60_000,
-      reuseExistingServer: false,
+      reuseExistingServer,
       env: backendEnv,
     },
     {
       command: "npm run dev -- --host 127.0.0.1",
       url: "http://127.0.0.1:5173",
       timeout: 60_000,
-      reuseExistingServer: false,
+      reuseExistingServer,
       env: frontendEnv,
     },
   ],
