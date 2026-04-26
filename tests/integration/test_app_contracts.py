@@ -460,6 +460,83 @@ async def test_http_research_library_build_expands_followup_candidates(
 
 
 @pytest.mark.asyncio
+async def test_http_research_library_build_auto_ingests_public_candidates(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+
+    async def handle_reference_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        request = await reader.read(2048)
+        request_line = request.splitlines()[0].decode("ascii", errors="ignore")
+        path = request_line.split(" ")[1] if " " in request_line else "/reference.txt"
+        body = f"Fetched research source from {path}. Alpha retrieval evidence for auto ingestion.".encode()
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode()
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_reference_request, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    app = create_fastapi_app(configured_settings)
+    try:
+        async with app.router.lifespan_context(app):
+            app.state.services.openai.research_candidate_base_url = f"http://127.0.0.1:{port}"
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                build = await client.post(
+                    "/api/research/library-builds",
+                    headers=auth_headers,
+                    json={
+                        "seed_type": "topic",
+                        "query": "deterministic auto ingest",
+                        "folder_name": "Deterministic Auto Ingest",
+                        "auto_ingest": True,
+                        "max_depth": 1,
+                        "max_sources": 2,
+                        "max_candidates_per_source": 2,
+                    },
+                )
+                assert build.status_code == 200
+                payload = build.json()
+                assert len(payload["ingested"]) == 2
+                assert {candidate["status"] for candidate in payload["candidates"]} == {"ingested"}
+                assert all(candidate["linked_source_file_id"] for candidate in payload["candidates"])
+
+                for item in payload["ingested"]:
+                    await _wait_for_http_task(
+                        client,
+                        auth_headers=auth_headers,
+                        task_id=item["task"]["id"],
+                        expected_status="completed",
+                    )
+                    detail = await client.get(f"/api/sources/{item['source']['id']}", headers=auth_headers)
+                    assert detail.status_code == 200
+                    metadata = detail.json()["metadata"]
+                    assert metadata["research_import_task_id"] == payload["task"]["id"]
+                    assert metadata["research_candidate_id"]
+                    assert detail.json()["virtual_path"].startswith("/Research/Deterministic Auto Ingest/")
+
+                target_folder = await client.get(
+                    "/api/filesystem",
+                    headers=auth_headers,
+                    params={"folder_id": payload["target_folder_id"]},
+                )
+                assert target_folder.status_code == 200
+                assert len(target_folder.json()["entries"]) == 2
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
 async def test_http_research_candidate_approval_ingests_through_source_service(
     configured_settings: AppSettings,
     fake_openai: None,

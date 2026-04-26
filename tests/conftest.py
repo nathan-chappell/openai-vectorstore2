@@ -30,6 +30,7 @@ class FakeOpenAIGateway:
         self.fail_during_split = False
         self.fail_during_vector_attach = False
         self.ignore_filters = False
+        self.research_candidate_base_url = "https://example.com"
 
     async def close(self) -> None:
         return None
@@ -100,7 +101,7 @@ class FakeOpenAIGateway:
         title_prefix = "Follow-up reference" if followup else "Example reference"
         candidates = [
             ResearchDiscoveryCandidateDraft(
-                url=f"https://example.com/{prefix}-{index}.txt",
+                url=f"{self.research_candidate_base_url.rstrip('/')}/{prefix}-{index}.txt",
                 title=f"{title_prefix} {index}",
                 source_type="url",
                 description=f"Short description for {description_prefix} {index}.",
