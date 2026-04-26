@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 
 
 class ActionService:
-    """Run app-owned generation workflows against retrieved semantic chunks."""
+    """Run app-owned generation workflows against retrieved indexed file matches."""
 
     def __init__(
         self,

@@ -1,1 +1,1 @@
-"""App-first OpenAI vector-store backed semantic RAG workspace."""
+"""App-first OpenAI vector-store backed file explorer."""

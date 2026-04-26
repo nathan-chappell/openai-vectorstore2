@@ -61,6 +61,7 @@ const SELECTED_FILE_LIMIT = 10;
 const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
 const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
+const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source file intact.";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -100,7 +101,7 @@ export function App({ authMode }: AppProps) {
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
   const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
   const [newTagName, setNewTagName] = useState("");
-  const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
+  const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
   const [status, setStatus] = useState("Opening files.");
@@ -454,7 +455,7 @@ export function App({ authMode }: AppProps) {
       setPendingFiles([]);
       setSplitPreview(null);
       await refreshExplorer();
-      setStatus("Upload queued. Semantic chunks will publish in the background.");
+      setStatus("Indexing queued. Files will appear searchable when ready.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
     } finally {
@@ -638,7 +639,7 @@ export function App({ authMode }: AppProps) {
         onRefresh={() => void refreshAll()}
       />
 
-      <section ref={workspaceGridRef} className="workspace-grid" style={workspaceStyle} aria-label="Semantic workspace">
+      <section ref={workspaceGridRef} className="workspace-grid" style={workspaceStyle} aria-label="Indexed file workspace">
         <FileExplorer
           breadcrumbs={filesystem?.breadcrumbs ?? []}
           busy={busy}
@@ -692,7 +693,7 @@ export function App({ authMode }: AppProps) {
           onPointerDown={beginWorkspaceResize}
         />
 
-        <aside className="chat-panel" aria-label="Semantic copilot">
+        <aside className="chat-panel" aria-label="AI file assistant">
           <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={handleClientTool} />
         </aside>
       </section>
@@ -709,12 +710,12 @@ function LegacyApp({ authMode }: AppProps) {
   const [sourceQuery, setSourceQuery] = useState("");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
   const [newTagName, setNewTagName] = useState("");
-  const [uploadGuidance, setUploadGuidance] = useState("Split by complete ideas and preserve page, line, or speaker boundaries.");
+  const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
   const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [status, setStatus] = useState("Booting the semantic library.");
+  const [status, setStatus] = useState("Booting the indexed file library.");
   const [busy, setBusy] = useState(false);
 
   const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
@@ -899,7 +900,7 @@ function LegacyApp({ authMode }: AppProps) {
         }
         return Array.from(byId.values());
       });
-      setStatus("Upload queued. Semantic chunks will publish in the background.");
+      setStatus("Indexing queued. Files will appear searchable when ready.");
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Upload failed.");
     } finally {
@@ -1062,7 +1063,7 @@ function LegacyApp({ authMode }: AppProps) {
         onRefresh={refreshWorkspace}
       />
 
-      <section className="workspace-grid" aria-label="Semantic workspace">
+      <section className="workspace-grid" aria-label="Indexed file workspace">
         <SourceExplorer
           activeSourceId={activeSourceId}
           busy={busy}
@@ -1101,7 +1102,7 @@ function LegacyApp({ authMode }: AppProps) {
           onUploadGuidanceChange={setUploadGuidance}
         />
 
-        <aside className="chat-panel" aria-label="Semantic copilot">
+        <aside className="chat-panel" aria-label="AI file assistant">
           <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={async () => ({ ok: false })} />
         </aside>
       </section>
@@ -1190,7 +1191,7 @@ const FileExplorer = memo(function FileExplorer({
 }) {
   const selectedCount = selectedEntryIdSet.size;
   const selectedFileLabel =
-    selectedFileEntries.length === 1 ? "1 file selected" : `${selectedFileEntries.length} files selected`;
+    selectedFileEntries.length === 1 ? "1 indexed file selected" : `${selectedFileEntries.length} indexed files selected`;
   const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
   return (
     <aside className="explorer-pane filesystem-pane" aria-label="Files">
@@ -1219,7 +1220,7 @@ const FileExplorer = memo(function FileExplorer({
           <input
             value={sourceQuery}
             onChange={(event) => onSourceQueryChange(event.currentTarget.value)}
-            placeholder="Search files and paths"
+            placeholder="Find by name, path, tag, or indexed text"
           />
         </label>
         <div className="tag-strip filesystem-tags" aria-label="Tags">
@@ -1234,7 +1235,7 @@ const FileExplorer = memo(function FileExplorer({
               {tag.name}
             </button>
           ))}
-          {!tags.length ? <span>No tags</span> : null}
+          {!tags.length ? <span>No tag filters</span> : null}
         </div>
         <button type="button" className="secondary-button" onClick={onClearFilters} disabled={!searching}>
           Clear
@@ -1304,29 +1305,30 @@ const FileExplorer = memo(function FileExplorer({
             {!entries.length ? <div className="empty-file-list">{searching ? "No matching entries." : "Folder is empty."}</div> : null}
           </div>
 
-          <section className="upload-strip filesystem-upload" aria-label="Upload source">
+          <section className="upload-strip filesystem-upload" aria-label="Index files">
             <label className="file-picker">
               <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
-              <span>{pendingFiles.length ? `${pendingFiles.length} selected` : "Choose files"}</span>
+              <span>{pendingFiles.length ? `${pendingFiles.length} staged` : "Add files"}</span>
             </label>
             <textarea
               className="compact-textarea"
               value={uploadGuidance}
               onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
-              placeholder="Semantic splitting guidance"
+              placeholder="Optional split notes; normal indexing stores the source file as-is"
             />
             <div className="button-row">
               <button type="button" className="secondary-button" onClick={onPreviewSplit} disabled={busy || !pendingFiles.length}>
-                Preview
+                Preview split
               </button>
               <button type="button" onClick={onUpload} disabled={busy || !pendingFiles.length}>
-                Upload
+                Index
               </button>
             </div>
+            <p className="upload-hint">Index files first. Split preview is optional inspection tooling.</p>
             {pendingFiles.length ? <p className="pending-file-list">{pendingFiles.map((file) => file.name).join(", ")}</p> : null}
             {splitPreview ? (
               <div className="split-preview-summary">
-                <strong>{splitPreview.split.chunks.length} proposed chunks</strong>
+                <strong>{splitPreview.split.chunks.length} optional split records</strong>
                 <span>{splitPreview.split.tags.join(", ") || "no tags"}</span>
               </div>
             ) : null}
@@ -1684,7 +1686,7 @@ const SourceExplorer = memo(function SourceExplorer({
               className="compact-textarea"
               value={uploadGuidance}
               onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
-              placeholder="Semantic splitting guidance"
+              placeholder="Optional split notes; normal indexing stores the source file as-is"
             />
             <div className="button-row">
               <button type="button" className="secondary-button" onClick={onPreviewSplit} disabled={busy || !pendingFiles.length}>
@@ -1904,7 +1906,7 @@ function SourcePreview({
           <RawPreview source={selectedSource} resource={previewResource} />
           <div className="chunk-section">
             <div className="tool-heading">
-              <h3>Chunk Map</h3>
+              <h3>Optional split map</h3>
               <span>
                 {visibleChunks.length}
                 {selectedSource.chunks.length > visibleChunks.length ? ` of ${selectedSource.chunks.length}` : ""}
@@ -1914,7 +1916,7 @@ function SourcePreview({
               {visibleChunks.map((chunk) => (
                 <ChunkRow key={chunk.id} chunk={chunk} />
               ))}
-              {!visibleChunks.length ? <p className="empty-state">No semantic chunks yet.</p> : null}
+              {!visibleChunks.length ? <p className="empty-state">No split records yet.</p> : null}
             </div>
           </div>
         </div>
@@ -1934,7 +1936,11 @@ function SourcePreview({
               <dd>{formatDate(selectedSource.created_at)}</dd>
             </div>
             <div>
-              <dt>Chunks</dt>
+              <dt>Index</dt>
+              <dd>{selectedSource.openai_vector_file_id ? "ready" : "pending"}</dd>
+            </div>
+            <div>
+              <dt>Split records</dt>
               <dd>{selectedSource.chunk_count}</dd>
             </div>
             <div>
@@ -1944,7 +1950,7 @@ function SourcePreview({
           </dl>
           {selectedSource.error_message ? <p className="error-message">{selectedSource.error_message}</p> : null}
           <label className="field-label">
-            Split guidance
+            Optional split guidance
             <textarea
               className="compact-textarea"
               value={uploadGuidance}
@@ -2046,7 +2052,7 @@ function RawPreview({ resource, source }: { resource: PreviewResource; source: S
   return (
     <div className="raw-preview preview-unavailable">
       <strong>{source.source_kind} source</strong>
-      <span>Semantic chunk preview is available below.</span>
+      <span>Optional split preview is available below.</span>
     </div>
   );
 }
@@ -2178,7 +2184,7 @@ const ChatPane = memo(function ChatPane({
 }) {
   const chatKitConfig = getChatKitConfig();
   const selectedFileScopeLabel =
-    selectedSourceIds.length === 1 ? "Ask about the selected file." : `Ask about the ${selectedSourceIds.length} selected files.`;
+    selectedSourceIds.length === 1 ? "One file is in scope. Ask, search, or generate from it." : `${selectedSourceIds.length} files are in scope. Ask, search, or generate from them.`;
   const options = useMemo<UseChatKitOptions>(
     () => ({
       api: {
@@ -2203,15 +2209,15 @@ const ChatPane = memo(function ChatPane({
       startScreen: {
         greeting: selectedSourceIds.length
           ? selectedFileScopeLabel
-          : "Select files in the explorer, then ask me to search, branch, answer, image, or narrate from them.",
+          : "Select indexed files, then ask me to search, answer, synthesize, image, or narrate from them.",
         prompts: [
-          { label: "Grounded QA", prompt: "Answer my question using semantic chunks and cite the source titles.", icon: "check-circle" },
-          { label: "Branch search", prompt: "Run a branch search around this topic and explain the interesting trails.", icon: "sparkle" },
-          { label: "Creative synthesis", prompt: "Use the retrieved chunks as inspiration, but separate evidence from speculation.", icon: "bolt" },
+          { label: "Answer from files", prompt: "Answer my question using indexed file matches and cite the source titles.", icon: "check-circle" },
+          { label: "Search trails", prompt: "Search the indexed files around this topic and explain the useful trails.", icon: "sparkle" },
+          { label: "Generate from evidence", prompt: "Use retrieved indexed file matches as evidence, and separate facts from speculation.", icon: "bolt" },
         ],
       },
       composer: {
-        placeholder: "Ask the semantic library...",
+        placeholder: "Ask the indexed files...",
         attachments: {
           enabled: false,
         },

@@ -8,7 +8,9 @@ Expose the app's core capabilities in product-ready surfaces:
 2. MCP: an MCP server exposing the same capability set, plus MCP Apps UI resources.
 3. Shared app-core boundary: the prompt originally said "three forms" but listed two external forms. This plan treats the third form as the typed app-core capability layer that keeps REST, ChatKit, MCP, database models, and frontend contracts from drifting.
 
-The capabilities to preserve and expose are PDF smart split, app-owned semantic chunks, tag-filtered OpenAI vector-store access, virtual folders/paths, source inspection, search, branch search, grounded QA, freeform generation, generated assets, task/history visibility, and agent-mediated file selection.
+The product is now a file explorer first: ingestion stores files, publishes the original source file into an OpenAI vector store, and searches that source-level OpenAI index with app-owned filters for tags, path, source type, selected files, and date ranges. Semantic splitting remains available as an explicit tool/feature for inspection or derived chunk workflows, but it is no longer part of normal ingestion.
+
+The capabilities to preserve and expose are OpenAI vector-store backed indexing/search, virtual folders/paths, tags, source inspection, path/date/type filtering, branch search, grounded QA, freeform generation, generated assets, task/history visibility, agent-mediated file selection, and optional semantic split preview/re-split tooling.
 
 ## Status Snapshot
 
@@ -19,7 +21,90 @@ The capabilities to preserve and expose are PDF smart split, app-owned semantic 
 - [x] Promote and retain the new Research Importer feature plan as the next planned product feature.
 - [x] Add the first Research Importer backend capability for fast library seeding and reviewed reference ingestion.
 - [x] Apply the first browser/design fixes: hide empty preview, widen preview-on-selection, and add a persisted draggable explorer/chat splitter.
+- [x] Add importer parser/normalizer coverage and refreshed Playwright shell assertions for hidden preview and splitter behavior.
+- [x] Convert ingestion/search from semantic chunk publication to source-file vector-store indexing.
 - [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
+
+## Current Direction Change: Source-File Vector Indexing
+
+Status: completed for the current baseline.
+
+Decision:
+
+- Normal ingestion should not call semantic splitting and should not create semantic chunks as the default retrieval/indexing path.
+- Normal ingestion should upload the original source file, attach that same source-level file to the OpenAI vector store, and store source-level vector attributes.
+- Search should use OpenAI vector-store search over source files, then map results back to `SourceFile` records for display, QA, branch search, and ChatKit/MCP tools.
+- App-owned filters should continue to guard behavior even if vector attributes are stale or missing: selected file IDs, source kind, tags, created date range, and virtual path/path prefix.
+- Tag changes and file moves/renames should reindex the source-level vector-store file attributes instead of republishing semantic chunks.
+- Semantic split preview/re-split remains available as a separate explicit feature. Re-split may create app-owned semantic chunk records for inspection or advanced workflows, but it should not be required for a newly ingested file to be searchable.
+
+Implementation tasks:
+
+- [x] Add source-level vector attributes, including `source_id`, `source_kind`, `virtual_path`, `virtual_name`, `created_at`, `tags`, bounded tag slots, and an indexing mode/version marker.
+- [x] Add OpenAI gateway support for attaching an already-uploaded source file to a vector store with attributes.
+- [x] Change ingest jobs to upload and attach the original/source-level file only, set the source ready when vector indexing completes, and keep `chunk_count=0` unless explicit split tooling is used.
+- [x] Change search result mapping to source-level hits, synthesizing `ChunkHit`-compatible responses from OpenAI vector-store result text and source metadata until the public API is renamed.
+- [x] Change reindex/tag/path updates to replace the source-level vector-store attachment with refreshed attributes.
+- [x] Keep split preview and re-split tests/tooling, but update ingestion/search/reindex tests to assert no semantic split happens during normal ingest.
+- [x] Update docs and wording away from “semantic RAG workspace” where it implies mandatory ingestion-time splitting.
+
+## Checkpoint: 2026-04-26 Source-File Vector Indexing
+
+Status: implementation pass completed.
+
+Completed in this pass:
+
+- Reworked normal ingestion so it no longer performs semantic splitting or publishes semantic chunk files. New ingests upload the source/original file, attach a source-level file to the OpenAI vector store with app-owned attributes, and return `chunk_count=0` unless split tooling is explicitly run.
+- Added source-level vector index persistence through `SourceFile.openai_vector_file_id` and `SourceFile.vector_attributes_json`, plus an Alembic migration and schema/contract updates across REST, ChatKit, MCP, and frontend TypeScript.
+- Updated vector attributes and filters around source-level metadata: `index_kind=source_file`, source ID/kind, virtual path/name, created date, canonical tags, bounded tag slots, selected source IDs, date ranges, and virtual path filters.
+- Reworked search, branch search, grounded QA evidence, ChatKit tools, MCP tools, and MCP Apps copy to operate on indexed file matches rather than mandatory semantic chunks.
+- Changed tag updates, move/rename path changes, and reindex jobs to replace the source-level vector-store file attachment with refreshed attributes.
+- Kept semantic split preview/re-split as explicit tooling. Re-split can still create app-owned `SemanticChunk` rows for inspection, but those chunks are no longer required for source search and are not published as the default vector index.
+- Updated README and operations/architecture/testing/migration docs to describe the file-explorer-first model with OpenAI vector-store backed source indexing.
+
+Verification completed in this pass:
+
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest tests/integration/test_app_contracts.py tests/test_vector_attributes.py tests/test_migrations.py -q`
+- `./.venv/bin/pytest -q`
+- `./.venv/bin/ruff check backend tests`
+- `npm run typecheck`
+- `npm run build`
+- `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "workspace shell"`
+
+Known remaining work:
+
+- Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
+- Rename the public `search_chunks`/`ChunkHit` API shape once consumers are ready for a source-level naming change.
+- Decide whether split-derived chunks should get any future advanced vector workflow, or remain inspection-only.
+
+## Checkpoint: 2026-04-26 Follow-Up Pass
+
+Status: implementation pass completed in the fresh clone.
+
+Completed in this pass:
+
+- Initialized the local repository with `.venv` on Python 3.14 and installed Node dependencies.
+- Tightened Research Importer normalization: canonical URL dedupe now removes common tracking parameters/fragments/default ports, only accepts public HTTP(S) URLs, preserves public `href` targets during HTML cleanup, normalizes non-breaking spaces, cleans LinkedIn/exported HTML seeds, and dedupes review candidates against already-ingested source provenance.
+- Added focused Research Importer tests for URL normalization, arXiv/PDF recognition, HTML cleanup, LinkedIn export cleanup, and provenance-based duplicate suppression.
+- Refreshed Playwright shell assertions so empty browsing starts without `.explorer-detail`, mobile hides the splitter, desktop drag persists the workspace split, and selected-file coverage asserts preview visibility.
+- Fixed the workspace grid splitter CSS so the stored split percentage controls the explorer/chat width directly instead of acting only as a grid-track maximum.
+
+Verification completed in this pass:
+
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest -q`
+- `./.venv/bin/ruff check backend/app/services/research.py tests/test_research_importer.py`
+- `npm run typecheck`
+- `npm run build`
+- `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "workspace shell"`
+
+Known remaining work:
+
+- Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
+- Build the web Research Import review panel after the browser/file-explorer direction settles.
+- Continue adding normal file-browser flows for create folder, upload, selected-file grounded QA, reveal/go-to-location, rename/move, and delete.
+- Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
 
 ## Checkpoint: 2026-04-26 Wrap-Up
 
@@ -41,10 +126,7 @@ Verification completed before pausing:
 
 Known remaining work for the next session:
 
-- Run `npm run build` after this checkpoint.
-- Refresh the Playwright workspace shell assertions for the hidden-preview default state.
-- Add/adjust Playwright coverage for the new splitter and preview-visible-on-selection behavior.
-- Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
+- Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
 - Build the web Research Import review panel after the browser/file-explorer direction settles.
 - Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
 
@@ -56,7 +138,7 @@ The product is now centered on an AI-powered file explorer:
 - The preview pane should stay hidden until a file is selected. Once a file is selected, the preview should open wide enough to be useful for the selected media/text/PDF rather than remaining a cramped placeholder column.
 - ChatKit sits beside the explorer and uses selected ready files as OpenAI file inputs. Composer attachments stay hidden in the current web UX.
 - The horizontal split between the file explorer/preview side and ChatKit should be user-resizable with slider-like drag behavior, so users can allocate more width to browsing/previewing or to chat as needed.
-- OpenAI vector stores remain the semantic retrieval and tag-filtered search layer.
+- OpenAI vector stores remain the source-level retrieval and tag-filtered search layer.
 - The app database owns the virtual filesystem, task lifecycle, tags, provenance, ChatKit tables, source/chunk records, generated assets, and all relationships needed to prevent data-model drift.
 - MCP exposes the same app-core capabilities as tools and Apps UI resources.
 
@@ -65,7 +147,7 @@ The product is now centered on an AI-powered file explorer:
 Backend:
 
 - FastAPI wires services, REST, ChatKit, MCP, static frontend serving, and auth.
-- `SourceService` owns ingest, PDF/text extraction, semantic splitting, OpenAI file/vector-store publication, tags, virtual filesystem operations, selected-file preparation, reindexing, and cleanup.
+- `SourceService` owns ingest, PDF/text extraction, source-level OpenAI file/vector-store publication, optional semantic splitting, tags, virtual filesystem operations, selected-file preparation, reindexing, and cleanup.
 - `ActionService` owns grounded QA, freeform generation, generated assets, and task lifecycle for user-facing actions.
 - `OpenAIGateway` centralizes OpenAI vector stores, files, Responses parsing, retrieval, image, voice, and transcription calls.
 - Alembic migrations and drift tests now guard schema changes.
@@ -100,7 +182,7 @@ Add a persistent in-app research importer that can quickly seed a user's library
 Decisions retained from the added feature plan:
 
 - Build this as an app backend feature, not a one-off Codex skill or hosted-container workflow.
-- Keep `SourceService.ingest_source` as the canonical path for creating sources, chunks, tags, tasks, OpenAI files, and vector-store files.
+- Keep `SourceService.ingest_source` as the canonical path for creating sources, tags, tasks, OpenAI files, source-level vector-store files, and optional derived split records.
 - Use OpenAI `web_search` for discovery, query expansion, and cited candidate finding.
 - Keep fetching, normalization, dedupe, approval state, ingestion, and provenance in this backend.
 - Use a review queue before reference ingestion. The initial seed may be ingested directly; discovered references should stay pending until approved.
@@ -133,7 +215,7 @@ Test plan:
 
 ## Research Capability Implementation Track
 
-Status: not started.
+Status: backend foundation completed; web review surface and deeper expansion behavior remain active follow-ups.
 
 Phase 1: schema, contracts, and drift guards.
 
@@ -147,9 +229,9 @@ Phase 2: seed ingestion, normalization, and dedupe.
 
 - [ ] Implement `ResearchImportService` with pasted text, public URL, PDF/arXiv URL, uploaded file, and exported LinkedIn HTML/text seed inputs.
 - [ ] Normalize URLs and content, compute content hashes, and avoid duplicate pending candidates or duplicate ingested sources inside a library.
-- [ ] Route every approved or directly ingested seed through `SourceService.ingest_source`; do not create a parallel ingest path.
+- [ ] Route every approved or directly ingested seed through `SourceService.ingest_source`; do not create a parallel ingest path or implicit semantic split path.
 - [ ] Keep login walls, paywalls, and anti-bot gates as explicit failed/degraded candidate states rather than bypassing them.
-- [ ] Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
+- [x] Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
 
 Phase 3: OpenAI discovery and candidate review.
 
@@ -177,11 +259,11 @@ Phase 5: documentation and operations.
 
 Status: active intake; implement items as concrete plans arrive.
 
-- [ ] Hide the preview surface until a file is selected so empty browsing starts as a clean explorer plus ChatKit layout.
-- [ ] When a file is selected, open a preview area wide enough for the selected media/text/PDF instead of leaving a narrow placeholder.
-- [ ] Add a draggable horizontal splitter between the explorer/preview region and ChatKit, with sensible min/max widths and persisted preference.
+- [x] Hide the preview surface until a file is selected so empty browsing starts as a clean explorer plus ChatKit layout.
+- [x] When a file is selected, open a preview area wide enough for the selected media/text/PDF instead of leaving a narrow placeholder.
+- [x] Add a draggable horizontal splitter between the explorer/preview region and ChatKit, with sensible min/max widths and persisted preference.
 - [ ] Keep the file explorer dense, fast, and familiar: normal folder/file rows, tight metadata, simple affordances, no marketing-style cards or explanatory copy.
-- [ ] Validate browser/design fixes with Playwright desktop and mobile screenshots before marking complete.
+- [x] Validate hidden-preview and splitter fixes with Playwright desktop and mobile screenshots before marking complete.
 - [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
 ## Near-Term Follow-Ups
@@ -242,7 +324,7 @@ Status: completed for the current baseline.
   - `AppChatAttachment` remains compatibility plumbing for older ChatKit attachment hosts.
   - `SourceFile`, `SemanticChunk`, tags, filesystem entries, generated assets, and task records are the app-owned source of truth.
 - `SourceService.ingest_source` remains the canonical ingest path for web, ChatKit, MCP, and future Research Importer flows.
-- Virtual paths are app-owned. OpenAI Files API IDs, vector-store chunk file IDs, and bucket object keys are implementation details tracked by source/chunk/filesystem records.
+- Virtual paths are app-owned. OpenAI Files API IDs, source-level vector file IDs, legacy vector-store chunk file IDs, and bucket object keys are implementation details tracked by source/chunk/filesystem records.
 - Tags remain source-level metadata for the current baseline. OpenAI vector-store filtering uses canonical `tags` plus bounded exact-match tag slots.
 - New schema changes must include Alembic migrations and drift tests.
 - New app operations must update the capability matrix, Pydantic contracts, frontend types, ChatKit tools, MCP tools, and tests together.
@@ -278,3 +360,4 @@ Current verification commands:
 - MCP Apps data-tool/render-tool split: https://developers.openai.com/apps-sdk/build/chatgpt-ui#decoupled-pattern
 - MCP Apps tool descriptor metadata: https://developers.openai.com/apps-sdk/reference#_meta-fields-on-tool-descriptor
 - MCP Apps state management: https://developers.openai.com/apps-sdk/build/state-management#summary
+- OpenAI vector-store files with attributes: https://developers.openai.com/api/docs/assistants/tools/file-search#creating-vector-stores-and-adding-files

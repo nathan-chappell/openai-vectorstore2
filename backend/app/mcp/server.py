@@ -158,8 +158,8 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
     server = FastMCP(
         name=settings.app_name,
         instructions=(
-            "You are the MCP adapter for an app-first semantic RAG workspace. The app owns ingestion, "
-            "semantic chunks, storage, retrieval, and generation. Use sources for a visual library UI; "
+            "You are the MCP adapter for an app-first file explorer backed by OpenAI vector-store search. "
+            "The app owns ingestion, indexing, storage, retrieval, and generation. Use sources for a visual library UI; "
             "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
             "start_research_import, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
             "search_chunks, branch_search, qa, freeform, generate_image, generate_voice, update_source_tags, "
@@ -179,7 +179,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
     mutating = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
     destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
-    @server.tool(name="list_sources", description="List sources in the user's semantic library.", annotations=read_only)
+    @server.tool(name="list_sources", description="List sources in the user's indexed file library.", annotations=read_only)
     async def list_sources_tool(
         query: Annotated[str | None, Field(min_length=1)] = None,
         tag_ids: list[str] | None = None,
@@ -398,7 +398,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(
-        name="get_source_detail", description="Load source metadata and semantic chunks.", annotations=read_only
+        name="get_source_detail",
+        description="Load source metadata and optional semantic split records.",
+        annotations=read_only,
     )
     async def get_source_detail_tool(source_id: Annotated[str, Field(min_length=1)]) -> LibrarySourceDetail:
         clerk_user_id = current_mcp_clerk_user_id()
@@ -411,7 +413,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="ingest_text_source",
-        description="Create a text source and publish its semantic chunks to the vector store.",
+        description="Create a text source and index it as a source-level OpenAI vector-store file.",
         annotations=mutating,
     )
     async def ingest_text_source_tool(
@@ -448,7 +450,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="ingest_file_source",
-        description="Create a file source from base64 payload and publish its semantic chunks to the vector store.",
+        description="Create a file source from base64 payload and index it as a source-level OpenAI vector-store file.",
         annotations=mutating,
     )
     async def ingest_file_source_tool(
@@ -491,7 +493,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="preview_text_split",
-        description="Preview semantic chunks and tags for text without creating a source or publishing vectors.",
+        description="Preview semantic split records and tags for text without creating a source or publishing vectors.",
         annotations=read_only,
     )
     async def preview_text_split_tool(
@@ -516,7 +518,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="preview_file_split",
-        description="Preview semantic chunks and tags for a base64 file payload without creating a source or publishing vectors.",
+        description="Preview semantic split records and tags for a base64 file payload without creating a source or publishing vectors.",
         annotations=read_only,
     )
     async def preview_file_split_tool(
@@ -669,7 +671,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="resplit_source",
-        description="Replace one source's semantic chunks and vector-store files after explicit confirmation.",
+        description="Recompute one source's semantic split records after explicit confirmation.",
         annotations=destructive,
     )
     async def resplit_source_tool(
@@ -683,7 +685,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             return {
                 "confirmation_required": True,
                 "source_id": source_id,
-                "message": "Ask the user to confirm replacing this source's published chunks, then call resplit_source again with confirm=true.",
+                "message": "Ask the user to confirm replacing this source's optional split records, then call resplit_source again with confirm=true.",
             }
         return await _run_logged_tool(
             tool_name="resplit_source",
@@ -746,7 +748,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="search_chunks",
-        description="Search semantic chunks and return full app-owned chunk text.",
+        description="Search OpenAI vector-store indexed source files and return source-level matches.",
         annotations=read_only,
     )
     async def search_chunks_tool(
@@ -754,6 +756,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         selected_source_ids: list[str] | None = None,
         source_kinds: list[SourceKind] | None = None,
         tag_ids: list[str] | None = None,
+        virtual_paths: list[str] | None = None,
         tag_match_mode: Literal["all", "any"] = "all",
         max_results: Annotated[int, Field(ge=1, le=24)] = 8,
     ) -> SearchResponse:
@@ -763,6 +766,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             selected_source_ids=selected_source_ids or [],
             source_kinds=source_kinds or [],
             tag_ids=tag_ids or [],
+            virtual_paths=virtual_paths or [],
             tag_match_mode=tag_match_mode,
             max_results=max_results,
         )
@@ -774,13 +778,14 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(
-        name="branch_search", description="Layer semantic search outward from each layer's hits.", annotations=read_only
+        name="branch_search", description="Layer source-file vector search outward from each layer's hits.", annotations=read_only
     )
     async def branch_search_tool(
         query: Annotated[str, Field(min_length=1)],
         selected_source_ids: list[str] | None = None,
         source_kinds: list[SourceKind] | None = None,
         tag_ids: list[str] | None = None,
+        virtual_paths: list[str] | None = None,
         tag_match_mode: Literal["all", "any"] = "all",
         descend: Annotated[int, Field(ge=0, le=4)] = 2,
         max_width: Annotated[int, Field(ge=1, le=8)] = 3,
@@ -791,6 +796,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             selected_source_ids=selected_source_ids or [],
             source_kinds=source_kinds or [],
             tag_ids=tag_ids or [],
+            virtual_paths=virtual_paths or [],
             tag_match_mode=tag_match_mode,
             descend=descend,
             max_width=max_width,
@@ -802,7 +808,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=services.sources.branch_search(clerk_user_id=clerk_user_id, request=payload),
         )
 
-    @server.tool(name="qa", description="Answer a question using retrieved semantic chunks.", annotations=mutating)
+    @server.tool(name="qa", description="Answer a question using retrieved source-file vector matches.", annotations=mutating)
     async def qa_tool(
         prompt: Annotated[str, Field(min_length=1)],
         selected_source_ids: list[str] | None = None,
@@ -934,7 +940,7 @@ async def _list_tags(*, services: AppServices, clerk_user_id: str) -> list[TagSu
 
 
 def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
-    sources_app = FastMCPApp("Semantic Sources")
+    sources_app = FastMCPApp("Indexed Files")
 
     @sources_app.tool("refresh_sources")
     async def refresh_sources_tool(
@@ -1011,8 +1017,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
 
     @sources_app.ui(
         name="sources",
-        title="Semantic Sources",
-        description="Browse the current user's semantic sources and inspect chunk search output.",
+        title="Indexed Files",
+        description="Browse the current user's indexed files and inspect vector search output.",
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     )
     async def sources(ctx: Context) -> PrefabApp:
@@ -1021,8 +1027,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
         initial_tasks = await refresh_tasks_tool(ctx)
         with Card(css_class="max-w-5xl mx-auto") as view:
             with CardHeader(), Column(gap=1):
-                CardTitle("Semantic Sources")
-                CardDescription("Browse files, filter by tags, search semantic chunks, and inspect app tasks.")
+                CardTitle("Indexed Files")
+                CardDescription("Browse files, filter by tags, search indexed source files, and inspect app tasks.")
             with CardContent(), Column(gap=4):
                 with Column(gap=2):
                     with Row(gap=2, align="center"):
@@ -1148,7 +1154,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             Input(
                                 name="chunk_query",
                                 input_type="search",
-                                placeholder="Search semantic chunks with the selected tag scope",
+                                placeholder="Search indexed files with the selected tag scope",
                             )
                             Button("Search chunks", button_type="submit")
                     with If(STATE.searchResults):
@@ -1195,7 +1201,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                 Separator()
                 Muted("Use the search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
         return PrefabApp(
-            title="Semantic Sources",
+            title="Indexed Files",
             view=view,
             state={
                 "sources": initial_sources,

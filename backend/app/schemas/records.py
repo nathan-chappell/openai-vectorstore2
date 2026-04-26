@@ -104,6 +104,8 @@ class LibrarySourceSummary(BaseModel):
     tags: list[TagSummary] = Field(default_factory=list)
     openai_original_file_id: str | None = None
     openai_original_file_purpose: str | None = None
+    openai_vector_file_id: str | None = None
+    vector_attributes: OpenAIAttributes | None = None
 
 
 class FilesystemEntrySummary(BaseModel):
@@ -120,6 +122,7 @@ class FilesystemEntrySummary(BaseModel):
     chunk_count: int | None = None
     tags: list[TagSummary] = Field(default_factory=list)
     openai_original_file_id: str | None = None
+    openai_vector_file_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -336,6 +339,7 @@ class SearchRequest(BaseModel):
     source_kinds: list[SourceKind] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list)
     tag_match_mode: TagMatchMode = "all"
+    virtual_paths: list[str] = Field(default_factory=list)
     created_after: datetime | None = None
     created_before: datetime | None = None
     max_results: int = Field(default=8, ge=1, le=24)

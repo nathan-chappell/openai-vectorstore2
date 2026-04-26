@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 from time import perf_counter
 from typing import Any, cast
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
 from sqlalchemy import func, select
@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.models import AppTask, AppUser, ResearchImportCandidate, UserLibrary
+from backend.app.models import AppTask, AppUser, ResearchImportCandidate, SourceFile, UserLibrary
 from backend.app.schemas import (
     IngestFinalizeResponse,
     ResearchCandidateIngestRequest,
@@ -39,10 +39,14 @@ from backend.app.services.sources import SourceService
 logger = logging.getLogger(__name__)
 
 URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+")
+ANCHOR_HREF_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a>")
+HREF_RE = re.compile(r"(?is)\bhref\s*=\s*(?:\"(?P<double>[^\"]*)\"|'(?P<single>[^']*)'|(?P<bare>[^\s>]+))")
+HTML_SIGNAL_RE = re.compile(r"(?is)<(?:!doctype|html|body|article|section|p|br|div|span|a|h[1-6]|ul|ol|li)\b")
 SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style).*?>.*?</\1>")
 TAG_RE = re.compile(r"(?s)<[^>]+>")
-WHITESPACE_RE = re.compile(r"[ \t\r\f\v]+")
+WHITESPACE_RE = re.compile(r"[ \t\r\f\v\u00a0]+")
 ARXIV_ID_RE = re.compile(r"(?i)(?:arxiv\.org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)")
+TRACKING_QUERY_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -461,6 +465,18 @@ class ResearchImportService:
             ).scalars()
             if value is not None
         }
+        source_metadata = (
+            await session.execute(select(SourceFile.metadata_json).where(SourceFile.library_id == library.id))
+        ).scalars()
+        for metadata in source_metadata:
+            if not isinstance(metadata, dict):
+                continue
+            normalized_url = metadata.get("normalized_url")
+            content_hash = metadata.get("content_hash")
+            if isinstance(normalized_url, str) and normalized_url:
+                existing_urls.add(normalized_url)
+            if isinstance(content_hash, str) and content_hash:
+                existing_hashes.add(content_hash)
         seen_urls: set[str] = set()
         seen_hashes: set[str] = set()
         persisted: list[ResearchImportCandidate] = []
@@ -535,7 +551,8 @@ class ResearchImportService:
                 content_hash=content_hash,
                 provenance={"seed_type": seed_type, "filename": filename, "media_type": media_type},
             )
-        text = (request.text or "").strip()
+        raw_text = (request.text or "").strip()
+        text = _html_to_text(raw_text) if seed_type == "linkedin_export" or _looks_like_html(raw_text) else raw_text
         if not text:
             raise ValueError("A text or LinkedIn export seed requires text.")
         bounded_text = text[: self._settings.research_import_max_text_chars]
@@ -738,10 +755,27 @@ def _normalize_url(url: str | None) -> str | None:
     if url is None:
         return None
     parsed = urlparse(url.strip())
-    if not parsed.scheme or not parsed.netloc:
+    scheme = parsed.scheme.casefold()
+    if scheme not in {"http", "https"} or not parsed.netloc:
         return None
+    host = (parsed.hostname or "").casefold()
+    if not host:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    netloc = host
+    if port is not None and not ((scheme == "http" and port == 80) or (scheme == "https" and port == 443)):
+        netloc = f"{host}:{port}"
     path = parsed.path.rstrip("/") or "/"
-    return urlunparse((parsed.scheme.casefold(), parsed.netloc.casefold(), path, "", parsed.query, ""))
+    query_items = [
+        (key, value)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True)
+        if key and not key.casefold().startswith("utm_") and key.casefold() not in TRACKING_QUERY_KEYS
+    ]
+    query = urlencode(sorted(query_items))
+    return urlunparse((scheme, netloc, path, "", query, ""))
 
 
 def _arxiv_pdf_url(url: str) -> str:
@@ -780,12 +814,28 @@ def _safe_filename(value: str) -> str:
 
 
 def _html_to_text(value: str) -> str:
-    without_scripts = SCRIPT_STYLE_RE.sub("\n", value)
+    with_expanded_links = ANCHOR_HREF_RE.sub(_anchor_label_with_href, value)
+    without_scripts = SCRIPT_STYLE_RE.sub("\n", with_expanded_links)
     with_breaks = re.sub(r"(?i)</?(p|br|li|h[1-6]|section|article|div|tr)[^>]*>", "\n", without_scripts)
     text = TAG_RE.sub(" ", with_breaks)
     text = html.unescape(text)
     lines = [WHITESPACE_RE.sub(" ", line).strip() for line in text.splitlines()]
     return "\n".join(line for line in lines if line)
+
+
+def _anchor_label_with_href(match: re.Match[str]) -> str:
+    label = match.group("label")
+    href_match = HREF_RE.search(match.group("attrs"))
+    if href_match is None:
+        return label
+    href = html.unescape(href_match.group("double") or href_match.group("single") or href_match.group("bare") or "")
+    if not href.casefold().startswith(("http://", "https://")):
+        return label
+    return f"{label} ({href})"
+
+
+def _looks_like_html(value: str) -> bool:
+    return bool(HTML_SIGNAL_RE.search(value))
 
 
 def _content_hash(payload: bytes) -> str:

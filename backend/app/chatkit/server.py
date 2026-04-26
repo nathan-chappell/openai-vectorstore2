@@ -182,7 +182,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             request_context=context,
         )
         agent = Agent[ChatKitAgentContext[VectorstoreChatContext]](
-            name="semantic_vectorstore_agent",
+            name="indexed_file_vectorstore_agent",
             model=requested_model,
             model_settings=_model_settings_override_for_model(requested_model) or ModelSettings(),
             tools=self._build_tools(),
@@ -247,7 +247,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         if not file_inputs:
             return []
         source_lines = [
-            f"- {item.virtual_path} ({item.source_id}, {item.media_type}, OpenAI file {item.file_id})"
+            f"- {item.virtual_path}: app source_id={item.source_id}; media_type={item.media_type}; attached OpenAI file_id={item.file_id}"
             for item in file_inputs
         ]
         content: list[dict[str, object]] = [
@@ -256,6 +256,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "text": (
                     "The user selected these files in the app explorer. They are attached as input_file content "
                     "for this turn and should be treated as the primary file scope unless the user asks to widen it. "
+                    "When calling app tools, pass the app source_id values as selected_source_ids; do not pass OpenAI file_id values. "
                     f"At most {len(file_inputs)} selected files are attached.\n"
                     + "\n".join(source_lines)
                 ),
@@ -291,7 +292,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_match_mode: str = "all",
             page_size: int = 20,
         ) -> dict[str, object]:
-            """List sources in the user's semantic library."""
+            """List sources in the user's indexed file library."""
             request_context = ctx.context.request_context
             response = await self._sources.list_sources(
                 clerk_user_id=request_context.clerk_user_id,
@@ -499,7 +500,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
 
         @function_tool(name_override="get_source_detail")
         async def get_source_detail_tool(ctx: ChatKitToolContext, source_id: str) -> dict[str, object]:
-            """Load one source with its stored metadata and semantic chunks."""
+            """Load one source with its stored metadata and optional semantic split records."""
             request_context = ctx.context.request_context
             detail = await self._sources.get_source(
                 clerk_user_id=request_context.clerk_user_id,
@@ -515,7 +516,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_ids: list[str] | None = None,
             user_guidance: str | None = None,
         ) -> dict[str, object]:
-            """Create a text source and queue semantic chunk publication."""
+            """Create a text source and queue source-level vector indexing."""
             if not text.strip():
                 raise ValueError("Text source content is required.")
             request_context = ctx.context.request_context
@@ -542,18 +543,20 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             query: str,
             selected_source_ids: list[str] | None = None,
             tag_ids: list[str] | None = None,
+            virtual_paths: list[str] | None = None,
             tag_match_mode: str = "all",
             max_results: int = 8,
         ) -> dict[str, object]:
-            """Search OpenAI vector-store chunks, then return full app-owned semantic chunks."""
+            """Search OpenAI vector-store indexed source files, filtered by selected files, tags, or paths."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(ProgressUpdateEvent(icon="search", text=f"Searching semantic chunks for '{query[:80]}'."))
+            await ctx.context.stream(ProgressUpdateEvent(icon="search", text=f"Searching indexed files for '{query[:80]}'."))
             response = await self._sources.search(
                 clerk_user_id=request_context.clerk_user_id,
                 request=SearchRequest(
                     query=query,
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
+                    virtual_paths=virtual_paths or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     max_results=max(1, min(max_results, 16)),
                 ),
@@ -562,7 +565,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             await ctx.context.stream(
                 ProgressUpdateEvent(
                     icon="check-circle",
-                    text=f"Found {len(response.hits)} chunk{'' if len(response.hits) == 1 else 's'} across {source_count} source{'' if source_count == 1 else 's'}.",
+                    text=f"Found {len(response.hits)} file match{'' if len(response.hits) == 1 else 'es'} across {source_count} source{'' if source_count == 1 else 's'}.",
                 )
             )
             return response.model_dump(mode="json")
@@ -573,19 +576,21 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             query: str,
             selected_source_ids: list[str] | None = None,
             tag_ids: list[str] | None = None,
+            virtual_paths: list[str] | None = None,
             tag_match_mode: str = "all",
             descend: int = 2,
             max_width: int = 3,
         ) -> dict[str, object]:
-            """Run layered semantic search, using hits from each layer to find adjacent chunks."""
+            """Run layered source-file vector search, using hits from each layer to branch outward."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(ProgressUpdateEvent(icon="compass", text="Branching through nearby semantic neighborhoods."))
+            await ctx.context.stream(ProgressUpdateEvent(icon="compass", text="Branching through indexed source-file neighborhoods."))
             response = await self._sources.branch_search(
                 clerk_user_id=request_context.clerk_user_id,
                 request=BranchSearchRequest(
                     query=query,
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
+                    virtual_paths=virtual_paths or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     descend=max(0, min(descend, 4)),
                     max_width=max(1, min(max_width, 8)),
@@ -608,7 +613,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             media_type: str | None = "text/plain",
             user_guidance: str | None = None,
         ) -> dict[str, object]:
-            """Preview semantic chunks and auto-tags for text without creating a source or publishing vectors."""
+            """Preview semantic split records and auto-tags for text without creating a source or publishing vectors."""
             request_context = ctx.context.request_context
             await ctx.context.stream(ProgressUpdateEvent(icon="batch", text="Previewing semantic split without publishing chunks."))
             response = await self._sources.preview_semantic_split(
@@ -740,7 +745,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_ids: list[str] | None = None,
             user_guidance: str | None = None,
         ) -> dict[str, object]:
-            """Queue a re-split that replaces one source's published chunks using its stored payload."""
+            """Queue a re-split that replaces one source's optional split records using its stored payload."""
             request_context = ctx.context.request_context
             await ctx.context.stream(ProgressUpdateEvent(icon="reload", text="Queuing a safe re-split for the selected source."))
             response = await self._sources.resplit_source(
@@ -854,7 +859,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 payload=QaRequest(
                     prompt=prompt,
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     max_results=max(1, min(max_results, 16)),
@@ -888,7 +893,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 payload=FreeformRequest(
                     prompt=prompt,
                     mode="creative" if mode == "creative" else "grounded",
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     max_results=max(1, min(max_results, 16)),
@@ -913,7 +918,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_ids: list[str] | None = None,
             tag_match_mode: str = "all",
         ) -> dict[str, object]:
-            """Generate an image, optionally grounded in retrieved semantic chunks."""
+            """Generate an image, optionally grounded in retrieved indexed file matches."""
             request_context = ctx.context.request_context
             await ctx.context.stream(ProgressUpdateEvent(icon="images", text="Generating an image asset from retrieved context."))
             response = await self._actions.image(
@@ -921,7 +926,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 payload=ImageGenerationRequest(
                     prompt=prompt,
                     size=size,
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     origin_thread_id=ctx.context.thread.id,
@@ -955,7 +960,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     source_text=source_text,
                     voice=voice,
                     response_format=cast(Any, response_format if response_format in {"mp3", "wav", "opus"} else "mp3"),
-                    selected_source_ids=_selected_scope(request_context, selected_source_ids),
+                    selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
                     origin_thread_id=ctx.context.thread.id,
@@ -1011,10 +1016,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     @staticmethod
     async def _agent_instructions(_context: Any, _agent: Any) -> str:
         return (
-            "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
-            "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search chunks, "
-            "branch through related semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its published chunks, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "You are the indexed file-library assistant for an app-first OpenAI vector-store backed file explorer. "
+            "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
+            "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
+            "to replace its optional split records, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
@@ -1042,9 +1047,17 @@ def _string_or_none(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-def _selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | None) -> list[str]:
+def selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | None) -> list[str]:
     if explicit_ids:
-        return [source_id for source_id in explicit_ids if source_id.strip()]
+        source_ids = [
+            source_id.strip()
+            for source_id in explicit_ids
+            if source_id.strip() and not source_id.strip().startswith("file-")
+        ]
+        if source_ids:
+            return source_ids
+        if context.selected_source_ids:
+            return list(context.selected_source_ids)
     return list(context.selected_source_ids)
 
 
@@ -1072,7 +1085,7 @@ class VectorstoreThreadItemConverter(ThreadItemConverter):
         task_status = _string_or_none(metadata.get("task_status")) or "unknown"
 
         lines = [
-            "The user attached a file that has been added to the app semantic library.",
+            "The user attached a file that has been added to the app indexed file library.",
             f"Attachment: {attachment.name} ({attachment.id}, {attachment.mime_type})",
             f"Source: {source_title} ({source_id or 'source id unavailable'}, status: {source_status})",
         ]

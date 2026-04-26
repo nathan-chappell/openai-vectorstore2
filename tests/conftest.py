@@ -23,10 +23,12 @@ class FakeOpenAIGateway:
         self.settings = settings
         self.vector_store_id = "vs_fake"
         self._chunks: dict[str, VectorSearchCandidate] = {}
+        self._uploaded_files: dict[str, tuple[str, bytes, object]] = {}
         self._counter = 0
         self.deleted_file_ids: list[str] = []
         self.detached_vector_store_file_ids: list[tuple[str, str]] = []
         self.fail_during_split = False
+        self.fail_during_vector_attach = False
         self.ignore_filters = False
 
     async def close(self) -> None:
@@ -37,9 +39,10 @@ class FakeOpenAIGateway:
         return self.vector_store_id
 
     async def upload_file_bytes(self, *, filename: str, payload: bytes, purpose: object) -> str:
-        del filename, payload, purpose
         self._counter += 1
-        return f"file_original_{self._counter}"
+        file_id = f"file_original_{self._counter}"
+        self._uploaded_files[file_id] = (filename, payload, purpose)
+        return file_id
 
     async def transcribe_audio_bytes(self, *, filename: str, payload: bytes) -> tuple[str, dict[str, object]]:
         del filename, payload
@@ -123,12 +126,31 @@ class FakeOpenAIGateway:
         )
         return file_id
 
+    async def attach_file_to_vector_store(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        attributes: dict[str, str | float | bool],
+    ) -> None:
+        del vector_store_id
+        if self.fail_during_vector_attach:
+            raise RuntimeError("Fake vector attach failure.")
+        filename, payload, _purpose = self._uploaded_files[file_id]
+        self._chunks[file_id] = VectorSearchCandidate(
+            openai_file_id=file_id,
+            score=0.93,
+            text=payload.decode("utf-8", errors="replace") or filename,
+            attributes=attributes,
+        )
+
     async def detach_file_from_vector_store(self, *, vector_store_id: str, file_id: str) -> None:
         self.detached_vector_store_file_ids.append((vector_store_id, file_id))
 
     async def delete_file(self, *, file_id: str) -> None:
         self.deleted_file_ids.append(file_id)
         self._chunks.pop(file_id, None)
+        self._uploaded_files.pop(file_id, None)
 
     async def search_vector_store(
         self,

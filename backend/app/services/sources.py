@@ -20,7 +20,7 @@ from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
-from backend.app.integrations.openai_gateway import OpenAIGateway
+from backend.app.integrations.openai_gateway import OpenAIGateway, VectorSearchCandidate
 from backend.app.models import (
     AppTask,
     AppUser,
@@ -129,8 +129,16 @@ class SourceFileInput:
     media_type: str
 
 
+@dataclass(frozen=True, slots=True)
+class VectorIndexMaterial:
+    filename: str
+    media_type: str
+    payload: bytes
+    strategy_label: str
+
+
 class SourceService:
-    """Own source ingestion, semantic chunk publication, and retrieval."""
+    """Own source ingestion, source-level vector indexing, and retrieval."""
 
     def __init__(
         self,
@@ -651,7 +659,7 @@ class SourceService:
                 if entry.source_file is not None:
                     entry.source_file.display_title = Path(new_name).stem or new_name
                     entry.source_file.updated_at = now
-                    if entry.source_file.status == "ready" and entry.source_file.chunks:
+                    if entry.source_file.status == "ready" and entry.source_file.openai_vector_file_id is not None:
                         reindex_source_ids.append(entry.source_file.id)
                 for descendant in descendants:
                     relative_path = descendant.path[len(old_path.rstrip("/")) :].lstrip("/")
@@ -660,7 +668,7 @@ class SourceService:
                     descendant.updated_at = now
                     if descendant.source_file is not None:
                         descendant.source_file.updated_at = now
-                        if descendant.source_file.status == "ready" and descendant.source_file.chunks:
+                        if descendant.source_file.status == "ready" and descendant.source_file.openai_vector_file_id is not None:
                             reindex_source_ids.append(descendant.source_file.id)
                 library.updated_at = now
             await session.commit()
@@ -1309,8 +1317,9 @@ class SourceService:
             previous_error_message = source.error_message
             previous_tag_ids = [link.tag_id for link in source.tag_links]
             chunk_count = len(source.chunks)
+            should_reindex_source = source.status == "ready" or source.openai_vector_file_id is not None
             source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
-            if chunk_count:
+            if should_reindex_source:
                 source.status = "processing"
                 source.error_message = None
             source.updated_at = _utcnow()
@@ -1330,6 +1339,7 @@ class SourceService:
                     "previous_status": previous_status,
                     "previous_error_message": previous_error_message,
                     "chunk_count": chunk_count,
+                    "openai_vector_file_id": source.openai_vector_file_id,
                 },
                 state_json={"stage": "queued", "source_id": source.id},
                 created_at=_utcnow(),
@@ -1340,11 +1350,12 @@ class SourceService:
             await session.refresh(source)
             await session.refresh(task)
             logger.info(
-                "source_reindex_queued clerk_user_id=%s source_id=%s task_id=%s chunks=%s tags=%s",
+                "source_reindex_queued clerk_user_id=%s source_id=%s task_id=%s chunks=%s vector_file=%s tags=%s",
                 clerk_user_id,
                 source.id,
                 task.id,
                 chunk_count,
+                source.openai_vector_file_id is not None,
                 len(selected_tag_ids),
             )
             self._schedule_reindex_job(clerk_user_id=clerk_user_id, source_id=source.id, task_id=task.id)
@@ -1406,106 +1417,36 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
 
-                extracted_text, strategy_hint = await self._extract_searchable_text(
-                    filename=source.original_filename,
-                    source_kind=source_kind,
-                    media_type=source.media_type,
-                    payload=payload,
-                )
-                source.ingest_strategy = strategy_hint
+                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                source.ingest_strategy = index_material.strategy_label
                 task.state_json = {
-                    "stage": "splitting_semantically",
+                    "stage": "indexing_source_file",
                     "source_id": source.id,
-                    "strategy_hint": strategy_hint,
-                    "extracted_character_count": len(extracted_text),
+                    "strategy_hint": index_material.strategy_label,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
-                split_started_at = perf_counter()
-                split_result = await self._split_semantically(
+                index_started_at = perf_counter()
+                vector_file_id = await self._replace_source_vector_file(
                     source=source,
-                    extracted_text=extracted_text,
-                    user_guidance=user_guidance,
+                    filename=index_material.filename,
+                    payload=index_material.payload,
+                    tag_slugs=[tag.slug for tag in selected_tags],
                 )
-                logger.info(
-                    "source_ingest_split_completed clerk_user_id=%s source_id=%s task_id=%s tags=%s chunks=%s duration_ms=%.1f",
-                    clerk_user_id,
-                    source.id,
-                    task.id,
-                    len(split_result.tags),
-                    len(split_result.chunks),
-                    (perf_counter() - split_started_at) * 1000,
-                )
-                auto_tags = await self._ensure_auto_tags(session, library=library, tag_names=split_result.tags)
-                merged_tags = _merge_tags([*selected_tags, *auto_tags])
-                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in merged_tags]
-
-                normalized_chunks = _normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text)
-                publish_started_at = perf_counter()
                 task.state_json = {
-                    "stage": "publishing_chunks",
+                    "stage": "indexing_source_file",
                     "source_id": source.id,
-                    "chunk_count": len(normalized_chunks),
-                    "published_chunk_count": 0,
+                    "openai_vector_file_id": vector_file_id,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
-                for draft in normalized_chunks:
-                    chunk = SemanticChunk(
-                        id=new_id(),
-                        source_file_id=source.id,
-                        sequence=draft.sequence,
-                        title=draft.title,
-                        summary=draft.summary,
-                        text_content=draft.text,
-                        keywords_json=draft.keywords,
-                        locator_type=draft.locator.type,
-                        start_page=draft.locator.start_page,
-                        end_page=draft.locator.end_page,
-                        start_line=draft.locator.start_line,
-                        end_line=draft.locator.end_line,
-                        start_seconds=draft.locator.start_seconds,
-                        end_seconds=draft.locator.end_seconds,
-                        strategy_label=draft.strategy_label,
-                        status="processing",
-                        created_at=_utcnow(),
-                        updated_at=_utcnow(),
-                    )
-                    attributes = build_vector_attributes(
-                        source_id=source.id,
-                        chunk_id=chunk.id,
-                        source_kind=source.source_kind,
-                        virtual_path=_virtual_path(source),
-                        virtual_name=_virtual_name(source),
-                        source_created_at=source.created_at,
-                        tag_slugs=[tag.slug for tag in merged_tags],
-                    )
-                    chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
-                    chunk.openai_file_id = await self._openai.attach_chunk_to_vector_store(
-                        vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
-                        text_content=render_chunk_markdown(source=source, chunk=chunk),
-                        attributes=attributes,
-                    )
-                    chunk.status = "ready"
-                    chunk.updated_at = _utcnow()
-                    session.add(chunk)
-                    task.state_json = {
-                        "stage": "publishing_chunks",
-                        "source_id": source.id,
-                        "chunk_count": len(normalized_chunks),
-                        "published_chunk_count": draft.sequence,
-                        "last_openai_file_id": chunk.openai_file_id,
-                    }
-                    task.updated_at = _utcnow()
-                    await session.commit()
                 logger.info(
-                    "source_ingest_chunks_published clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
+                    "source_ingest_vector_indexed clerk_user_id=%s source_id=%s task_id=%s vector_file_id=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
-                    len(normalized_chunks),
-                    (perf_counter() - publish_started_at) * 1000,
+                    vector_file_id,
+                    (perf_counter() - index_started_at) * 1000,
                 )
 
                 source.status = "ready"
@@ -1516,21 +1457,26 @@ class SourceService:
                 task.state_json = {
                     "stage": "completed",
                     "source_id": source.id,
-                    "chunk_count": len(normalized_chunks),
-                    "tag_count": len(merged_tags),
+                    "chunk_count": len(source.chunks),
+                    "tag_count": len(selected_tags),
+                    "openai_vector_file_id": source.openai_vector_file_id,
                 }
-                task.result_json = {"source_id": source.id, "chunk_count": len(normalized_chunks)}
+                task.result_json = {
+                    "source_id": source.id,
+                    "chunk_count": len(source.chunks),
+                    "openai_vector_file_id": source.openai_vector_file_id,
+                }
                 task.error_message = None
                 task.completed_at = _utcnow()
                 task.updated_at = _utcnow()
                 await session.commit()
                 logger.info(
-                    "source_ingested clerk_user_id=%s source_id=%s task_id=%s kind=%s chunks=%s duration_ms=%.1f",
+                    "source_ingested clerk_user_id=%s source_id=%s task_id=%s kind=%s indexed_file=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
                     source.source_kind,
-                    len(normalized_chunks),
+                    source.openai_vector_file_id is not None,
                     (perf_counter() - ingest_started_at) * 1000,
                 )
             except Exception as exc:
@@ -1548,6 +1494,8 @@ class SourceService:
                     )
                 else:
                     source.openai_original_file_id = None
+                    source.openai_vector_file_id = None
+                    source.vector_attributes_json = {}
                     for chunk in source.chunks:
                         chunk.openai_file_id = None
                 source.status = "failed"
@@ -1599,6 +1547,8 @@ class SourceService:
                 )
             else:
                 source.openai_original_file_id = None
+                source.openai_vector_file_id = None
+                source.vector_attributes_json = {}
                 for chunk in source.chunks:
                     chunk.openai_file_id = None
             source.status = "failed"
@@ -1693,48 +1643,28 @@ class SourceService:
                 merged_tags = _merge_tags([*selected_tags, *auto_tags])
                 normalized_chunks = _normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text)
 
-                if source.openai_original_file_id is None:
-                    task.state_json = {"stage": "uploading_original_file", "source_id": source.id}
-                    task.updated_at = _utcnow()
-                    await session.commit()
-                    source.openai_original_file_id = await self._openai.upload_file_bytes(
-                        filename=_virtual_name(source),
-                        payload=payload,
-                        purpose=_openai_file_purpose(source_kind=source_kind),
-                    )
-                    source.openai_original_file_purpose = _openai_file_purpose(source_kind=source_kind)
-                    task.state_json = {
-                        "stage": "replacing_old_chunks",
-                        "source_id": source.id,
-                        "openai_original_file_id": source.openai_original_file_id,
-                    }
-                    task.updated_at = _utcnow()
-                    await session.commit()
-                else:
-                    task.state_json = {"stage": "replacing_old_chunks", "source_id": source.id}
-                    task.updated_at = _utcnow()
-                    await session.commit()
-
+                task.state_json = {"stage": "replacing_old_chunks", "source_id": source.id}
+                task.updated_at = _utcnow()
+                await session.commit()
                 replaced_chunk_count = len(source.chunks)
                 cleanup_result = await self._delete_openai_chunk_files_for_source(source=source)
                 for chunk in source.chunks:
                     chunk.openai_file_id = None
                 source.chunks.clear()
                 source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in merged_tags]
-                source.ingest_strategy = strategy_hint
                 source.updated_at = _utcnow()
                 old_chunks_replaced = True
                 task.state_json = {
-                    "stage": "publishing_chunks",
+                    "stage": "saving_semantic_chunks",
                     "source_id": source.id,
                     "chunk_count": len(normalized_chunks),
-                    "published_chunk_count": 0,
+                    "saved_chunk_count": 0,
                     "cleanup": cleanup_result,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
 
-                publish_started_at = perf_counter()
+                save_started_at = perf_counter()
                 for draft in normalized_chunks:
                     chunk = SemanticChunk(
                         id=new_id(),
@@ -1752,49 +1682,39 @@ class SourceService:
                         start_seconds=draft.locator.start_seconds,
                         end_seconds=draft.locator.end_seconds,
                         strategy_label=draft.strategy_label,
-                        status="processing",
+                        status="ready",
                         created_at=_utcnow(),
                         updated_at=_utcnow(),
                     )
-                    attributes = build_vector_attributes(
-                        source_id=source.id,
-                        chunk_id=chunk.id,
-                        source_kind=source.source_kind,
-                        virtual_path=_virtual_path(source),
-                        virtual_name=_virtual_name(source),
-                        source_created_at=source.created_at,
-                        tag_slugs=[tag.slug for tag in merged_tags],
-                    )
-                    chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
-                    chunk.openai_file_id = await self._openai.attach_chunk_to_vector_store(
-                        vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
-                        text_content=render_chunk_markdown(source=source, chunk=chunk),
-                        attributes=attributes,
-                    )
-                    chunk.status = "ready"
-                    chunk.updated_at = _utcnow()
                     session.add(chunk)
                     task.state_json = {
-                        "stage": "publishing_chunks",
+                        "stage": "saving_semantic_chunks",
                         "source_id": source.id,
                         "chunk_count": len(normalized_chunks),
-                        "published_chunk_count": draft.sequence,
-                        "last_openai_file_id": chunk.openai_file_id,
+                        "saved_chunk_count": draft.sequence,
                     }
                     task.updated_at = _utcnow()
                     await session.commit()
                 logger.info(
-                    "source_resplit_chunks_published clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
+                    "source_resplit_chunks_saved clerk_user_id=%s source_id=%s task_id=%s chunks=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
                     len(normalized_chunks),
-                    (perf_counter() - publish_started_at) * 1000,
+                    (perf_counter() - save_started_at) * 1000,
+                )
+
+                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                vector_file_id = await self._replace_source_vector_file(
+                    source=source,
+                    filename=index_material.filename,
+                    payload=index_material.payload,
+                    tag_slugs=[tag.slug for tag in merged_tags],
                 )
 
                 source.status = "ready"
                 source.error_message = None
+                source.ingest_strategy = index_material.strategy_label
                 source.updated_at = _utcnow()
                 library.updated_at = _utcnow()
                 task.status = "completed"
@@ -1804,11 +1724,13 @@ class SourceService:
                     "chunk_count": len(normalized_chunks),
                     "replaced_chunk_count": replaced_chunk_count,
                     "tag_count": len(merged_tags),
+                    "openai_vector_file_id": vector_file_id,
                 }
                 task.result_json = {
                     "source_id": source.id,
                     "chunk_count": len(normalized_chunks),
                     "replaced_chunk_count": replaced_chunk_count,
+                    "openai_vector_file_id": vector_file_id,
                 }
                 task.error_message = None
                 task.completed_at = _utcnow()
@@ -1887,7 +1809,7 @@ class SourceService:
             previous_error_raw = task_input.get("previous_error_message")
             previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
             state = _dict_payload(task.state_json)
-            old_chunks_replaced = state.get("stage") in {"replacing_old_chunks", "publishing_chunks"}
+            old_chunks_replaced = state.get("stage") in {"replacing_old_chunks", "saving_semantic_chunks"}
             if old_chunks_replaced:
                 try:
                     cleanup_result = await self._delete_openai_chunk_files_for_source(source=source)
@@ -1936,7 +1858,7 @@ class SourceService:
         task_id: str,
     ) -> None:
         reindex_started_at = perf_counter()
-        reindexed_chunk_count = 0
+        reindexed_source_file = False
         cleanup_failed_file_ids: list[str] = []
         await self._database.ensure_ready()
         async with self._database.session() as session:
@@ -1962,92 +1884,58 @@ class SourceService:
             task.updated_at = now
             await session.commit()
             logger.info(
-                "source_reindex_started clerk_user_id=%s source_id=%s task_id=%s chunks=%s",
+                "source_reindex_started clerk_user_id=%s source_id=%s task_id=%s vector_file=%s",
                 clerk_user_id,
                 source.id,
                 task.id,
-                len(source.chunks),
+                source.openai_vector_file_id is not None,
             )
 
             try:
                 selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
                 source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
-                chunks = sorted(source.chunks, key=lambda item: item.sequence)
                 task.state_json = {
-                    "stage": "reindexing_chunks",
+                    "stage": "reindexing_source_file",
                     "source_id": source.id,
-                    "chunk_count": len(chunks),
-                    "reindexed_chunk_count": 0,
+                    "openai_vector_file_id": source.openai_vector_file_id,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
 
-                for chunk in chunks:
-                    old_file_id = chunk.openai_file_id
-                    attributes = build_vector_attributes(
-                        source_id=source.id,
-                        chunk_id=chunk.id,
-                        source_kind=source.source_kind,
-                        virtual_path=_virtual_path(source),
-                        virtual_name=_virtual_name(source),
-                        source_created_at=source.created_at,
-                        tag_slugs=[tag.slug for tag in selected_tags],
-                    )
-                    new_file_id = await self._openai.attach_chunk_to_vector_store(
-                        vector_store_id=library.openai_vector_store_id or "",
-                        filename=f"{_virtual_name(source)}.chunk-{chunk.sequence}.md",
-                        text_content=render_chunk_markdown(source=source, chunk=chunk),
-                        attributes=attributes,
-                    )
-                    chunk.openai_file_id = new_file_id
-                    chunk.vector_attributes_json = {key: value for key, value in attributes.items()}
-                    chunk.status = "ready"
-                    chunk.updated_at = _utcnow()
-                    reindexed_chunk_count += 1
-                    task.state_json = {
-                        "stage": "reindexing_chunks",
-                        "source_id": source.id,
-                        "chunk_count": len(chunks),
-                        "reindexed_chunk_count": reindexed_chunk_count,
-                        "last_openai_file_id": new_file_id,
-                    }
-                    task.updated_at = _utcnow()
-                    await session.commit()
+                payload = await self._storage.get_bytes(key=source.storage_key)
+                source_kind = cast(SourceKind, source.source_kind)
+                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                source.ingest_strategy = index_material.strategy_label
+                vector_file_id = await self._replace_source_vector_file(
+                    source=source,
+                    filename=index_material.filename,
+                    payload=index_material.payload,
+                    tag_slugs=[tag.slug for tag in selected_tags],
+                )
+                reindexed_source_file = True
+                task.state_json = {
+                    "stage": "reindexing_source_file",
+                    "source_id": source.id,
+                    "openai_vector_file_id": vector_file_id,
+                }
+                task.updated_at = _utcnow()
+                await session.commit()
 
-                    if old_file_id is not None:
-                        try:
-                            if library.openai_vector_store_id is not None:
-                                await self._openai.detach_file_from_vector_store(
-                                    vector_store_id=library.openai_vector_store_id,
-                                    file_id=old_file_id,
-                                )
-                            await self._openai.delete_file(file_id=old_file_id)
-                        except Exception as cleanup_error:
-                            cleanup_failed_file_ids.append(old_file_id)
-                            logger.warning(
-                                "source_reindex_old_chunk_cleanup_failed clerk_user_id=%s source_id=%s task_id=%s file_id=%s error=%s",
-                                clerk_user_id,
-                                source.id,
-                                task.id,
-                                old_file_id,
-                                cleanup_error,
-                            )
-
-                source.status = "ready" if chunks else previous_status
-                source.error_message = None if chunks else previous_error_message
+                source.status = "ready"
+                source.error_message = None
                 source.updated_at = _utcnow()
                 library.updated_at = _utcnow()
                 task.status = "completed"
                 task.state_json = {
                     "stage": "completed",
                     "source_id": source.id,
-                    "chunk_count": len(chunks),
+                    "openai_vector_file_id": source.openai_vector_file_id,
                     "tag_count": len(selected_tags),
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
                 task.result_json = {
                     "source_id": source.id,
-                    "chunk_count": len(chunks),
+                    "openai_vector_file_id": source.openai_vector_file_id,
                     "tag_count": len(selected_tags),
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
@@ -2056,25 +1944,25 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
                 logger.info(
-                    "source_reindex_completed clerk_user_id=%s source_id=%s task_id=%s chunks=%s cleanup_failures=%s duration_ms=%.1f",
+                    "source_reindex_completed clerk_user_id=%s source_id=%s task_id=%s vector_file_id=%s cleanup_failures=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
-                    len(chunks),
+                    source.openai_vector_file_id,
                     len(cleanup_failed_file_ids),
                     (perf_counter() - reindex_started_at) * 1000,
                 )
             except Exception as exc:
                 source = await self._source_by_id(session, source_id=source_id, populate_existing=True)
                 task = await self._task_by_id(session, task_id=task_id)
-                source.status = "failed" if source.chunks else previous_status
-                source.error_message = str(exc) if source.chunks else previous_error_message
+                source.status = "failed" if reindexed_source_file else previous_status
+                source.error_message = str(exc) if reindexed_source_file else previous_error_message
                 source.updated_at = _utcnow()
                 task.status = "failed"
                 task.state_json = {
                     "stage": "failed",
                     "source_id": source.id,
-                    "reindexed_chunk_count": reindexed_chunk_count,
+                    "reindexed_source_file": reindexed_source_file,
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
                 task.error_message = str(exc)
@@ -2082,11 +1970,11 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
                 logger.error(
-                    "source_reindex_failed clerk_user_id=%s source_id=%s task_id=%s reindexed_chunks=%s error=%s duration_ms=%.1f",
+                    "source_reindex_failed clerk_user_id=%s source_id=%s task_id=%s reindexed_source_file=%s error=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
-                    reindexed_chunk_count,
+                    reindexed_source_file,
                     exc,
                     (perf_counter() - reindex_started_at) * 1000,
                 )
@@ -2113,27 +2001,26 @@ class SourceService:
             previous_error_raw = task_input.get("previous_error_message")
             previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
             state = _dict_payload(task.state_json)
-            reindexed_raw = state.get("reindexed_chunk_count")
-            reindexed_chunk_count = reindexed_raw if isinstance(reindexed_raw, int) else 0
-            source.status = "failed" if source.chunks else previous_status
-            source.error_message = "Tag reindex cancelled during shutdown." if source.chunks else previous_error_message
+            reindexed_source_file = state.get("stage") == "reindexing_source_file"
+            source.status = previous_status
+            source.error_message = previous_error_message
             source.updated_at = _utcnow()
             task.status = "cancelled"
             task.state_json = {
                 "stage": "cancelled",
                 "source_id": source.id,
-                "reindexed_chunk_count": reindexed_chunk_count,
+                "reindexed_source_file": reindexed_source_file,
             }
             task.error_message = "Tag reindex cancelled during shutdown."
             task.completed_at = _utcnow()
             task.updated_at = _utcnow()
             await session.commit()
             logger.warning(
-                "source_reindex_cancelled clerk_user_id=%s source_id=%s task_id=%s reindexed_chunks=%s",
+                "source_reindex_cancelled clerk_user_id=%s source_id=%s task_id=%s reindexed_source_file=%s",
                 clerk_user_id,
                 source.id,
                 task.id,
-                reindexed_chunk_count,
+                reindexed_source_file,
             )
 
     async def search(self, *, clerk_user_id: str, request: SearchRequest) -> SearchResponse:
@@ -2155,6 +2042,7 @@ class SourceService:
             filters = build_filter_groups(
                 source_ids=request.selected_source_ids,
                 source_kinds=request.source_kinds,
+                virtual_paths=request.virtual_paths,
                 tag_slugs=[tag.slug for tag in tags],
                 tag_match_mode=request.tag_match_mode,
                 created_after=request.created_after,
@@ -2167,47 +2055,62 @@ class SourceService:
                 max_results=request.max_results,
                 filters=filters,
             )
-            chunk_ids = [
-                str(candidate.attributes.get("chunk_id"))
+            source_ids = [
+                str(candidate.attributes.get("source_id"))
                 for candidate in candidates
-                if isinstance(candidate.attributes.get("chunk_id"), str)
+                if isinstance(candidate.attributes.get("source_id"), str)
             ]
-            if not chunk_ids:
+            vector_file_ids = [candidate.openai_file_id for candidate in candidates]
+            if not source_ids and not vector_file_ids:
                 return []
-            chunks = (
+            sources = (
                 (
                     await session.execute(
-                        select(SemanticChunk)
+                        select(SourceFile)
                         .options(
-                            selectinload(SemanticChunk.source_file)
-                            .selectinload(SourceFile.tag_links)
-                            .selectinload(SourceTagLink.tag)
+                            selectinload(SourceFile.chunks),
+                            selectinload(SourceFile.filesystem_entry),
+                            selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
                         )
-                        .where(SemanticChunk.id.in_(chunk_ids))
+                        .where(
+                            or_(
+                                SourceFile.id.in_(source_ids),
+                                SourceFile.openai_vector_file_id.in_(vector_file_ids),
+                            )
+                        )
                     )
                 )
                 .scalars()
                 .all()
             )
-            chunk_map = {chunk.id: chunk for chunk in chunks}
-            candidates_by_chunk_id = {str(candidate.attributes.get("chunk_id")): candidate for candidate in candidates}
+            source_map = {source.id: source for source in sources}
+            source_by_vector_file_id = {
+                source.openai_vector_file_id: source for source in sources if source.openai_vector_file_id is not None
+            }
             output: list[ChunkHit] = []
-            for chunk_id in chunk_ids:
-                chunk = chunk_map.get(chunk_id)
-                candidate = candidates_by_chunk_id.get(chunk_id)
-                if chunk is None or candidate is None:
+            seen_source_ids: set[str] = set()
+            for candidate in candidates:
+                candidate_source_id = candidate.attributes.get("source_id")
+                source = (
+                    source_map.get(candidate_source_id)
+                    if isinstance(candidate_source_id, str)
+                    else source_by_vector_file_id.get(candidate.openai_file_id)
+                )
+                if source is None or source.id in seen_source_ids:
                     continue
-                if not _chunk_matches_request_filters(
-                    chunk,
+                if not _source_matches_request_filters(
+                    source,
                     selected_source_ids=request.selected_source_ids,
                     source_kinds=request.source_kinds,
+                    virtual_paths=request.virtual_paths,
                     tag_ids=[tag.id for tag in tags],
                     tag_match_mode=request.tag_match_mode,
                     created_after=request.created_after,
                     created_before=request.created_before,
                 ):
                     continue
-                output.append(self._chunk_hit(chunk, score=candidate.score, attributes=candidate.attributes))
+                seen_source_ids.add(source.id)
+                output.append(self._source_hit(source, candidate=candidate))
             return output
 
     async def branch_search(self, *, clerk_user_id: str, request: BranchSearchRequest) -> BranchSearchResponse:
@@ -2218,6 +2121,7 @@ class SourceService:
                 query=request.query,
                 selected_source_ids=request.selected_source_ids,
                 source_kinds=request.source_kinds,
+                virtual_paths=request.virtual_paths,
                 tag_ids=request.tag_ids,
                 tag_match_mode=request.tag_match_mode,
                 created_after=request.created_after,
@@ -2238,6 +2142,7 @@ class SourceService:
                         query=branch_query,
                         selected_source_ids=request.selected_source_ids,
                         source_kinds=request.source_kinds,
+                        virtual_paths=request.virtual_paths,
                         tag_ids=request.tag_ids,
                         tag_match_mode=request.tag_match_mode,
                         created_after=request.created_after,
@@ -2281,8 +2186,8 @@ class SourceService:
             return library
         library = UserLibrary(
             user_id=app_user.id,
-            title=f"{app_user.display_name or app_user.clerk_user_id}'s semantic library",
-            description="Personal semantic RAG library",
+            title=f"{app_user.display_name or app_user.clerk_user_id}'s indexed file library",
+            description="Personal OpenAI vector-store backed file library",
             created_at=_utcnow(),
             updated_at=_utcnow(),
         )
@@ -2489,17 +2394,31 @@ class SourceService:
     async def _delete_openai_files_for_source(self, *, source: SourceFile) -> dict[str, object]:
         cleanup_started_at = perf_counter()
         chunk_cleanup = await self._delete_openai_chunk_files_for_source(source=source)
+        vector_file_deleted = source.openai_vector_file_id is not None
+        if source.openai_vector_file_id is not None:
+            vector_store_id = source.library.openai_vector_store_id
+            if vector_store_id is not None:
+                await self._openai.detach_file_from_vector_store(
+                    vector_store_id=vector_store_id,
+                    file_id=source.openai_vector_file_id,
+                )
+            await self._openai.delete_file(file_id=source.openai_vector_file_id)
         original_file_deleted = source.openai_original_file_id is not None
         if source.openai_original_file_id is not None:
             await self._openai.delete_file(file_id=source.openai_original_file_id)
         logger.info(
-            "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_original_file=%s duration_ms=%.1f",
+            "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_vector_file=%s openai_original_file=%s duration_ms=%.1f",
             source.id,
             chunk_cleanup["chunk_file_count"],
+            vector_file_deleted,
             original_file_deleted,
             (perf_counter() - cleanup_started_at) * 1000,
         )
-        return {"chunk_file_count": chunk_cleanup["chunk_file_count"], "original_file_deleted": original_file_deleted}
+        return {
+            "chunk_file_count": chunk_cleanup["chunk_file_count"],
+            "vector_file_deleted": vector_file_deleted,
+            "original_file_deleted": original_file_deleted,
+        }
 
     async def _delete_openai_chunk_files_for_source(self, *, source: SourceFile) -> dict[str, int]:
         cleanup_started_at = perf_counter()
@@ -2520,6 +2439,56 @@ class SourceService:
             (perf_counter() - cleanup_started_at) * 1000,
         )
         return {"chunk_file_count": len(chunk_file_ids)}
+
+    async def _replace_source_vector_file(
+        self,
+        *,
+        source: SourceFile,
+        filename: str,
+        payload: bytes,
+        tag_slugs: list[str],
+    ) -> str:
+        vector_store_id = source.library.openai_vector_store_id
+        if vector_store_id is None:
+            raise ValueError("Source library does not have an OpenAI vector store.")
+        attributes = build_vector_attributes(
+            source_id=source.id,
+            source_kind=source.source_kind,
+            virtual_path=_virtual_path(source),
+            virtual_name=_virtual_name(source),
+            source_created_at=source.created_at,
+            tag_slugs=tag_slugs,
+        )
+        old_file_id = source.openai_vector_file_id
+        new_file_id = await self._openai.upload_file_bytes(
+            filename=filename,
+            payload=payload,
+            purpose="assistants",
+        )
+        try:
+            await self._openai.attach_file_to_vector_store(
+                vector_store_id=vector_store_id,
+                file_id=new_file_id,
+                attributes=attributes,
+            )
+        except Exception:
+            await self._openai.delete_file(file_id=new_file_id)
+            raise
+
+        source.openai_vector_file_id = new_file_id
+        source.vector_attributes_json = {key: value for key, value in attributes.items()}
+        if old_file_id is not None and old_file_id != new_file_id:
+            try:
+                await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=old_file_id)
+                await self._openai.delete_file(file_id=old_file_id)
+            except Exception as cleanup_error:
+                logger.warning(
+                    "source_vector_reindex_old_file_cleanup_failed source_id=%s file_id=%s error=%s",
+                    source.id,
+                    old_file_id,
+                    cleanup_error,
+                )
+        return new_file_id
 
     async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[Tag]:
         if not tag_ids:
@@ -2592,6 +2561,56 @@ class SourceService:
         return decode_text(payload) if media_type.startswith(
             "text/"
         ) else f"{filename}\n\nNo text extraction is available.", "basic_metadata"
+
+    async def _vector_index_material(
+        self,
+        *,
+        source: SourceFile,
+        source_kind: SourceKind,
+        payload: bytes,
+    ) -> VectorIndexMaterial:
+        if source_kind in {"pdf", "text"}:
+            return VectorIndexMaterial(
+                filename=_virtual_name(source),
+                media_type=source.media_type,
+                payload=payload,
+                strategy_label="openai_vector_source_file",
+            )
+        if source_kind == "conversation" and source.media_type.startswith("text/"):
+            return VectorIndexMaterial(
+                filename=_virtual_name(source),
+                media_type="text/plain",
+                payload=payload,
+                strategy_label="openai_vector_conversation_text",
+            )
+        if source_kind in {"audio", "video", "conversation"}:
+            transcript, transcript_payload = await self._openai.transcribe_audio_bytes(
+                filename=source.original_filename,
+                payload=payload,
+            )
+            del transcript_payload
+            index_text = transcript or f"{source.original_filename}\n\nNo transcript text was returned."
+            return VectorIndexMaterial(
+                filename=f"{Path(_virtual_name(source)).stem or source.id}.transcript.txt",
+                media_type="text/plain",
+                payload=index_text.encode("utf-8"),
+                strategy_label="openai_vector_transcript_file",
+            )
+        metadata_text = "\n".join(
+            [
+                source.display_title,
+                f"Virtual path: {_virtual_path(source)}",
+                f"Original filename: {source.original_filename}",
+                f"Media type: {source.media_type}",
+                f"Source kind: {source.source_kind}",
+            ]
+        )
+        return VectorIndexMaterial(
+            filename=f"{Path(_virtual_name(source)).stem or source.id}.metadata.txt",
+            media_type="text/plain",
+            payload=metadata_text.encode("utf-8"),
+            strategy_label="openai_vector_metadata_file",
+        )
 
     async def _split_semantically(
         self,
@@ -2681,6 +2700,8 @@ class SourceService:
             ],
             openai_original_file_id=source.openai_original_file_id,
             openai_original_file_purpose=source.openai_original_file_purpose,
+            openai_vector_file_id=source.openai_vector_file_id,
+            vector_attributes=cast(Any, dict(source.vector_attributes_json or {})) or None,
         )
 
     def _source_detail(self, source: SourceFile) -> LibrarySourceDetail:
@@ -2723,6 +2744,7 @@ class SourceService:
                 for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
             ],
             openai_original_file_id=source.openai_original_file_id,
+            openai_vector_file_id=source.openai_vector_file_id,
             created_at=entry.created_at,
             updated_at=entry.updated_at,
         )
@@ -2766,6 +2788,25 @@ class SourceService:
             attributes=attributes,
         )
 
+    def _source_hit(self, source: SourceFile, *, candidate: VectorSearchCandidate) -> ChunkHit:
+        text = candidate.text.strip()
+        if not text:
+            text = f"{source.display_title}\n{_virtual_path(source)}"
+        return ChunkHit(
+            chunk_id=f"source:{source.id}",
+            source_file_id=source.id,
+            source_title=source.display_title,
+            original_filename=source.original_filename,
+            score=candidate.score,
+            title=source.display_title,
+            summary="OpenAI vector-store match from the indexed source file.",
+            text=text,
+            tags=[link.tag.name for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())],
+            locator=ChunkLocator(type="generated"),
+            openai_file_id=candidate.openai_file_id,
+            attributes=candidate.attributes,
+        )
+
     @staticmethod
     def _tag_summary(tag: Tag) -> TagSummary:
         return TagSummary(
@@ -2781,7 +2822,6 @@ class SourceService:
 def build_vector_attributes(
     *,
     source_id: str,
-    chunk_id: str,
     source_kind: str,
     virtual_path: str,
     virtual_name: str,
@@ -2791,8 +2831,8 @@ def build_vector_attributes(
     created_at = _as_utc(source_created_at)
     attributes: dict[str, str | float | bool] = {
         "attributes_version": float(VECTOR_ATTRIBUTES_VERSION),
+        "index_kind": "source_file",
         "source_id": source_id,
-        "chunk_id": chunk_id,
         "source_kind": source_kind,
         "virtual_path": virtual_path[:256],
         "virtual_name": virtual_name[:256],
@@ -2810,6 +2850,7 @@ def build_filter_groups(
     source_kinds: Sequence[str],
     tag_slugs: Sequence[str],
     tag_match_mode: TagMatchMode,
+    virtual_paths: Sequence[str] = (),
     created_after: datetime | None = None,
     created_before: datetime | None = None,
     include_created_at_filters: bool = True,
@@ -2819,6 +2860,8 @@ def build_filter_groups(
         filters.append(_or_filter("source_id", source_ids))
     if source_kinds:
         filters.append(_or_filter("source_kind", source_kinds))
+    if virtual_paths:
+        filters.append(_or_filter("virtual_path", [_normalize_filter_path(path) for path in virtual_paths]))
     if include_created_at_filters and created_after is not None:
         filters.append({"type": "gte", "key": "created_at", "value": _as_utc(created_after).timestamp()})
     if include_created_at_filters and created_before is not None:
@@ -3043,16 +3086,50 @@ def _chunk_matches_request_filters(
     return True
 
 
+def _source_matches_request_filters(
+    source: SourceFile,
+    *,
+    selected_source_ids: Sequence[str],
+    source_kinds: Sequence[str],
+    virtual_paths: Sequence[str],
+    tag_ids: Sequence[str],
+    tag_match_mode: TagMatchMode,
+    created_after: datetime | None,
+    created_before: datetime | None,
+) -> bool:
+    if selected_source_ids and source.id not in set(selected_source_ids):
+        return False
+    if source_kinds and source.source_kind not in set(source_kinds):
+        return False
+    if virtual_paths and _virtual_path(source) not in {_normalize_filter_path(path) for path in virtual_paths}:
+        return False
+    source_created_at = _as_utc(source.created_at)
+    if created_after is not None and source_created_at < _as_utc(created_after):
+        return False
+    if created_before is not None and source_created_at > _as_utc(created_before):
+        return False
+    if tag_ids:
+        selected_tag_ids = set(tag_ids)
+        source_tag_ids = {link.tag_id for link in source.tag_links}
+        return (
+            selected_tag_ids.issubset(source_tag_ids)
+            if tag_match_mode == "all"
+            else bool(selected_tag_ids & source_tag_ids)
+        )
+    return True
+
+
 def _library_supports_vector_created_at_filter(library: UserLibrary) -> bool:
     for source in library.sources:
-        for chunk in source.chunks:
-            if chunk.openai_file_id is None:
-                continue
-            attributes = chunk.vector_attributes_json or {}
-            if attributes.get("attributes_version") != float(VECTOR_ATTRIBUTES_VERSION):
-                return False
-            if not isinstance(attributes.get("created_at"), (int, float)):
-                return False
+        if source.openai_vector_file_id is None:
+            continue
+        attributes = source.vector_attributes_json or {}
+        if attributes.get("attributes_version") != float(VECTOR_ATTRIBUTES_VERSION):
+            return False
+        if attributes.get("index_kind") != "source_file":
+            return False
+        if not isinstance(attributes.get("created_at"), (int, float)):
+            return False
     return True
 
 
@@ -3067,6 +3144,13 @@ def _tag_slug_filter(slug: str) -> CompoundFilter:
         "type": "or",
         "filters": [{"type": "eq", "key": f"tag_{index}", "value": slug} for index in range(1, TAG_SLOT_COUNT + 1)],
     }
+
+
+def _normalize_filter_path(path: str) -> str:
+    stripped = path.strip()
+    if not stripped:
+        return "/"
+    return stripped if stripped.startswith("/") else f"/{stripped}"
 
 
 def _tag_metadata_value(tag_slugs: Sequence[str]) -> str:

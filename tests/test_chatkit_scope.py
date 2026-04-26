@@ -1,0 +1,30 @@
+from __future__ import annotations
+
+from backend.app.chatkit.server import selected_scope
+from backend.app.chatkit.store import VectorstoreChatContext
+
+
+def test_selected_scope_falls_back_when_model_passes_openai_file_ids() -> None:
+    context = VectorstoreChatContext(
+        clerk_user_id="local-dev",
+        user_email="local-dev@example.com",
+        display_name="Local Developer",
+        bearer_token="local-dev",
+        selected_source_ids=["source_a", "source_b"],
+        thread_origin="web",
+    )
+
+    assert selected_scope(context, ["file-openai-a", "file-openai-b"]) == ["source_a", "source_b"]
+
+
+def test_selected_scope_preserves_explicit_app_source_ids() -> None:
+    context = VectorstoreChatContext(
+        clerk_user_id="local-dev",
+        user_email="local-dev@example.com",
+        display_name="Local Developer",
+        bearer_token="local-dev",
+        selected_source_ids=["source_a"],
+        thread_origin="web",
+    )
+
+    assert selected_scope(context, ["source_b", "file-openai-a"]) == ["source_b"]

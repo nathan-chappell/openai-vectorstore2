@@ -98,6 +98,8 @@ class SourceFile(Base):
     storage_key: Mapped[str] = mapped_column(String(512), nullable=False)
     openai_original_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     openai_original_file_purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    openai_vector_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
+    vector_attributes_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     ingest_strategy: Mapped[str | None] = mapped_column(String(80), nullable=True)
     metadata_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

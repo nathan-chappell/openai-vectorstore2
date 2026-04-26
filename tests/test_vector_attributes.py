@@ -15,7 +15,6 @@ from backend.app.services.sources import (
 def test_build_vector_attributes_records_version_and_bounded_tag_slots() -> None:
     attributes = build_vector_attributes(
         source_id="source_1",
-        chunk_id="chunk_1",
         source_kind="text",
         virtual_path="/" + "A" * 300,
         virtual_name="A" * 300,
@@ -24,6 +23,7 @@ def test_build_vector_attributes_records_version_and_bounded_tag_slots() -> None
     )
 
     assert attributes["attributes_version"] == float(VECTOR_ATTRIBUTES_VERSION)
+    assert attributes["index_kind"] == "source_file"
     assert attributes["virtual_path"] == ("/" + "A" * 300)[:256]
     assert attributes["virtual_name"] == "A" * 256
     assert attributes["created_at"] == datetime(2026, 4, 25, 12, 30, tzinfo=UTC).timestamp()
@@ -65,6 +65,27 @@ def test_build_filter_groups_combines_source_kind_and_any_tags() -> None:
     }
     assert tag_filter["type"] == "or"
     assert len(tag_filter["filters"]) == 2
+
+
+def test_build_filter_groups_can_filter_by_virtual_paths() -> None:
+    filters = cast(
+        dict[str, Any],
+        build_filter_groups(
+            source_ids=[],
+            source_kinds=[],
+            virtual_paths=["Research/alpha.txt", "/Research/bravo.txt"],
+            tag_slugs=[],
+            tag_match_mode="all",
+        ),
+    )
+
+    assert filters == {
+        "type": "or",
+        "filters": [
+            {"type": "eq", "key": "virtual_path", "value": "/Research/alpha.txt"},
+            {"type": "eq", "key": "virtual_path", "value": "/Research/bravo.txt"},
+        ],
+    }
 
 
 def test_build_filter_groups_can_skip_created_at_prefilters_for_legacy_attributes() -> None:

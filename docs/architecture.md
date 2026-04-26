@@ -4,7 +4,7 @@ OpenAI Vectorstore2 is organized around an app-core service layer. REST, ChatKit
 
 ## Core Boundary
 
-- `backend/app/services/sources.py` owns source upload, extraction, semantic splitting, tag assignment, vector-store publication, search, branch search, re-split, tag reindexing, and source cleanup.
+- `backend/app/services/sources.py` owns source upload, source-level OpenAI vector-store indexing, tag assignment, search, branch search, optional semantic split tooling, tag/path reindexing, and source cleanup.
 - `backend/app/services/actions.py` owns QA, freeform generation, image generation, voice generation, generated assets, and action tasks.
 - `backend/app/core/capabilities.py` records the intended operation map across REST, ChatKit, and MCP.
 - `backend/app/schemas/records.py` is the Pydantic contract source for API responses and app task payloads.
@@ -13,7 +13,7 @@ OpenAI Vectorstore2 is organized around an app-core service layer. REST, ChatKit
 
 The ORM models live in `backend/app/models/records.py`.
 
-- App-core tables: users, libraries, tags, sources, source-tag links, semantic chunks, tasks, and generated assets.
+- App-core tables: users, libraries, tags, sources, source-tag links, optional semantic chunks, tasks, and generated assets.
 - ChatKit tables: threads, entries, and attachments.
 - The important linkage points are `AppTask.origin_thread_id`, `AppChatThread.metadata_json.selected_source_ids`, and `AppChatAttachment.payload.metadata.source_id/task_id`.
 
@@ -39,16 +39,17 @@ The web UI is a Vite/React app served by FastAPI after build.
 `backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.
 
 - Data tools return structured JSON for hosts.
-- The `sources` render tool exposes a Prefab MCP Apps UI resource with file query, tag filters, semantic chunk search, source detail chunks, re-split controls, and recent tasks.
+- The `sources` render tool exposes a Prefab MCP Apps UI resource with file query, tag filters, source-file vector search, source detail, optional re-split controls, and recent tasks.
 - HTTP MCP is mounted at `/mcp`; stdio is available through `openai-vectorstore2-stdio`.
 
 ## Vector Store Metadata
 
-OpenAI vector-store attributes are denormalized on each semantic chunk.
+OpenAI vector-store attributes are denormalized on each indexed source file. Semantic split records may exist for inspection, but normal ingestion does not publish split chunks to the vector store.
 
-- `attributes_version=2`
-- `source_id`, `chunk_id`, `source_kind`, `filename`
-- numeric `created_at` and string `created_date`
+- `attributes_version=3`
+- `index_kind=source_file`
+- `source_id`, `source_kind`, `virtual_path`, `virtual_name`
+- numeric `created_at`
 - canonical comma-separated `tags`
 - bounded `tag_1` through `tag_8` for exact tag pre-filtering
 

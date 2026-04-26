@@ -32,6 +32,9 @@ type SourceListResponse = {
 };
 
 test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => {
+  await page.addInitScript(() => {
+    window.localStorage.removeItem("openai-vectorstore2.workspaceSplitPercent");
+  });
   await page.goto("/");
 
   await expect(page.getByText("Local dev auth")).toBeVisible();
@@ -39,14 +42,24 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
     await expect(page.getByText("Recent Tasks")).toBeVisible();
   }
   await expect(page.locator(".explorer-pane")).toBeVisible();
-  await expect(page.locator(".explorer-detail")).toBeVisible();
+  await expect(page.locator(".explorer-detail")).toHaveCount(0);
+  await expect(page.locator(".filesystem-layout")).not.toHaveClass(/has-preview/);
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.locator("openai-chatkit")).toBeVisible();
-  await expect(page.getByPlaceholder("Search files and paths")).toBeVisible();
-  await expect(page.getByText("0 files selected")).toBeVisible();
+  await expect(page.getByPlaceholder("Find by name, path, tag, or indexed text")).toBeVisible();
+  await expect(page.getByText("0 indexed files selected")).toBeVisible();
   await expect(page.getByRole("button", { name: "New Folder" })).toBeEnabled();
-  await expect(page.getByText("Choose files")).toBeVisible();
+  await expect(page.getByText("Add files")).toBeVisible();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
+  if (testInfo.project.name === "chromium-desktop") {
+    await dragWorkspaceSplitter(page, 52);
+    await expect(page.locator(".workspace-splitter")).toHaveAttribute("aria-valuenow", "52");
+    await expect
+      .poll(() => page.evaluate(() => window.localStorage.getItem("openai-vectorstore2.workspaceSplitPercent")))
+      .toBe("52");
+  } else {
+    await expect(page.locator(".workspace-splitter")).toBeHidden();
+  }
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
 });
@@ -66,8 +79,8 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await page.locator(".filesystem-upload textarea").fill("Preserve the named fields and short notes as retrievable facts.");
 
     await page.locator(".filesystem-upload input[type='file']").setInputFiles(samplePaths);
-    await expect(page.getByText("2 selected")).toBeVisible();
-    await page.locator(".filesystem-upload").getByRole("button", { name: "Upload" }).click();
+    await expect(page.getByText("2 staged")).toBeVisible();
+    await page.locator(".filesystem-upload").getByRole("button", { name: "Index" }).click();
 
     const queuedSources = await Promise.all(
       sampleFilenames.map((filename) => waitForSourceRecordByFilename(request, filename, 60_000)),
@@ -79,11 +92,13 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     }
     await page.getByRole("button", { name: "Refresh" }).click();
     await page.locator(".file-rows [role='row']").filter({ hasText: readySources[0].original_filename }).click();
+    await expect(page.locator(".explorer-detail")).toBeVisible();
+    await expect(page.locator(".filesystem-layout")).toHaveClass(/has-preview/);
     await expect(page.locator(".explorer-detail")).toContainText("Cobalt Maple");
     await page.locator(".file-rows [role='row']").filter({ hasText: readySources[1].original_filename }).click({
       modifiers: ["Control"],
     });
-    await expect(page.getByText("2 files selected")).toBeVisible();
+    await expect(page.getByText("2 indexed files selected")).toBeVisible();
     await expect(page.locator(".explorer-selection-summary")).toContainText(readySources[0].original_filename);
     await page.screenshot({ path: testInfo.outputPath("workspace-sample-library.png"), fullPage: true });
 
@@ -207,6 +222,22 @@ async function sendChatKitMessage(page: Page, text: string): Promise<void> {
     },
     { text },
   );
+}
+
+async function dragWorkspaceSplitter(page: Page, explorerPercent: number): Promise<void> {
+  const grid = page.locator(".workspace-grid");
+  const splitter = page.locator(".workspace-splitter");
+  const gridBox = await grid.boundingBox();
+  const splitterBox = await splitter.boundingBox();
+  if (!gridBox || !splitterBox) {
+    throw new Error("Workspace splitter layout was not measurable.");
+  }
+  const targetX = gridBox.x + gridBox.width * (explorerPercent / 100);
+  const targetY = splitterBox.y + splitterBox.height / 2;
+  await page.mouse.move(splitterBox.x + splitterBox.width / 2, targetY);
+  await page.mouse.down();
+  await page.mouse.move(targetX, targetY, { steps: 10 });
+  await page.mouse.up();
 }
 
 async function waitForTaskMatching(

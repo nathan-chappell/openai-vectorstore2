@@ -34,7 +34,10 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "GeneratedAsset": ("GeneratedAsset", {"byte_size", "download_url", "filename", "id", "kind"}),
     "IngestFinalizeResponse": ("IngestFinalizeResponse", {"source", "task"}),
     "LibrarySourceDetail": ("SourceDetail", {"chunks", "ingest_strategy", "metadata", "storage_key", "storage_provider"}),
-    "LibrarySourceSummary": ("SourceSummary", {"chunk_count", "display_title", "id", "source_kind", "status", "tags"}),
+    "LibrarySourceSummary": (
+        "SourceSummary",
+        {"chunk_count", "display_title", "id", "openai_vector_file_id", "source_kind", "status", "tags"},
+    ),
     "ResearchCandidateIngestRequest": (
         "ResearchCandidateIngestRequest",
         {"candidate_ids", "folder_id", "tag_ids", "task_id"},
@@ -173,7 +176,8 @@ async def test_http_ingest_search_and_qa_contracts(
             assert isinstance(result_json, dict)
             chunk_count = result_json["chunk_count"]
             assert isinstance(chunk_count, int)
-            assert chunk_count >= 1
+            assert chunk_count == 0
+            assert isinstance(result_json["openai_vector_file_id"], str)
 
             search = await client.post(
                 "/api/search",
@@ -202,22 +206,18 @@ async def test_http_ingest_search_and_qa_contracts(
             assert source_detail.status_code == 200
             source_detail_payload = source_detail.json()
             assert source_detail_payload["status"] == "ready"
-            assert len(source_detail_payload["chunks"]) >= 1
-            chunk_file_ids = [
-                chunk["openai_file_id"]
-                for chunk in source_detail_payload["chunks"]
-                if chunk["openai_file_id"] is not None
-            ]
+            assert source_detail_payload["chunks"] == []
             original_file_id = source_detail_payload["openai_original_file_id"]
+            vector_file_id = source_detail_payload["openai_vector_file_id"]
             assert original_file_id is not None
+            assert vector_file_id is not None
+            assert source_detail_payload["vector_attributes"]["source_id"] == source["id"]
 
             delete = await client.delete(f"/api/sources/{source['id']}", headers=auth_headers)
             assert delete.status_code == 200
             openai_gateway = app.state.services.openai
-            assert {original_file_id, *chunk_file_ids} <= set(openai_gateway.deleted_file_ids)
-            assert {("vs_fake", file_id) for file_id in chunk_file_ids} <= set(
-                openai_gateway.detached_vector_store_file_ids
-            )
+            assert {original_file_id, vector_file_id} <= set(openai_gateway.deleted_file_ids)
+            assert ("vs_fake", vector_file_id) in set(openai_gateway.detached_vector_store_file_ids)
 
             tasks_after_delete = await client.get("/api/tasks", headers=auth_headers)
             assert tasks_after_delete.status_code == 200
@@ -404,11 +404,10 @@ async def test_http_resplit_replaces_chunks_after_successful_split(
             assert before.status_code == 200
             before_payload = before.json()
             original_file_id = before_payload["openai_original_file_id"]
-            old_chunk_file_ids = [
-                chunk["openai_file_id"] for chunk in before_payload["chunks"] if chunk["openai_file_id"] is not None
-            ]
+            old_vector_file_id = before_payload["openai_vector_file_id"]
             assert original_file_id is not None
-            assert old_chunk_file_ids
+            assert old_vector_file_id is not None
+            assert before_payload["chunks"] == []
 
             resplit = await client.post(
                 f"/api/sources/{source_id}/resplit",
@@ -428,25 +427,21 @@ async def test_http_resplit_replaces_chunks_after_successful_split(
             )
             result_json = completed_task["result_json"]
             assert isinstance(result_json, dict)
-            assert result_json["replaced_chunk_count"] == len(old_chunk_file_ids)
+            assert result_json["replaced_chunk_count"] == 0
 
             after = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
             assert after.status_code == 200
             after_payload = after.json()
             assert after_payload["status"] == "ready"
             assert after_payload["openai_original_file_id"] == original_file_id
-            new_chunk_file_ids = [
-                chunk["openai_file_id"] for chunk in after_payload["chunks"] if chunk["openai_file_id"] is not None
-            ]
-            assert new_chunk_file_ids
-            assert not set(old_chunk_file_ids) & set(new_chunk_file_ids)
+            assert after_payload["openai_vector_file_id"] != old_vector_file_id
+            assert after_payload["chunks"]
+            assert all(chunk["openai_file_id"] is None for chunk in after_payload["chunks"])
 
             openai_gateway = app.state.services.openai
-            assert set(old_chunk_file_ids) <= set(openai_gateway.deleted_file_ids)
+            assert old_vector_file_id in openai_gateway.deleted_file_ids
             assert original_file_id not in openai_gateway.deleted_file_ids
-            assert {("vs_fake", file_id) for file_id in old_chunk_file_ids} <= set(
-                openai_gateway.detached_vector_store_file_ids
-            )
+            assert ("vs_fake", old_vector_file_id) in set(openai_gateway.detached_vector_store_file_ids)
 
 
 @pytest.mark.asyncio
@@ -524,10 +519,17 @@ async def test_http_search_honors_tag_source_and_kind_filters(
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            alpha_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "alpha"})
+            bravo_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "bravo"})
+            assert alpha_tag.status_code == 200
+            assert bravo_tag.status_code == 200
+            alpha_tag_id = alpha_tag.json()["tag"]["id"]
+            bravo_tag_id = bravo_tag.json()["tag"]["id"]
             alpha_upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+                data={"tag_ids": alpha_tag_id},
             )
             assert alpha_upload.status_code == 200
             alpha_payload = alpha_upload.json()
@@ -541,6 +543,7 @@ async def test_http_search_honors_tag_source_and_kind_filters(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("bravo.txt", b"Bravo topic for semantic retrieval.", "text/plain")},
+                data={"tag_ids": bravo_tag_id},
             )
             assert bravo_upload.status_code == 200
             bravo_payload = bravo_upload.json()
@@ -551,11 +554,6 @@ async def test_http_search_honors_tag_source_and_kind_filters(
                 expected_status="completed",
             )
 
-            tags = await client.get("/api/tags", headers=auth_headers)
-            assert tags.status_code == 200
-            tag_ids_by_name = {tag["name"].casefold(): tag["id"] for tag in tags.json()}
-            alpha_tag_id = tag_ids_by_name["alpha"]
-            bravo_tag_id = tag_ids_by_name["bravo"]
             alpha_source_id = alpha_payload["source"]["id"]
             bravo_source_id = bravo_payload["source"]["id"]
 
@@ -643,10 +641,17 @@ async def test_http_source_tag_update_reindexes_vector_attributes(
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            alpha_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "alpha"})
+            bravo_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "bravo"})
+            assert alpha_tag.status_code == 200
+            assert bravo_tag.status_code == 200
+            alpha_tag_id = alpha_tag.json()["tag"]["id"]
+            bravo_tag_id = bravo_tag.json()["tag"]["id"]
             alpha_upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+                data={"tag_ids": alpha_tag_id},
             )
             assert alpha_upload.status_code == 200
             alpha_payload = alpha_upload.json()
@@ -660,6 +665,7 @@ async def test_http_source_tag_update_reindexes_vector_attributes(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("bravo.txt", b"Bravo topic for semantic retrieval.", "text/plain")},
+                data={"tag_ids": bravo_tag_id},
             )
             assert bravo_upload.status_code == 200
             bravo_payload = bravo_upload.json()
@@ -670,22 +676,13 @@ async def test_http_source_tag_update_reindexes_vector_attributes(
                 expected_status="completed",
             )
 
-            tags = await client.get("/api/tags", headers=auth_headers)
-            assert tags.status_code == 200
-            tag_ids_by_name = {tag["name"].casefold(): tag["id"] for tag in tags.json()}
-            alpha_tag_id = tag_ids_by_name["alpha"]
-            bravo_tag_id = tag_ids_by_name["bravo"]
             alpha_source_id = alpha_payload["source"]["id"]
             bravo_source_id = bravo_payload["source"]["id"]
 
             before_detail = await client.get(f"/api/sources/{alpha_source_id}", headers=auth_headers)
             assert before_detail.status_code == 200
-            old_chunk_file_ids = [
-                chunk["openai_file_id"]
-                for chunk in before_detail.json()["chunks"]
-                if chunk["openai_file_id"] is not None
-            ]
-            assert old_chunk_file_ids
+            old_vector_file_id = before_detail.json()["openai_vector_file_id"]
+            assert old_vector_file_id is not None
 
             tag_update = await client.post(
                 f"/api/sources/{alpha_source_id}/tags",
@@ -711,15 +708,9 @@ async def test_http_source_tag_update_reindexes_vector_attributes(
             after_payload = after_detail.json()
             assert after_payload["status"] == "ready"
             assert [tag["id"] for tag in after_payload["tags"]] == [bravo_tag_id]
-            new_chunk_file_ids = [
-                chunk["openai_file_id"] for chunk in after_payload["chunks"] if chunk["openai_file_id"] is not None
-            ]
-            assert new_chunk_file_ids
-            assert not set(old_chunk_file_ids) & set(new_chunk_file_ids)
-            assert set(old_chunk_file_ids) <= set(app.state.services.openai.deleted_file_ids)
-            assert {("vs_fake", file_id) for file_id in old_chunk_file_ids} <= set(
-                app.state.services.openai.detached_vector_store_file_ids
-            )
+            assert after_payload["openai_vector_file_id"] != old_vector_file_id
+            assert old_vector_file_id in app.state.services.openai.deleted_file_ids
+            assert ("vs_fake", old_vector_file_id) in set(app.state.services.openai.detached_vector_store_file_ids)
 
             old_tag_search = await client.post(
                 "/api/search",
@@ -752,10 +743,14 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            alpha_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "alpha"})
+            assert alpha_tag.status_code == 200
+            alpha_tag_id = alpha_tag.json()["tag"]["id"]
             upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
                 files={"file": ("alpha.txt", b"Alpha topic for semantic retrieval.", "text/plain")},
+                data={"tag_ids": alpha_tag_id},
             )
             assert upload.status_code == 200
             upload_payload = upload.json()
@@ -766,10 +761,6 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
                 task_id=upload_payload["task"]["id"],
                 expected_status="completed",
             )
-
-            tags = await client.get("/api/tags", headers=auth_headers)
-            assert tags.status_code == 200
-            alpha_tag_id = {tag["name"].casefold(): tag["id"] for tag in tags.json()}["alpha"]
 
             renamed = await client.patch(
                 f"/api/tags/{alpha_tag_id}",
@@ -843,13 +834,13 @@ async def test_failed_ingest_cleans_up_tracked_openai_files(
     del fake_openai
     app = create_fastapi_app(configured_settings)
     async with app.router.lifespan_context(app):
-        app.state.services.openai.fail_during_split = True
+        app.state.services.openai.fail_during_vector_attach = True
         transport = httpx.ASGITransport(app=app, raise_app_exceptions=False)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
             upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
-                files={"file": ("failing-notes.txt", b"Split failure should clean up original files.", "text/plain")},
+                files={"file": ("failing-notes.txt", b"Vector attach failure should clean up OpenAI files.", "text/plain")},
             )
             assert upload.status_code == 200
             upload_payload = upload.json()
@@ -860,18 +851,20 @@ async def test_failed_ingest_cleans_up_tracked_openai_files(
                 task_id=upload_payload["task"]["id"],
                 expected_status="failed",
             )
-            assert app.state.services.openai.deleted_file_ids == ["file_original_1"]
+            assert app.state.services.openai.deleted_file_ids == ["file_original_2", "file_original_1"]
             source = await client.get(f"/api/sources/{upload_payload['source']['id']}", headers=auth_headers)
             assert source.status_code == 200
             assert source.json()["status"] == "failed"
+            assert source.json()["openai_original_file_id"] is None
+            assert source.json()["openai_vector_file_id"] is None
 
             tasks = await client.get("/api/tasks", headers=auth_headers)
             assert tasks.status_code == 200
             [task] = tasks.json()["tasks"]
             assert task["kind"] == "ingest"
             assert task["status"] == "failed"
-            assert task["error_message"] == "Fake semantic split failure."
-            assert failed_task["error_message"] == "Fake semantic split failure."
+            assert task["error_message"] == "Fake vector attach failure."
+            assert failed_task["error_message"] == "Fake vector attach failure."
 
 
 @pytest.mark.asyncio
@@ -913,9 +906,9 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
         await services.close()
 
     serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
-    assert "Semantic Sources" in serialized
+    assert "Indexed Files" in serialized
     assert "Query files, filenames, kinds, status" in serialized
-    assert "Search semantic chunks with the selected tag scope" in serialized
+    assert "Search indexed files with the selected tag scope" in serialized
     assert "Recent Tasks" in serialized
     assert "selectedTagIds" in serialized
 

@@ -9,6 +9,7 @@ export type SearchFilterPayload = {
   sourceKinds?: SourceKind[];
   tagIds?: string[];
   tagMatchMode?: TagMatchMode;
+  virtualPaths?: string[];
   createdAfter?: string | null;
   createdBefore?: string | null;
 };
@@ -58,6 +59,8 @@ export type SourceSummary = {
   tags: TagSummary[];
   openai_original_file_id: string | null;
   openai_original_file_purpose: string | null;
+  openai_vector_file_id: string | null;
+  vector_attributes: OpenAIAttributes | null;
 };
 
 export type FilesystemEntryKind = "folder" | "file";
@@ -76,6 +79,7 @@ export type FilesystemEntrySummary = {
   chunk_count: number | null;
   tags: TagSummary[];
   openai_original_file_id: string | null;
+  openai_vector_file_id: string | null;
   created_at: string;
   updated_at: string;
 };

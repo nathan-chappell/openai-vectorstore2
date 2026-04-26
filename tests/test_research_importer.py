@@ -1,0 +1,130 @@
+# pyright: reportPrivateUsage=false
+
+from __future__ import annotations
+
+from typing import Any, cast
+
+import httpx
+import pytest
+
+from backend import create_fastapi_app
+from backend.app.core.config import AppSettings
+from backend.app.schemas import ResearchImportCreateRequest
+from backend.app.services import research as research_module
+from backend.app.services.research import ResearchImportService
+
+
+def test_research_import_url_normalization_removes_tracking_and_fragments() -> None:
+    normalized = research_module._normalize_url(
+        "HTTPS://Example.COM:443/Paper/?utm_source=newsletter&b=2&a=1&fbclid=ignored#section"
+    )
+
+    assert normalized == "https://example.com/Paper?a=1&b=2"
+    assert research_module._normalize_url("http://example.com:80/") == "http://example.com/"
+    assert research_module._normalize_url("https://example.com:444/path") == "https://example.com:444/path"
+    assert research_module._normalize_url("ftp://example.com/paper") is None
+    assert research_module._normalize_url("not a url") is None
+
+
+def test_research_import_arxiv_and_pdf_detection() -> None:
+    assert research_module._arxiv_pdf_url("https://arxiv.org/abs/2401.01234v2") == "https://arxiv.org/pdf/2401.01234v2.pdf"
+    assert research_module._arxiv_pdf_url("https://arxiv.org/pdf/2401.01234") == "https://arxiv.org/pdf/2401.01234.pdf"
+    assert research_module._source_type_from_url("https://arxiv.org/abs/2401.01234", default="url") == "arxiv"
+    assert research_module._source_type_from_url("https://example.com/report.PDF?download=1", default="url") == "pdf"
+    assert research_module._source_type_from_url("https://example.com/article", default="url") == "url"
+
+
+def test_research_import_html_cleanup_removes_boilerplate_and_preserves_public_links() -> None:
+    cleaned = research_module._html_to_text(
+        """
+        <html>
+          <head><style>.hidden { display: none; }</style><script>bad()</script></head>
+          <body>
+            <article>
+              <h1>Deep&nbsp;Research Note</h1>
+              <p>Read <a href="https://Example.com/Paper?utm_source=x&amp;b=2">the paper</a> next.</p>
+            </article>
+          </body>
+        </html>
+        """
+    )
+
+    assert "bad()" not in cleaned
+    assert ".hidden" not in cleaned
+    assert "<article>" not in cleaned
+    assert "Deep Research Note" in cleaned
+    assert "the paper (https://Example.com/Paper?utm_source=x&b=2)" in cleaned
+
+
+@pytest.mark.asyncio
+async def test_research_import_linkedin_export_seed_is_cleaned(configured_settings: AppSettings) -> None:
+    service = ResearchImportService(
+        settings=configured_settings,
+        database=cast(Any, None),
+        sources=cast(Any, None),
+        openai=cast(Any, None),
+    )
+
+    material = await service._material_from_seed(
+        ResearchImportCreateRequest(
+            seed_type="linkedin_export",
+            filename="linkedin-export.html",
+            text="""
+            <article>
+              <h1>Vector Memory Field Notes</h1>
+              <p>Exported LinkedIn article with <a href='https://example.com/reference'>a cited reference</a>.</p>
+            </article>
+            """,
+        )
+    )
+
+    text = material.payload.decode("utf-8")
+    assert material.source_type == "linkedin_export"
+    assert material.media_type == "text/plain"
+    assert "Vector Memory Field Notes" in text
+    assert "https://example.com/reference" in text
+    assert "<article>" not in text
+
+
+@pytest.mark.asyncio
+async def test_research_import_dedupes_review_candidates_against_ingested_source_provenance(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            first = await client.post(
+                "/api/research/imports",
+                headers=auth_headers,
+                json={
+                    "seed_type": "text",
+                    "title": "Duplicate seed",
+                    "text": "A stable seed body about dedupe and library provenance.",
+                    "ingest_seed": True,
+                    "discover_references": False,
+                },
+            )
+            assert first.status_code == 200
+            first_payload = first.json()
+            assert first_payload["seed_source"] is not None
+            assert first_payload["candidates"] == []
+
+            second = await client.post(
+                "/api/research/imports",
+                headers=auth_headers,
+                json={
+                    "seed_type": "text",
+                    "title": "Duplicate seed",
+                    "text": "A stable seed body about dedupe and library provenance.",
+                    "ingest_seed": False,
+                    "discover_references": False,
+                },
+            )
+            assert second.status_code == 200
+            payload = second.json()
+            assert payload["duplicate_count"] == 1
+            assert payload["candidates"] == []

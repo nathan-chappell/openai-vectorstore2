@@ -43,7 +43,7 @@ The initial migration is `migrations/versions/20260425_0001_initial_schema.py`. 
 
 - app users and libraries
 - tags and source tag links
-- source files and semantic chunks
+- source files, source-level vector index fields, and optional semantic chunks
 - generated assets
 - app tasks
 - ChatKit threads, entries, and attachments

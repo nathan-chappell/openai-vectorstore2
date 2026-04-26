@@ -236,6 +236,27 @@ class OpenAIGateway:
         )
         return str(uploaded.id)
 
+    async def attach_file_to_vector_store(
+        self,
+        *,
+        vector_store_id: str,
+        file_id: str,
+        attributes: dict[str, str | float | bool],
+    ) -> None:
+        started_at = perf_counter()
+        await self._client.vector_stores.files.create_and_poll(
+            vector_store_id=vector_store_id,
+            file_id=file_id,
+            attributes=attributes,
+            poll_interval_ms=self._settings.openai_poll_interval_ms,
+        )
+        logger.info(
+            "openai_vector_file_attached vector_store_id=%s file_id=%s duration_ms=%.1f",
+            vector_store_id,
+            file_id,
+            (perf_counter() - started_at) * 1000,
+        )
+
     async def detach_file_from_vector_store(self, *, vector_store_id: str, file_id: str) -> None:
         started_at = perf_counter()
         await self._client.vector_stores.files.delete(vector_store_id=vector_store_id, file_id=file_id)
@@ -293,7 +314,7 @@ class OpenAIGateway:
     ) -> str:
         evidence = _render_hit_evidence(hits)
         if not evidence:
-            return "I could not find relevant semantic chunks in the current library."
+            return "I could not find relevant indexed file matches in the current library."
         response = await self._client.responses.create(
             model=self._settings.openai_agent_model,
             input=[
@@ -303,7 +324,7 @@ class OpenAIGateway:
                         {
                             "type": "input_text",
                             "text": (
-                                "Answer using only the retrieved semantic chunks. Cite source titles and locators inline when useful. "
+                                "Answer using only the retrieved indexed file matches. Cite source titles inline when useful. "
                                 "If the evidence is thin, say so clearly.\n\n"
                                 f"Question: {prompt}\n\nEvidence:\n{evidence}"
                             ),
@@ -402,7 +423,7 @@ class OpenAIGateway:
 def _render_hit_evidence(hits: list[ChunkHit]) -> str:
     return "\n\n".join(
         f"{index}. {hit.source_title} ({hit.locator.label()})\n"
-        f"Chunk: {hit.title}\n"
+        f"Match: {hit.title}\n"
         f"Summary: {hit.summary}\n"
         f"Text:\n{hit.text}"
         for index, hit in enumerate(hits, start=1)

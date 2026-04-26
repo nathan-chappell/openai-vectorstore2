@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from agents import set_default_openai_key
+
 from backend.app.chatkit.server import VectorstoreChatKitServer
 from backend.app.chatkit.store import VectorstoreChatStore
 from backend.app.core.config import AppSettings
@@ -38,6 +40,7 @@ class AppServices:
 
 def create_services(settings: AppSettings) -> AppServices:
     configure_logging(settings.log_level)
+    set_default_openai_key(settings.openai_api_key.get_secret_value())
     database = DatabaseManager(settings)
     auth = AuthService(settings)
     storage = build_storage_service(settings)

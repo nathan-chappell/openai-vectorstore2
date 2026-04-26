@@ -41,7 +41,7 @@ Artifacts are written under `output/playwright/`, which is ignored.
 - MCP tool discovery, destructive hints, and MCP Apps UI resource metadata.
 - ChatKit tool parity.
 - ChatKit attachment and thread/task linkage.
-- Upload, search, QA, tag filtering, reindexing, cleanup, and MCP file ingest flows.
+- Upload, source-level vector search, QA, tag/path filtering, reindexing, cleanup, and MCP file ingest flows.
 
 `tests/test_migrations.py` checks:
 
