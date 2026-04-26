@@ -606,7 +606,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="build_research_library",
-        description="Create a foldered research library from a topic, paper title, or public URL; optionally auto-ingest bounded candidates.",
+        description="Create a foldered research library from a topic, paper title, or public URL and auto-ingest bounded public candidates.",
         annotations=mutating,
     )
     async def build_research_library_tool(
@@ -651,7 +651,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="list_research_candidates",
-        description="List research import candidates by task or review status.",
+        description="List research import candidates by task or status.",
         annotations=read_only,
     )
     async def list_research_candidates_tool(
@@ -676,7 +676,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="update_research_candidate_status",
-        description="Approve, reject, or return research import candidates to pending review.",
+        description="Approve, reject, or return lower-level research import candidates to pending review.",
         annotations=mutating,
     )
     async def update_research_candidate_status_tool(
@@ -697,7 +697,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="ingest_research_candidates",
-        description="Ingest approved research candidates through the normal source ingestion path.",
+        description="Ingest approved lower-level research candidates through the normal source ingestion path.",
         annotations=mutating,
     )
     async def ingest_research_candidates_tool(
@@ -1129,7 +1129,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                 seed_type=seed_type,
                 query=query,
                 title=query,
-                auto_ingest=False,
+                auto_ingest=True,
                 discover_references=True,
                 max_depth=max_depth,
                 max_sources=max_sources,
@@ -1192,7 +1192,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
     @sources_app.ui(
         name="sources",
         title="Indexed Files",
-        description="Browse indexed files, build research libraries, and review discovered candidates.",
+        description="Browse indexed files, build research libraries, and inspect discovered candidate status.",
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     )
     async def sources(ctx: Context) -> PrefabApp:
@@ -1340,7 +1340,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                     on_success=SetState("researchCandidates", RESULT),
                                     on_error=ShowToast(ERROR, variant="error"),
                                 ),
-                                ShowToast("Research library candidates ready", variant="success"),
+                                ShowToast("Research library build complete", variant="success"),
                             ],
                             on_error=ShowToast(ERROR, variant="error"),
                         )
@@ -1366,7 +1366,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                 input_type="number",
                                 value="2",
                             )
-                            Button("Build review library", button_type="submit")
+                            Button("Build library", button_type="submit")
                     with If(STATE.researchBuild):
                         with Card(css_class="border border-slate-200"):
                             with CardContent(), Column(gap=2):
@@ -1375,40 +1375,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                     Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
                                     Badge(STATE.researchBuild.target_folder_id, variant="secondary")  # ty:ignore[invalid-argument-type]
                                 Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
-                                Button(
-                                    "Ingest approved",
-                                    on_click=CallTool(
-                                        "ingest_research_candidates_for_ui",
-                                        arguments={
-                                            "task_id": STATE.researchBuild.task.id,
-                                            "folder_id": STATE.researchBuild.target_folder_id,
-                                        },
-                                        on_success=[
-                                            SetState("researchIngest", RESULT),
-                                            CallTool(
-                                                "refresh_research_candidates_for_ui",
-                                                arguments={"task_id": STATE.researchBuild.task.id},
-                                                on_success=SetState("researchCandidates", RESULT),
-                                                on_error=ShowToast(ERROR, variant="error"),
-                                            ),
-                                            CallTool(
-                                                "refresh_sources",
-                                                arguments={"query": STATE.sources.query, "tag_ids": STATE.selectedTagIds},
-                                                on_success=SetState("sources", RESULT),
-                                                on_error=ShowToast(ERROR, variant="error"),
-                                            ),
-                                            CallTool(
-                                                "refresh_tasks",
-                                                on_success=SetState("tasks", RESULT),
-                                                on_error=ShowToast(ERROR, variant="error"),
-                                            ),
-                                            ShowToast("Approved candidates queued for ingest", variant="success"),
-                                        ],
-                                        on_error=ShowToast(ERROR, variant="error"),
-                                    ),
-                                )
                     with Row(gap=2, align="center"):
-                        h3("Review Candidates")
+                        h3("Research Candidates")
                         Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
                     with ForEach(STATE.researchCandidates.candidates) as candidate:
                         with Card(css_class="border border-slate-200"):
@@ -1419,43 +1387,6 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                     Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
                                 Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
                                 Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
-                                with Row(gap=2, align="center"):
-                                    Button(
-                                        "Approve",
-                                        variant="secondary",
-                                        on_click=CallTool(
-                                            "update_research_candidate_status_for_ui",
-                                            arguments={"candidate_ids": [candidate.id], "status": "approved"},  # ty:ignore[invalid-argument-type]
-                                            on_success=[
-                                                CallTool(
-                                                    "refresh_research_candidates_for_ui",
-                                                    arguments={"task_id": candidate.task_id},  # ty:ignore[invalid-argument-type]
-                                                    on_success=SetState("researchCandidates", RESULT),
-                                                    on_error=ShowToast(ERROR, variant="error"),
-                                                ),
-                                                ShowToast("Candidate approved", variant="success"),
-                                            ],
-                                            on_error=ShowToast(ERROR, variant="error"),
-                                        ),
-                                    )
-                                    Button(
-                                        "Reject",
-                                        variant="secondary",
-                                        on_click=CallTool(
-                                            "update_research_candidate_status_for_ui",
-                                            arguments={"candidate_ids": [candidate.id], "status": "rejected"},  # ty:ignore[invalid-argument-type]
-                                            on_success=[
-                                                CallTool(
-                                                    "refresh_research_candidates_for_ui",
-                                                    arguments={"task_id": candidate.task_id},  # ty:ignore[invalid-argument-type]
-                                                    on_success=SetState("researchCandidates", RESULT),
-                                                    on_error=ShowToast(ERROR, variant="error"),
-                                                ),
-                                                ShowToast("Candidate rejected", variant="success"),
-                                            ],
-                                            on_error=ShowToast(ERROR, variant="error"),
-                                        ),
-                                    )
                 Separator()
                 with Column(gap=2):
                     h3("Chunk Query")

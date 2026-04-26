@@ -19,11 +19,23 @@ The capabilities to preserve and expose are OpenAI vector-store backed indexing/
 - [x] Rebuild the web product around a compact virtual filesystem explorer plus ChatKit.
 - [x] Add a DB-backed virtual filesystem layer with folders, paths, rename/move/delete, selected-file scope, and OpenAI file-input preparation for ChatKit.
 - [x] Promote and retain the new Research Importer feature plan as the next planned product feature.
-- [x] Add the first Research Importer backend capability for fast library seeding and reviewed reference ingestion.
+- [x] Add the first Research Importer backend capability for fast library seeding and reference ingestion.
 - [x] Apply the first browser/design fixes: hide empty preview, widen preview-on-selection, and add a persisted draggable explorer/chat splitter.
 - [x] Add importer parser/normalizer coverage and refreshed Playwright shell assertions for hidden preview and splitter behavior.
 - [x] Convert ingestion/search from semantic chunk publication to source-file vector-store indexing.
 - [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
+
+## Current Direction Change: Direct Research Library Builds
+
+Status: implementation pass completed.
+
+Decision:
+
+- The primary research workflow should not have an approval stage. A topic or paper seed should directly discover, dedupe, download, ingest, and show the resulting library.
+- Candidate approval/rejection may remain as lower-level importer/debug primitives, but it should not be the main browser, ChatKit, or MCP Apps path.
+- Duplicate handling is part of the builder contract: suppress duplicate URLs before persistence, suppress duplicate content hashes after download, and report skipped duplicate candidates clearly instead of creating duplicate files.
+- ChatKit should be the preferred orchestration surface for research builds. It should stream status updates as discovery, reference expansion, download, duplicate skipping, and indexing progresses.
+- The file browser and research panel should show progress affordances for downloading/indexing states so files entering the container feel alive rather than appearing only after completion.
 
 ## Current Direction Change: Source-File Vector Indexing
 
@@ -102,7 +114,7 @@ Verification completed in this pass:
 Known remaining work:
 
 - Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
-- Build the web Research Import review panel after the browser/file-explorer direction settles.
+- Continue refining the direct Research Library Builder panel after the browser/file-explorer direction settles.
 - Continue adding normal file-browser flows for create folder, upload, selected-file grounded QA, reveal/go-to-location, rename/move, and delete.
 - Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
 
@@ -114,7 +126,7 @@ Completed in the current checkpoint:
 
 - Added the Research Importer backend foundation: database model/migration, source provenance metadata, Pydantic schemas, settings, OpenAI web-search discovery gateway, `ResearchImportService`, REST routes, ChatKit tools, MCP tools, capability-matrix entries, frontend API/types, and integration/contract coverage.
 - Kept canonical ingestion through `SourceService.ingest_source`; imported seeds/candidates create normal source records, OpenAI files, vector-store files, tasks, and metadata rather than using a parallel ingest path.
-- Added reviewed candidate state transitions for pending, approved, rejected, ingested, and failed candidates.
+- Added lower-level candidate state transitions for pending, approved, rejected, ingested, and failed candidates.
 - Implemented the first explorer layout fixes: the preview pane is hidden until a file is selected, selected-file preview gets more room, folder navigation clears stale preview state, and the explorer/chat split is draggable and persisted in `localStorage`.
 - Updated `plan.md` to preserve the Research Importer feature plan and browser/design queue.
 
@@ -127,7 +139,7 @@ Verification completed before pausing:
 Known remaining work for the next session:
 
 - Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
-- Build the web Research Import review panel after the browser/file-explorer direction settles.
+- Continue refining the direct Research Library Builder panel after the browser/file-explorer direction settles.
 - Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
 
 ## Current Product Shape
@@ -173,7 +185,7 @@ Tests and operations:
 
 ## Next Planned Feature: Research Library Builder
 
-Status: implementation pass completed; live browser review-flow coverage remains.
+Status: direct-build workflow pivot completed for the current baseline.
 
 Intent:
 
@@ -183,9 +195,9 @@ Current foundation already completed:
 
 - [x] Persistent `ResearchImportService`, candidate records, source provenance metadata, REST routes, ChatKit tools, MCP tools, frontend API/types, capability matrix entries, and migration/contract coverage.
 - [x] Seed support for pasted text, public URL, PDF/arXiv URL, uploaded file, and exported LinkedIn HTML/text.
-- [x] Fetching, URL normalization, content hashing, duplicate suppression, approval/reject/ingest transitions, and canonical ingestion through `SourceService.ingest_source`.
+- [x] Fetching, URL normalization, content hashing, duplicate suppression, lower-level candidate transitions, and canonical ingestion through `SourceService.ingest_source`.
 - [x] OpenAI web-search discovery for first-pass candidate collection, bounded by settings.
-- [x] Parser/normalizer tests and backend integration tests for seed-to-candidate and approved-candidate ingestion flows.
+- [x] Parser/normalizer tests and backend integration tests for seed-to-candidate, direct-build ingestion, and lower-level approved-candidate ingestion flows.
 
 Refined product decisions:
 
@@ -194,7 +206,8 @@ Refined product decisions:
 - Create or reuse a workspace folder for each builder run, using a clean title such as `/Research/Attention Is All You Need` when no folder is supplied.
 - Store richer metadata on both candidates and ingested source files through `provenance_json` and `SourceFile.metadata_json`: description, summary, suggested/model tags, authors, published date when known, DOI/arXiv ID when known, discovery query, discovery depth, parent source/candidate, normalized URL, fetched URL, content hash, and fetch timestamp.
 - Use actual source tags for high-confidence model tags when ingesting builder-created sources, while retaining raw suggested tags in metadata.
-- Keep review mode available, but add an agent-facing build mode that can approve and ingest bounded candidates automatically when requested.
+- Keep lower-level candidate review tools available for debugging/manual importer work, but make the normal builder a direct discovery-to-ingestion workflow with skipped duplicates.
+- Use ChatKit progress updates for build stages and per-reference download/index state; the browser panel should render candidate/file progress rather than approval controls.
 - Preserve the non-bypass policy: login walls, paywalls, and anti-bot gates become failed/degraded candidates, never scraping targets to work around.
 
 Implementation track:
@@ -202,23 +215,47 @@ Implementation track:
 - [x] Add topic/paper seed contracts and discovery prompting so a bare title can find primary papers plus useful references.
 - [x] Add candidate/source metadata fields in API responses: `description`, `summary`, `suggested_tags`, and optional publication/authorship fields without requiring a table migration yet.
 - [x] Create or reuse a research folder automatically for topic/paper runs, and route seed/candidate ingestion into that folder.
-- [x] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, optionally auto-approves and ingests public items up to `max_sources`, and records progress/results on the task.
-- [x] Add a compact web Research Import/Library Builder panel near explorer upload with seed input, max size/depth controls, task status, and candidate review actions.
+- [x] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, auto-ingests public items up to `max_sources`, skips duplicates, and records progress/results on the task.
+- [x] Replace the compact web Research Import/Library Builder review controls with direct build status, candidate progress, and duplicate/failed state display.
 - [x] Extend discovery beyond one hop by deriving follow-up queries from candidate metadata, bounded by `max_depth`, `max_candidates_per_source`, and `max_pending_candidates`.
-- [x] Add MCP Apps UI resources for candidate review/library building, not just primitive tools.
-- [x] Add ChatKit client/widget coordination so the agent can open the research builder panel and show candidate/task state while it works.
+- [x] Update MCP Apps UI resources so the main research builder path builds directly and shows statuses instead of approve/reject controls.
+- [x] Add ChatKit client/widget coordination so the agent can open the research builder panel, stream progress, and show candidate/task state while it works.
 - [x] Add a research action over the built files: ask a question, retrieve evidence, and return cited results with source references.
 
 Verification plan:
 
 - [x] Integration test: topic seed with fake discovery creates a research folder, pending candidates, and enriched metadata without ingesting the raw topic as a source.
-- [x] Integration test: build mode creates the foldered research library task and bounded review candidates. Auto-ingest is wired for live/public candidates but still needs deterministic fetch coverage.
+- [x] Integration test: build mode creates the foldered research library task and bounded candidates, with deterministic public-candidate ingest coverage.
 - [x] UI shell assertion: the browser exposes the research builder input and disabled build action in the explorer surface.
 - [x] Integration test: build mode expands follow-up candidates to depth 2 and records `parent_candidate_id` links.
-- [x] Integration test: build mode auto-ingests approved/fake public candidates into the research folder through `SourceService.ingest_source`.
+- [x] Integration test: build mode auto-ingests fake public candidates into the research folder through `SourceService.ingest_source`.
+- [x] Integration test: build mode skips duplicate downloaded content by content hash and reports duplicate candidates without creating duplicate files.
 - [x] Contract tests: backend schemas, frontend TypeScript, REST, ChatKit tools, MCP tools, and capability matrix stay aligned.
-- [x] UI/Playwright test: user starts a research library build from the browser, reviews candidates, and sees ingested files in the created folder.
+- [x] UI/Playwright test: user starts a research library build from the browser, sees direct ingestion progress/status, and sees ingested files in the created folder.
 - [x] Re-run `./.venv/bin/pyright`, focused backend tests, `npm run typecheck`, `npm run build`, and targeted Playwright checks for each checkpoint.
+
+## Checkpoint: 2026-04-26 Direct Research Builder Pivot
+
+Status: implementation pass completed.
+
+Completed in this pass:
+
+- Removed approval/reject controls from the primary browser and MCP Apps research builder flow.
+- Changed build mode to ingest pending candidates directly while keeping lower-level approval primitives available for manual importer/debug use.
+- Added fetch-time duplicate detection by normalized URL and downloaded content hash, marking skipped candidates as `duplicate` and avoiding duplicate source files.
+- Added ChatKit progress callbacks for discovery, depth expansion, downloads, duplicate skips, and indexing queue updates.
+- Added candidate progress bars in the research panel and file-status progress bars in the file browser for processing/ready/failed states.
+- Updated capability descriptions, ChatKit instructions, MCP Apps copy, TypeScript contracts, and Playwright coverage for the direct-build workflow.
+
+Verification completed in this pass:
+
+- `./.venv/bin/ruff check backend/app/services/research.py backend/app/chatkit/server.py backend/app/mcp/server.py backend/app/core/capabilities.py tests/integration/test_app_contracts.py`
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest tests/integration/test_app_contracts.py -q`
+- `npm run typecheck`
+- `npm run build`
+- `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "research library builder directly"`
+- `OPENAI_API_KEY=sk-test APP_SIGNING_SECRET=test-secret S3_ENDPOINT=http://127.0.0.1:9 S3_BUCKET=test-bucket S3_ACCESS_KEY_ID=test S3_SECRET_ACCESS_KEY=test npm run test:e2e -- --grep "workspace shell"`
 
 ## Browser And Design Fix Queue
 
@@ -312,7 +349,6 @@ Current verification commands:
 
 ## Open Questions
 
-- Should Research Importer candidates appear in the main explorer tree before approval, or only inside a separate review queue until ingested?
 - Should Research Importer provenance be stored directly on `SourceFile.metadata_json`, in separate import/candidate tables only, or both?
 - Should ChatKit structured cards be built with ChatKit/MCP Apps widgets now, or should the next pass stay text/tool-first until importer behavior stabilizes?
 - Should MCP eventually add a higher-level `ask_library_agent` tool, or should it stay primitive-tool-first unless a real host needs the wrapper?

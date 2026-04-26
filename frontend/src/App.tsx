@@ -22,9 +22,7 @@ import {
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
-  updateResearchCandidateStatus,
   updateSourceTags,
-  ingestResearchCandidates,
   uploadSource,
 } from "./lib/api";
 import type {
@@ -34,6 +32,7 @@ import type {
   FilesystemEntrySummary,
   FilesystemListResponse,
   ResearchImportCandidateSummary,
+  ResearchCandidateStatus,
   ResearchLibraryBuildResponse,
   ResearchSeedKind,
   SourceDetail,
@@ -73,6 +72,24 @@ const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = 
   { id: "topic", label: "Topic" },
   { id: "paper", label: "Paper" },
 ];
+const RESEARCH_STATUS_LABELS: Record<ResearchCandidateStatus, string> = {
+  pending: "queued",
+  approved: "queued",
+  rejected: "skipped",
+  ingesting: "downloading",
+  ingested: "indexed",
+  failed: "failed",
+  duplicate: "duplicate",
+};
+const RESEARCH_STATUS_PROGRESS: Record<ResearchCandidateStatus, number> = {
+  pending: 18,
+  approved: 28,
+  rejected: 100,
+  ingesting: 62,
+  ingested: 100,
+  failed: 100,
+  duplicate: 100,
+};
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -146,7 +163,6 @@ export function App({ authMode }: AppProps) {
   const [researchSeedType, setResearchSeedType] = useState<ResearchBuilderSeedKind>("topic");
   const [researchMaxSources, setResearchMaxSources] = useState(12);
   const [researchMaxDepth, setResearchMaxDepth] = useState(2);
-  const [researchAutoIngest, setResearchAutoIngest] = useState(false);
   const [researchResult, setResearchResult] = useState<ResearchLibraryBuildResponse | null>(null);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
@@ -521,7 +537,7 @@ export function App({ authMode }: AppProps) {
         seed_type: researchSeedType,
         query,
         title: query,
-        auto_ingest: researchAutoIngest,
+        auto_ingest: true,
         discover_references: true,
         max_depth: maxDepth,
         max_sources: maxSources,
@@ -543,9 +559,7 @@ export function App({ authMode }: AppProps) {
       }
       const ingestedLabel = response.ingested.length
         ? `, ${response.ingested.length} indexed`
-        : researchAutoIngest
-          ? ", no public items indexed"
-          : "";
+        : ", no public items indexed";
       setStatus(`Research library build found ${response.candidates.length} candidate${response.candidates.length === 1 ? "" : "s"}${ingestedLabel}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Research library build failed.");
@@ -555,66 +569,11 @@ export function App({ authMode }: AppProps) {
   }, [
     loadFolder,
     refreshExplorer,
-    researchAutoIngest,
     researchMaxDepth,
     researchMaxSources,
     researchQuery,
     researchSeedType,
   ]);
-
-  const updateResearchCandidateReview = useCallback(
-    async (candidateId: string, nextStatus: "approved" | "rejected" | "pending"): Promise<void> => {
-      setBusy(true);
-      try {
-        const response = await updateResearchCandidateStatus({
-          candidate_ids: [candidateId],
-          status: nextStatus,
-        });
-        setResearchResult((current) =>
-          current ? { ...current, candidates: mergeResearchCandidates(current.candidates, response.candidates) } : current,
-        );
-        setStatus(`Marked research candidate ${nextStatus}.`);
-      } catch (error) {
-        setStatus(error instanceof Error ? error.message : "Could not update research candidate.");
-      } finally {
-        setBusy(false);
-      }
-    },
-    [],
-  );
-
-  const ingestApprovedResearchCandidates = useCallback(async (): Promise<void> => {
-    const approvedIds = researchResult?.candidates
-      .filter((candidate) => candidate.status === "approved")
-      .map((candidate) => candidate.id) ?? [];
-    if (!approvedIds.length) {
-      setStatus("Approve at least one research candidate before ingesting.");
-      return;
-    }
-    setBusy(true);
-    try {
-      const response = await ingestResearchCandidates({
-        candidate_ids: approvedIds,
-        folder_id: researchResult?.target_folder_id ?? null,
-      });
-      setResearchResult((current) =>
-        current
-          ? {
-              ...current,
-              candidates: mergeResearchCandidates(current.candidates, response.candidates),
-              ingested: [...current.ingested, ...response.ingested],
-            }
-          : current,
-      );
-      setTasks((await listTasks()).tasks);
-      await refreshExplorer();
-      setStatus(`Ingested ${response.ingested.length} approved research candidate${response.ingested.length === 1 ? "" : "s"}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not ingest approved research candidates.");
-    } finally {
-      setBusy(false);
-    }
-  }, [refreshExplorer, researchResult]);
 
   const toggleExplorerTag = useCallback((tagId: string): void => {
     setSelectedExplorerTagIds((current) =>
@@ -752,7 +711,6 @@ export function App({ authMode }: AppProps) {
         const seedType = toolCall.params.seed_type === "paper" ? "paper" : toolCall.params.seed_type === "topic" ? "topic" : null;
         const maxSources = typeof toolCall.params.max_sources === "number" ? toolCall.params.max_sources : null;
         const maxDepth = typeof toolCall.params.max_depth === "number" ? toolCall.params.max_depth : null;
-        const autoIngest = typeof toolCall.params.auto_ingest === "boolean" ? toolCall.params.auto_ingest : null;
         if (query) {
           setResearchQuery(query);
         }
@@ -764,9 +722,6 @@ export function App({ authMode }: AppProps) {
         }
         if (maxDepth !== null) {
           setResearchMaxDepth(clamp(Math.round(maxDepth), 0, 4));
-        }
-        if (autoIngest !== null) {
-          setResearchAutoIngest(autoIngest);
         }
         const result = asResearchBuildResponse(toolCall.params.result);
         const candidates = asResearchCandidates(toolCall.params.candidates);
@@ -859,7 +814,6 @@ export function App({ authMode }: AppProps) {
           focusedEntryId={focusedEntryId}
           newTagName={newTagName}
           pendingFiles={pendingFiles}
-          researchAutoIngest={researchAutoIngest}
           researchMaxDepth={researchMaxDepth}
           researchMaxSources={researchMaxSources}
           researchQuery={researchQuery}
@@ -888,10 +842,7 @@ export function App({ authMode }: AppProps) {
           onNewTagNameChange={setNewTagName}
           onOpenEntry={openEntry}
           onPreviewSplit={() => void previewPendingSplit()}
-          onResearchAutoIngestChange={setResearchAutoIngest}
           onResearchBuild={() => void buildResearchLibraryFromPanel()}
-          onResearchCandidateStatus={(candidateId, nextStatus) => void updateResearchCandidateReview(candidateId, nextStatus)}
-          onResearchIngestApproved={() => void ingestApprovedResearchCandidates()}
           onResearchMaxDepthChange={setResearchMaxDepth}
           onResearchMaxSourcesChange={setResearchMaxSources}
           onResearchQueryChange={setResearchQuery}
@@ -1343,7 +1294,6 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId,
   newTagName,
   pendingFiles,
-  researchAutoIngest,
   researchMaxDepth,
   researchMaxSources,
   researchQuery,
@@ -1372,10 +1322,7 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange,
   onOpenEntry,
   onPreviewSplit,
-  onResearchAutoIngestChange,
   onResearchBuild,
-  onResearchCandidateStatus,
-  onResearchIngestApproved,
   onResearchMaxDepthChange,
   onResearchMaxSourcesChange,
   onResearchQueryChange,
@@ -1396,7 +1343,6 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId: string | null;
   newTagName: string;
   pendingFiles: File[];
-  researchAutoIngest: boolean;
   researchMaxDepth: number;
   researchMaxSources: number;
   researchQuery: string;
@@ -1425,10 +1371,7 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange: (value: string) => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
   onPreviewSplit: () => void;
-  onResearchAutoIngestChange: (value: boolean) => void;
   onResearchBuild: () => void;
-  onResearchCandidateStatus: (candidateId: string, nextStatus: "approved" | "rejected" | "pending") => void;
-  onResearchIngestApproved: () => void;
   onResearchMaxDepthChange: (value: number) => void;
   onResearchMaxSourcesChange: (value: number) => void;
   onResearchQueryChange: (value: string) => void;
@@ -1588,17 +1531,13 @@ const FileExplorer = memo(function FileExplorer({
           </section>
 
           <ResearchBuilderPanel
-            autoIngest={researchAutoIngest}
             busy={busy}
             maxDepth={researchMaxDepth}
             maxSources={researchMaxSources}
             query={researchQuery}
             result={researchResult}
             seedType={researchSeedType}
-            onAutoIngestChange={onResearchAutoIngestChange}
             onBuild={onResearchBuild}
-            onCandidateStatus={onResearchCandidateStatus}
-            onIngestApproved={onResearchIngestApproved}
             onMaxDepthChange={onResearchMaxDepthChange}
             onMaxSourcesChange={onResearchMaxSourcesChange}
             onQueryChange={onResearchQueryChange}
@@ -1628,45 +1567,39 @@ const FileExplorer = memo(function FileExplorer({
 });
 
 const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
-  autoIngest,
   busy,
   maxDepth,
   maxSources,
   query,
   result,
   seedType,
-  onAutoIngestChange,
   onBuild,
-  onCandidateStatus,
-  onIngestApproved,
   onMaxDepthChange,
   onMaxSourcesChange,
   onQueryChange,
   onSeedTypeChange,
 }: {
-  autoIngest: boolean;
   busy: boolean;
   maxDepth: number;
   maxSources: number;
   query: string;
   result: ResearchLibraryBuildResponse | null;
   seedType: ResearchBuilderSeedKind;
-  onAutoIngestChange: (value: boolean) => void;
   onBuild: () => void;
-  onCandidateStatus: (candidateId: string, nextStatus: "approved" | "rejected" | "pending") => void;
-  onIngestApproved: () => void;
   onMaxDepthChange: (value: number) => void;
   onMaxSourcesChange: (value: number) => void;
   onQueryChange: (value: string) => void;
   onSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
 }) {
   const candidates = result?.candidates ?? [];
-  const approvedCount = candidates.filter((candidate) => candidate.status === "approved").length;
   const pendingCount = candidates.filter((candidate) => candidate.status === "pending").length;
+  const activeCount = candidates.filter((candidate) => candidate.status === "ingesting").length;
   const ingestedCount = Math.max(
     candidates.filter((candidate) => candidate.status === "ingested").length,
     result?.ingested.length ?? 0,
   );
+  const duplicateCount = Math.max(result?.duplicate_count ?? 0, candidates.filter((candidate) => candidate.status === "duplicate").length);
+  const failedCount = candidates.filter((candidate) => candidate.status === "failed").length;
   const visibleCandidates = candidates.slice(0, 6);
   const hiddenCandidateCount = Math.max(0, candidates.length - visibleCandidates.length);
   return (
@@ -1725,14 +1658,6 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
             }}
           />
         </label>
-        <label className="research-toggle">
-          <input
-            type="checkbox"
-            checked={autoIngest}
-            onChange={(event) => onAutoIngestChange(event.currentTarget.checked)}
-          />
-          <span>Auto ingest</span>
-        </label>
         <button type="button" onClick={onBuild} disabled={busy || !query.trim()}>
           Build
         </button>
@@ -1745,16 +1670,13 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
               {candidates.length} candidate{candidates.length === 1 ? "" : "s"}
             </strong>
             <span>
-              {result.task.status} | {pendingCount} pending | {approvedCount} approved | {ingestedCount} ingested | {result.duplicate_count} duplicate
-              {result.duplicate_count === 1 ? "" : "s"}
+              {result.task.status} | {pendingCount} queued | {activeCount} downloading | {ingestedCount} indexed | {duplicateCount} duplicate
+              {duplicateCount === 1 ? "" : "s"} | {failedCount} failed
             </span>
-            <button type="button" className="secondary-button" onClick={onIngestApproved} disabled={busy || approvedCount === 0}>
-              Ingest approved
-            </button>
           </div>
           <div className="research-candidate-list" aria-label="Research candidates">
             {visibleCandidates.map((candidate) => {
-              const locked = ["ingested", "ingesting", "failed"].includes(candidate.status);
+              const progressPercent = RESEARCH_STATUS_PROGRESS[candidate.status];
               const metaParts = [
                 candidate.source_type.toUpperCase(),
                 candidate.published_at?.slice(0, 10),
@@ -1769,23 +1691,10 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
                     {candidate.suggested_tags.length ? <small>{candidate.suggested_tags.slice(0, 4).join(", ")}</small> : null}
                   </div>
                   <div className="research-candidate-actions">
-                    <span className={`status-badge status-${candidate.status}`}>{candidate.status}</span>
-                    <button
-                      type="button"
-                      className="secondary-button"
-                      onClick={() => onCandidateStatus(candidate.id, "approved")}
-                      disabled={busy || locked || candidate.status === "approved"}
-                    >
-                      Approve
-                    </button>
-                    <button
-                      type="button"
-                      className="secondary-button danger-button"
-                      onClick={() => onCandidateStatus(candidate.id, "rejected")}
-                      disabled={busy || locked || candidate.status === "rejected"}
-                    >
-                      Reject
-                    </button>
+                    <span className={`status-badge status-${candidate.status}`}>{RESEARCH_STATUS_LABELS[candidate.status]}</span>
+                    <span className="research-progress-track" aria-label={`${RESEARCH_STATUS_LABELS[candidate.status]} progress`}>
+                      <span style={{ width: `${progressPercent}%` }} />
+                    </span>
                   </div>
                 </article>
               );
@@ -1823,6 +1732,7 @@ const FileEntryRow = memo(function FileEntryRow({
   ]
     .filter(Boolean)
     .join(" ");
+  const statusProgressPercent = entry.status === "ready" ? 100 : entry.status === "processing" ? 58 : entry.status === "failed" ? 100 : 0;
   return (
     <div
       role="row"
@@ -1873,7 +1783,14 @@ const FileEntryRow = memo(function FileEntryRow({
         {entry.tags.length > 2 ? <span>+{entry.tags.length - 2}</span> : null}
         {entry.kind === "file" && !entry.tags.length ? <span>untagged</span> : null}
       </span>
-      <span role="cell">{entry.status ? <span className={`status-badge status-${entry.status}`}>{entry.status}</span> : ""}</span>
+      <span role="cell" className="status-cell">
+        {entry.status ? <span className={`status-badge status-${entry.status}`}>{entry.status}</span> : ""}
+        {entry.status ? (
+          <span className="status-progress-track" aria-label={`${entry.status} progress`}>
+            <span style={{ width: `${statusProgressPercent}%` }} />
+          </span>
+        ) : null}
+      </span>
       <span role="cell" className="muted-cell">{entry.byte_size === null ? "" : formatBytes(entry.byte_size)}</span>
       <span role="cell" className="muted-cell">{formatDate(entry.updated_at)}</span>
     </div>

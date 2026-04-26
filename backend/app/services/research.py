@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
@@ -39,6 +40,7 @@ from backend.app.schemas import (
 from backend.app.services.sources import SourceService
 
 logger = logging.getLogger(__name__)
+ResearchProgressCallback = Callable[[str, str], Awaitable[None]]
 
 URL_RE = re.compile(r"https?://[^\s<>\]\)\"']+")
 ANCHOR_HREF_RE = re.compile(r"(?is)<a\b(?P<attrs>[^>]*)>(?P<label>.*?)</a>")
@@ -64,7 +66,7 @@ class ResearchMaterial:
 
 
 class ResearchImportService:
-    """Coordinate research discovery, review candidates, and canonical source ingestion."""
+    """Coordinate research discovery, dedupe, and canonical source ingestion."""
 
     def __init__(
         self,
@@ -86,8 +88,10 @@ class ResearchImportService:
         payload: ResearchImportCreateRequest,
         origin_surface: str,
         origin_thread_id: str | None = None,
+        progress_callback: ResearchProgressCallback | None = None,
     ) -> ResearchImportResponse:
         started_at = perf_counter()
+        await _emit_research_progress(progress_callback, "search", f"Starting research discovery for {_seed_title(payload)}.")
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user, library = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
@@ -110,6 +114,7 @@ class ResearchImportService:
             await session.refresh(task)
 
         seed_material = await self._material_from_seed(payload)
+        await _emit_research_progress(progress_callback, "folder", "Preparing the target research folder.")
         target_folder_id = await self._target_folder_for_request(
             clerk_user_id=clerk_user_id,
             request=payload,
@@ -140,6 +145,7 @@ class ResearchImportService:
                     },
                 )
 
+            await _emit_research_progress(progress_callback, "search", "Discovering primary references.")
             candidate_inputs = await self._candidate_inputs_from_seed(
                 seed_material=seed_material,
                 request=payload,
@@ -155,7 +161,7 @@ class ResearchImportService:
                         "description": seed_material.provenance.get("description"),
                         "summary": seed_material.provenance.get("summary"),
                         "suggested_tags": seed_material.provenance.get("suggested_tags") or [],
-                        "rationale": "Initial seed queued for review instead of direct ingestion.",
+                        "rationale": "Initial seed queued as a candidate instead of direct ingestion.",
                         "score": 1.0,
                         "depth": 0,
                         "provenance": seed_material.provenance
@@ -185,6 +191,11 @@ class ResearchImportService:
                 )
                 candidates.extend(persisted)
                 duplicate_count += duplicates
+                await _emit_research_progress(
+                    progress_callback,
+                    "search",
+                    f"Found {len(persisted)} candidate{'' if len(persisted) == 1 else 's'}; skipped {duplicates} duplicate{'' if duplicates == 1 else 's'}.",
+                )
 
             next_depth = 2
             frontier = [candidate for candidate in candidates if candidate.depth == 1]
@@ -196,6 +207,11 @@ class ResearchImportService:
                 and len(candidates) < payload.max_pending_candidates
             ):
                 remaining_slots = payload.max_pending_candidates - len(candidates)
+                await _emit_research_progress(
+                    progress_callback,
+                    "search",
+                    f"Expanding references at depth {next_depth}.",
+                )
                 followup_inputs = await self._candidate_inputs_from_frontier(
                     parents=frontier,
                     request=payload,
@@ -215,6 +231,11 @@ class ResearchImportService:
                     candidate_inputs=followup_inputs[:remaining_slots],
                 )
                 duplicate_count += duplicates
+                await _emit_research_progress(
+                    progress_callback,
+                    "search",
+                    f"Depth {next_depth} added {len(persisted)} candidate{'' if len(persisted) == 1 else 's'}; skipped {duplicates} duplicate{'' if duplicates == 1 else 's'}.",
+                )
                 logger.info(
                     "research_import_expansion_completed clerk_user_id=%s task_id=%s depth=%s parents=%s candidates=%s duplicates=%s",
                     clerk_user_id,
@@ -288,6 +309,7 @@ class ResearchImportService:
         payload: ResearchLibraryBuildRequest,
         origin_surface: str,
         origin_thread_id: str | None = None,
+        progress_callback: ResearchProgressCallback | None = None,
     ) -> ResearchLibraryBuildResponse:
         seed_type = payload.seed_type
         import_payload = ResearchImportCreateRequest(
@@ -309,19 +331,20 @@ class ResearchImportService:
             payload=import_payload,
             origin_surface=origin_surface,
             origin_thread_id=origin_thread_id,
+            progress_callback=progress_callback,
         )
         candidates = import_response.candidates[: payload.max_sources]
         ingested: list[IngestFinalizeResponse] = []
         updated_candidates = candidates
+        duplicate_count = import_response.duplicate_count
+        await _emit_research_progress(
+            progress_callback,
+            "search",
+            f"Selected {len(candidates)} candidate{'' if len(candidates) == 1 else 's'} for the library cap.",
+        )
         if payload.auto_ingest and candidates:
             candidate_ids = [candidate.id for candidate in candidates]
-            status_response = await self.update_candidate_status(
-                clerk_user_id=clerk_user_id,
-                candidate_ids=candidate_ids,
-                status="approved",
-            )
-            updated_candidates = status_response.candidates
-            ingest_response = await self.ingest_approved_candidates(
+            ingest_response = await self._ingest_candidates(
                 clerk_user_id=clerk_user_id,
                 payload=ResearchCandidateIngestRequest(
                     candidate_ids=candidate_ids,
@@ -330,17 +353,44 @@ class ResearchImportService:
                 ),
                 origin_surface=origin_surface,
                 origin_thread_id=origin_thread_id,
+                allowed_statuses={"pending", "approved"},
+                progress_callback=progress_callback,
             )
             ingested = ingest_response.ingested
             updated_candidates = ingest_response.candidates
+            duplicate_count += sum(1 for candidate in updated_candidates if candidate.status == "duplicate")
+
+        async with self._database.session() as session:
+            task = await self._task_for_user(
+                session,
+                clerk_user_id=clerk_user_id,
+                task_id=import_response.task.id,
+            )
+            current_state = task.state_json if isinstance(task.state_json, dict) else {}
+            current_result = task.result_json if isinstance(task.result_json, dict) else {}
+            task.state_json = current_state | {
+                "stage": "built",
+                "candidate_count": len(updated_candidates),
+                "ingested_count": len(ingested),
+                "duplicate_count": duplicate_count,
+            }
+            task.result_json = current_result | {
+                "candidate_count": len(updated_candidates),
+                "ingested_count": len(ingested),
+                "duplicate_count": duplicate_count,
+                "target_folder_id": import_response.target_folder_id,
+            }
+            task.updated_at = _utcnow()
+            await session.commit()
+            task_summary = _research_task_summary(task)
 
         return ResearchLibraryBuildResponse(
-            task=import_response.task,
+            task=task_summary,
             target_folder_id=import_response.target_folder_id,
             seed_source=import_response.seed_source,
             candidates=updated_candidates,
             ingested=ingested,
-            duplicate_count=import_response.duplicate_count,
+            duplicate_count=duplicate_count,
         )
 
     async def _persist_candidate_batch(
@@ -480,14 +530,37 @@ class ResearchImportService:
         payload: ResearchCandidateIngestRequest,
         origin_surface: str,
         origin_thread_id: str | None = None,
+        progress_callback: ResearchProgressCallback | None = None,
+    ) -> ResearchCandidateIngestResponse:
+        return await self._ingest_candidates(
+            clerk_user_id=clerk_user_id,
+            payload=payload,
+            origin_surface=origin_surface,
+            origin_thread_id=origin_thread_id,
+            allowed_statuses={"approved"},
+            progress_callback=progress_callback,
+        )
+
+    async def _ingest_candidates(
+        self,
+        *,
+        clerk_user_id: str,
+        payload: ResearchCandidateIngestRequest,
+        origin_surface: str,
+        origin_thread_id: str | None,
+        allowed_statuses: set[str],
+        progress_callback: ResearchProgressCallback | None = None,
     ) -> ResearchCandidateIngestResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
-            app_user, _ = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
+            app_user, library = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
             query = (
                 select(ResearchImportCandidate)
                 .join(UserLibrary, UserLibrary.id == ResearchImportCandidate.library_id)
-                .where(UserLibrary.user_id == app_user.id, ResearchImportCandidate.status == "approved")
+                .where(
+                    UserLibrary.user_id == app_user.id,
+                    ResearchImportCandidate.status.in_(allowed_statuses),
+                )
             )
             if payload.candidate_ids:
                 query = query.where(ResearchImportCandidate.id.in_(payload.candidate_ids))
@@ -502,13 +575,70 @@ class ResearchImportService:
             for candidate in candidates:
                 candidate.status = "ingesting"
                 candidate.updated_at = now
+            source_metadata = (
+                await session.execute(select(SourceFile.metadata_json).where(SourceFile.library_id == library.id))
+            ).scalars()
+            existing_urls: set[str] = set()
+            existing_hashes: set[str] = set()
+            for metadata in source_metadata:
+                if not isinstance(metadata, dict):
+                    continue
+                normalized_url = metadata.get("normalized_url")
+                content_hash = metadata.get("content_hash")
+                if isinstance(normalized_url, str) and normalized_url:
+                    existing_urls.add(normalized_url)
+                if isinstance(content_hash, str) and content_hash:
+                    existing_hashes.add(content_hash)
             await session.commit()
 
         ingested: list[IngestFinalizeResponse] = []
         updated_candidates: list[ResearchImportCandidateSummary] = []
+        seen_urls: set[str] = set()
+        seen_hashes: set[str] = set()
         for candidate in candidates:
             try:
+                await _emit_research_progress(
+                    progress_callback,
+                    "download",
+                    f"Downloading {candidate.title[:80]}.",
+                )
                 material = await self._material_from_candidate(candidate)
+                normalized_url = material.normalized_url or candidate.normalized_url
+                duplicate_reason: str | None = None
+                if normalized_url and (normalized_url in existing_urls or normalized_url in seen_urls):
+                    duplicate_reason = "Duplicate research candidate URL."
+                elif material.content_hash in existing_hashes or material.content_hash in seen_hashes:
+                    duplicate_reason = "Duplicate research candidate content."
+                if duplicate_reason is not None:
+                    async with self._database.session() as session:
+                        current = await self._candidate_for_user(
+                            session,
+                            clerk_user_id=clerk_user_id,
+                            candidate_id=candidate.id,
+                        )
+                        current.status = "duplicate"
+                        current.content_hash = material.content_hash
+                        current.provenance_json = dict(current.provenance_json or {}) | material.provenance
+                        current.error_message = duplicate_reason
+                        current.updated_at = _utcnow()
+                        await session.commit()
+                        updated_candidates.append(self._candidate_summary(current))
+                    if normalized_url:
+                        seen_urls.add(normalized_url)
+                    seen_hashes.add(material.content_hash)
+                    await _emit_research_progress(
+                        progress_callback,
+                        "copy-check",
+                        f"Skipped duplicate: {candidate.title[:80]}.",
+                    )
+                    logger.info(
+                        "research_candidate_duplicate_skipped clerk_user_id=%s candidate_id=%s reason=%s",
+                        clerk_user_id,
+                        candidate.id,
+                        duplicate_reason,
+                    )
+                    continue
+
                 candidate_folder_id = payload.folder_id or _candidate_target_folder_id(candidate)
                 candidate_tag_ids = (
                     payload.tag_ids
@@ -536,6 +666,11 @@ class ResearchImportService:
                         "content_hash": material.content_hash,
                     },
                 )
+                await _emit_research_progress(
+                    progress_callback,
+                    "document",
+                    f"Queued indexing for {material.filename}.",
+                )
                 async with self._database.session() as session:
                     current = await self._candidate_for_user(
                         session, clerk_user_id=clerk_user_id, candidate_id=candidate.id
@@ -549,6 +684,11 @@ class ResearchImportService:
                     await session.commit()
                     updated_candidates.append(self._candidate_summary(current))
                 ingested.append(ingest_response)
+                if normalized_url:
+                    seen_urls.add(normalized_url)
+                    existing_urls.add(normalized_url)
+                seen_hashes.add(material.content_hash)
+                existing_hashes.add(material.content_hash)
             except Exception as exc:
                 async with self._database.session() as session:
                     current = await self._candidate_for_user(
@@ -559,6 +699,11 @@ class ResearchImportService:
                     current.updated_at = _utcnow()
                     await session.commit()
                     updated_candidates.append(self._candidate_summary(current))
+                await _emit_research_progress(
+                    progress_callback,
+                    "alert-circle",
+                    f"Failed to ingest {candidate.title[:80]}.",
+                )
 
         return ResearchCandidateIngestResponse(ingested=ingested, candidates=updated_candidates)
 
@@ -1070,6 +1215,16 @@ class ResearchImportService:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+async def _emit_research_progress(
+    callback: ResearchProgressCallback | None,
+    icon: str,
+    text: str,
+) -> None:
+    if callback is None:
+        return
+    await callback(icon, text)
 
 
 def _research_task_summary(task: AppTask) -> TaskSummary:

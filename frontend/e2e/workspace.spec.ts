@@ -174,8 +174,8 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
 });
 
-test("research library builder reviews and ingests a candidate", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-desktop", "Dense review flow is covered on desktop.");
+test("research library builder directly indexes a candidate", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop", "Dense build flow is covered on desktop.");
 
   let ingested = false;
   const rootEntry = filesystemEntry({
@@ -226,9 +226,8 @@ test("research library builder reviews and ingests a candidate", async ({ page }
     title: "Attention reference",
     summary: "A candidate public reference for the Transformer paper.",
   });
-  const approvedCandidate = { ...pendingCandidate, status: "approved" };
   const ingestedCandidate = {
-    ...approvedCandidate,
+    ...pendingCandidate,
     status: "ingested",
     linked_source_file_id: "source-transformer-reference",
   };
@@ -278,29 +277,16 @@ test("research library builder reviews and ingests a candidate", async ({ page }
     const payload = route.request().postDataJSON() as { query: string; seed_type: string; auto_ingest: boolean };
     expect(payload.query).toBe("Attention Is All You Need");
     expect(payload.seed_type).toBe("paper");
-    expect(payload.auto_ingest).toBe(false);
+    expect(payload.auto_ingest).toBe(true);
+    ingested = true;
     await route.fulfill({
       json: {
         task,
         target_folder_id: targetFolder.id,
         seed_source: null,
-        candidates: [pendingCandidate],
-        ingested: [],
-        duplicate_count: 0,
-      },
-    });
-  });
-  await page.route("**/api/research/candidates/status", async (route) => {
-    expect(route.request().method()).toBe("POST");
-    await route.fulfill({ json: { candidates: [approvedCandidate] } });
-  });
-  await page.route("**/api/research/candidates/ingest", async (route) => {
-    expect(route.request().method()).toBe("POST");
-    ingested = true;
-    await route.fulfill({
-      json: {
-        ingested: [{ source, task: ingestTask }],
         candidates: [ingestedCandidate],
+        ingested: [{ source, task: ingestTask }],
+        duplicate_count: 0,
       },
     });
   });
@@ -318,15 +304,13 @@ test("research library builder reviews and ingests a candidate", async ({ page }
 
   await expect(page.locator(".breadcrumb-row")).toContainText("Attention Is All You Need");
   await expect(page.locator(".research-candidate-list")).toContainText("Attention reference");
-  await expect(page.locator(".research-candidate-list")).toContainText("pending");
-
-  await page.locator(".research-candidate-row").getByRole("button", { name: "Approve" }).click();
-  await expect(page.locator(".research-result-summary")).toContainText("1 approved");
-  await page.getByRole("button", { name: "Ingest approved" }).click();
-
-  await expect(page.locator(".research-result-summary")).toContainText("1 ingested");
+  await expect(page.locator(".research-candidate-list")).toContainText("indexed");
+  await expect(page.locator(".research-candidate-row").getByRole("button", { name: "Approve" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Ingest approved" })).toHaveCount(0);
+  await expect(page.locator(".research-progress-track")).toBeVisible();
+  await expect(page.locator(".research-result-summary")).toContainText("1 indexed");
   await expect(page.locator(".file-rows")).toContainText("attention-reference.txt");
-  await page.screenshot({ path: testInfo.outputPath("research-builder-review-flow.png"), fullPage: true });
+  await page.screenshot({ path: testInfo.outputPath("research-builder-direct-flow.png"), fullPage: true });
 });
 
 test("explorer-selected file answers through chatkit and deletes cleanly", async ({ page, request }, testInfo) => {

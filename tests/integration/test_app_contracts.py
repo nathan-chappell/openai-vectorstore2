@@ -383,7 +383,7 @@ async def test_http_research_paper_seed_creates_folder_and_enriched_candidates(
 
 
 @pytest.mark.asyncio
-async def test_http_research_library_build_creates_reviewable_foldered_library(
+async def test_http_research_library_build_can_discover_without_auto_ingest_when_requested(
     configured_settings: AppSettings,
     fake_openai: None,
     auth_headers: dict[str, str],
@@ -531,6 +531,77 @@ async def test_http_research_library_build_auto_ingests_public_candidates(
                 )
                 assert target_folder.status_code == 200
                 assert len(target_folder.json()["entries"]) == 2
+    finally:
+        server.close()
+        await server.wait_closed()
+
+
+@pytest.mark.asyncio
+async def test_http_research_library_build_skips_duplicate_downloaded_content(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+
+    async def handle_reference_request(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.read(2048)
+        body = b"Same downloaded research content. Alpha retrieval evidence for duplicate suppression."
+        writer.write(
+            b"HTTP/1.1 200 OK\r\n"
+            b"Content-Type: text/plain; charset=utf-8\r\n"
+            + f"Content-Length: {len(body)}\r\n".encode()
+            + b"Connection: close\r\n\r\n"
+            + body
+        )
+        await writer.drain()
+        writer.close()
+        await writer.wait_closed()
+
+    server = await asyncio.start_server(handle_reference_request, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    app = create_fastapi_app(configured_settings)
+    try:
+        async with app.router.lifespan_context(app):
+            app.state.services.openai.research_candidate_base_url = f"http://127.0.0.1:{port}"
+            transport = httpx.ASGITransport(app=app)
+            async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+                build = await client.post(
+                    "/api/research/library-builds",
+                    headers=auth_headers,
+                    json={
+                        "seed_type": "topic",
+                        "query": "duplicate downloaded content",
+                        "folder_name": "Duplicate Downloaded Content",
+                        "auto_ingest": True,
+                        "max_depth": 1,
+                        "max_sources": 2,
+                        "max_candidates_per_source": 2,
+                    },
+                )
+                assert build.status_code == 200
+                payload = build.json()
+                assert len(payload["ingested"]) == 1
+                assert payload["duplicate_count"] == 1
+                statuses = {candidate["status"] for candidate in payload["candidates"]}
+                assert statuses == {"ingested", "duplicate"}
+                duplicate = next(candidate for candidate in payload["candidates"] if candidate["status"] == "duplicate")
+                assert duplicate["error_message"] == "Duplicate research candidate content."
+
+                [ingested] = payload["ingested"]
+                await _wait_for_http_task(
+                    client,
+                    auth_headers=auth_headers,
+                    task_id=ingested["task"]["id"],
+                    expected_status="completed",
+                )
+                target_folder = await client.get(
+                    "/api/filesystem",
+                    headers=auth_headers,
+                    params={"folder_id": payload["target_folder_id"]},
+                )
+                assert target_folder.status_code == 200
+                assert len(target_folder.json()["entries"]) == 1
     finally:
         server.close()
         await server.wait_closed()
@@ -1136,8 +1207,8 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
     assert "Indexed Files" in serialized
     assert "Query files, filenames, kinds, status" in serialized
     assert "Research Library Builder" in serialized
-    assert "Build review library" in serialized
-    assert "Review Candidates" in serialized
+    assert "Build library" in serialized
+    assert "Research Candidates" in serialized
     assert "Search indexed files with the selected tag scope" in serialized
     assert "Recent Tasks" in serialized
     assert "selectedTagIds" in serialized

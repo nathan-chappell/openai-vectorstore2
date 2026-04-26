@@ -677,10 +677,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             max_candidates_per_source: int = 8,
             max_pending_candidates: int = 40,
         ) -> dict[str, object]:
-            """Start a research import from a topic, paper title, pasted text, or public URL and queue discovered candidates for review."""
+            """Start a lower-level research import from a topic, paper title, pasted text, or public URL."""
             request_context = ctx.context.request_context
             await ctx.context.stream(
-                ProgressUpdateEvent(icon="search", text="Starting research import and collecting review candidates.")
+                ProgressUpdateEvent(icon="search", text="Starting research import and collecting candidates.")
             )
             response = await self._research.create_import(
                 clerk_user_id=request_context.clerk_user_id,
@@ -703,11 +703,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
+                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(
                     icon="check-circle",
-                    text=f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'} for review.",
+                    text=f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'}.",
                 )
             )
             return response.model_dump(mode="json")
@@ -752,14 +753,15 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
+                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(
                     icon="check-circle",
                     text=(
-                        f"Research library build complete with {len(response.candidates)} candidate"
-                        f"{'' if len(response.candidates) == 1 else 's'} and {len(response.ingested)} queued ingest"
-                        f"{'' if len(response.ingested) == 1 else 's'}."
+                        f"Research library build complete with {len(response.ingested)} indexed source"
+                        f"{'' if len(response.ingested) == 1 else 's'} and {response.duplicate_count} duplicate"
+                        f"{'' if response.duplicate_count == 1 else 's'} skipped."
                     ),
                 )
             )
@@ -784,10 +786,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             status: str | None = None,
             page_size: int = 20,
         ) -> dict[str, object]:
-            """List research import candidates by task or review status."""
+            """List research import candidates by task or status."""
             request_context = ctx.context.request_context
             normalized_status = (
-                status if status in {"pending", "approved", "rejected", "ingesting", "ingested", "failed"} else None
+                status
+                if status in {"pending", "approved", "rejected", "ingesting", "ingested", "failed", "duplicate"}
+                else None
             )
             response = await self._research.list_candidates(
                 clerk_user_id=request_context.clerk_user_id,
@@ -809,7 +813,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             candidate_ids: list[str],
             status: str,
         ) -> dict[str, object]:
-            """Approve, reject, or return research import candidates to pending review."""
+            """Approve, reject, or return lower-level research import candidates to pending review."""
             request_context = ctx.context.request_context
             response = await self._research.update_candidate_status(
                 clerk_user_id=request_context.clerk_user_id,
@@ -834,10 +838,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_ids: list[str] | None = None,
             folder_id: str | None = None,
         ) -> dict[str, object]:
-            """Ingest approved research candidates through the app's normal source ingestion path."""
+            """Ingest approved lower-level research candidates through the app's normal source ingestion path."""
             request_context = ctx.context.request_context
             await ctx.context.stream(
-                ProgressUpdateEvent(icon="document", text="Queuing approved research candidates for ingestion.")
+                ProgressUpdateEvent(icon="document", text="Queuing approved lower-level research candidates for ingestion.")
             )
             response = await self._research.ingest_approved_candidates(
                 clerk_user_id=request_context.clerk_user_id,
@@ -849,11 +853,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
+                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(
                     icon="check-circle",
-                    text=f"Queued {len(response.ingested)} approved candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
+                    text=f"Queued {len(response.ingested)} lower-level candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
                 )
             )
             payload = response.model_dump(mode="json")
@@ -1227,10 +1232,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the indexed file-library assistant for an app-first OpenAI vector-store backed file explorer. "
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its optional split records, build foldered research libraries from topics or papers, start research imports, review/import discovered candidates, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
-            "Research build, candidate review, and candidate ingest tools update the browser's research builder panel so the user can inspect candidate state. "
+            "Research build tools update the browser's research builder panel so the user can inspect candidate, duplicate, download, and indexing state. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
             "If a selected source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "

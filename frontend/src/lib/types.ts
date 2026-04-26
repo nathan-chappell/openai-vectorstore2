@@ -264,7 +264,7 @@ export type IngestFinalizeResponse = {
 
 export type ResearchSeedKind = "topic" | "paper" | "text" | "url" | "pdf_url" | "arxiv_url" | "uploaded_file" | "linkedin_export";
 export type ResearchCandidateSourceType = "text" | "url" | "html" | "pdf" | "arxiv" | "linkedin_export" | "uploaded_file";
-export type ResearchCandidateStatus = "pending" | "approved" | "rejected" | "ingesting" | "ingested" | "failed";
+export type ResearchCandidateStatus = "pending" | "approved" | "rejected" | "ingesting" | "ingested" | "failed" | "duplicate";
 
 export type ResearchImportCreateRequest = {
   seed_type: ResearchSeedKind;

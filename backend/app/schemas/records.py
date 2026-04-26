@@ -27,7 +27,9 @@ ResearchSeedKind: TypeAlias = Literal[
 ResearchCandidateSourceType: TypeAlias = Literal[
     "text", "url", "html", "pdf", "arxiv", "linkedin_export", "uploaded_file"
 ]
-ResearchCandidateStatus: TypeAlias = Literal["pending", "approved", "rejected", "ingesting", "ingested", "failed"]
+ResearchCandidateStatus: TypeAlias = Literal[
+    "pending", "approved", "rejected", "ingesting", "ingested", "failed", "duplicate"
+]
 
 
 class AuthUser(BaseModel):

@@ -1271,7 +1271,7 @@ pre {
 
 .research-result-summary {
   display: grid;
-  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr) auto;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
   gap: 0.4rem;
   align-items: center;
   font-size: 0.74rem;
@@ -1327,14 +1327,12 @@ pre {
 }
 
 .research-candidate-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: flex-end;
+  min-width: 8.5rem;
+  display: grid;
+  justify-items: end;
   gap: 0.25rem;
-  max-width: 13rem;
 }
 
-.research-candidate-actions button,
 .research-result-summary button,
 .research-builder-controls button {
   min-height: 1.85rem;
@@ -1365,6 +1363,51 @@ pre {
 .status-ingesting {
   color: var(--amber);
   background: var(--amber-soft);
+}
+
+.status-duplicate {
+  color: #475569;
+  background: #e2e8f0;
+}
+
+.research-progress-track,
+.status-progress-track {
+  display: block;
+  overflow: hidden;
+  width: 100%;
+  height: 0.34rem;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.research-progress-track > span,
+.status-progress-track > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: #2563eb;
+  transition: width 180ms ease;
+}
+
+.status-ingested + .research-progress-track > span,
+.status-ready + .status-progress-track > span {
+  background: var(--green);
+}
+
+.status-duplicate + .research-progress-track > span,
+.status-rejected + .research-progress-track > span {
+  background: #64748b;
+}
+
+.status-failed + .research-progress-track > span,
+.status-failed + .status-progress-track > span {
+  background: var(--red);
+}
+
+.status-cell {
+  min-width: 0;
+  display: grid;
+  gap: 0.2rem;
 }
 
 .upload-hint {
@@ -1489,8 +1532,8 @@ pre {
   }
 
   .research-candidate-actions {
-    justify-content: flex-start;
-    max-width: none;
+    justify-items: start;
+    min-width: 0;
   }
 
   .preview-main {
