@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 import json
 import logging
@@ -19,6 +19,7 @@ from chatkit.types import (
     Attachment,
     ChatKitReq,
     ProgressUpdateEvent,
+    ThreadItem,
     ThreadMetadata,
     ThreadStreamEvent,
     UserMessageItem,
@@ -31,6 +32,7 @@ from pydantic import TypeAdapter
 from backend.app.chatkit.store import VectorstoreChatContext, VectorstoreChatStore, thread_metadata_with_scope
 from backend.app.core.config import AppSettings
 from backend.app.core.openai_observability import openai_platform_log_url, openai_platform_log_urls
+from backend.app.integrations.openai_gateway import OpenAIGateway
 from backend.app.schemas import (
     BranchSearchRequest,
     FreeformRequest,
@@ -80,6 +82,12 @@ class ChatKitRequestLogSummary:
     thread_id: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class ChatKitOpenAIState:
+    conversation_id: str | None = None
+    previous_response_id: str | None = None
+
+
 def chatkit_request_log_summary(raw_request: bytes | str) -> ChatKitRequestLogSummary:
     try:
         parsed = json.loads(raw_request)
@@ -112,6 +120,51 @@ async def stream_chatkit_progress(ctx: ChatKitToolContext, icon: str, text: str)
     await ctx.context.stream(chatkit_progress_update_event(icon, text))
 
 
+def chatkit_openai_state(metadata: Mapping[str, Any] | None) -> ChatKitOpenAIState:
+    metadata_dict = _metadata_dict(metadata)
+    return ChatKitOpenAIState(
+        conversation_id=_string_or_none(metadata_dict.get("openai_conversation_id")),
+        previous_response_id=_string_or_none(metadata_dict.get("openai_previous_response_id")),
+    )
+
+
+def chatkit_metadata_with_openai_state(
+    metadata: Mapping[str, Any] | None,
+    *,
+    conversation_id: str,
+    previous_response_id: str | None,
+) -> dict[str, object]:
+    output = _metadata_dict(metadata)
+    output["openai_conversation_id"] = conversation_id
+    if previous_response_id is not None:
+        output["openai_previous_response_id"] = previous_response_id
+    return output
+
+
+def pending_chatkit_thread_items(
+    chronological_items: Sequence[ThreadItem],
+    *,
+    has_openai_conversation: bool,
+) -> list[ThreadItem]:
+    items = list(chronological_items)
+    if not has_openai_conversation:
+        return items
+
+    boundary_index = -1
+    for index, item in enumerate(items):
+        if item.type in {"assistant_message", "client_tool_call"}:
+            boundary_index = index
+    if boundary_index < 0:
+        return items
+
+    boundary_item = items[boundary_index]
+    if boundary_index == len(items) - 1:
+        if boundary_item.type == "client_tool_call" and boundary_item.status == "completed":
+            return [boundary_item]
+        return []
+    return items[boundary_index + 1 :]
+
+
 class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     """ChatKit surface that talks to app services directly instead of looping through MCP."""
 
@@ -123,6 +176,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         sources: SourceService,
         research: ResearchImportService,
         actions: ActionService,
+        openai: OpenAIGateway,
     ) -> None:
         super().__init__(store=store, attachment_store=store)
         self._settings = settings
@@ -130,6 +184,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         self._sources = sources
         self._research = research
         self._actions = actions
+        self._openai = openai
         self._converter = VectorstoreThreadItemConverter()
 
     async def build_request_context(
@@ -225,22 +280,40 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         if thread.title is None and input_user_message is not None:
             thread.title = _title_from_user_message(input_user_message)
         thread.metadata = thread_metadata_with_scope(thread.metadata, context)
+        openai_state = chatkit_openai_state(thread.metadata)
+        had_openai_conversation = openai_state.conversation_id is not None
+        conversation_id = openai_state.conversation_id
+        if conversation_id is None:
+            conversation_id = await self._create_openai_conversation(thread=thread, context=context)
+            thread.metadata = chatkit_metadata_with_openai_state(
+                thread.metadata,
+                conversation_id=conversation_id,
+                previous_response_id=openai_state.previous_response_id,
+            )
         await self.store.save_thread(thread, context)
 
         agent_input = await self._agent_input_for_turn(
             thread=thread,
             input_user_message=input_user_message,
             context=context,
+            has_openai_conversation=had_openai_conversation,
         )
         selected_source_context = await self._selected_source_context_items(context=context)
         if selected_source_context:
             agent_input = selected_source_context + agent_input
 
         logger.info(
-            "chat turn started thread=%s model=%s selected_sources=%s",
+            "chat turn started thread=%s model=%s conversation=%s conversation_log_url=%s "
+            "previous_response=%s previous_response_log_url=%s selected_sources=%s input_items=%s history_mode=%s",
             thread.id,
             requested_model,
+            conversation_id,
+            openai_platform_log_url(conversation_id),
+            openai_state.previous_response_id,
+            openai_platform_log_url(openai_state.previous_response_id),
             len(context.selected_source_ids),
+            len(agent_input),
+            "pending" if had_openai_conversation else "bootstrap",
         )
         agent_context = ChatKitAgentContext[VectorstoreChatContext](
             thread=thread,
@@ -260,6 +333,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             agent_input,
             context=agent_context,
             max_turns=MAX_AGENT_TURNS,
+            conversation_id=conversation_id,
         )
         try:
             async for event in stream_agent_response(agent_context, result):
@@ -267,10 +341,15 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         except Exception:
             partial_response_ids = [response.response_id for response in result.raw_responses if response.response_id]
             logger.error(
-                "chat turn failed thread=%s model=%s response=%s responses=%s openai_log_url=%s "
-                "openai_log_urls=%s (%.1fms)",
+                "chat turn failed thread=%s model=%s conversation=%s conversation_log_url=%s "
+                "previous_response=%s previous_response_log_url=%s response=%s responses=%s "
+                "openai_log_url=%s openai_log_urls=%s (%.1fms)",
                 thread.id,
                 requested_model,
+                conversation_id,
+                openai_platform_log_url(conversation_id),
+                openai_state.previous_response_id,
+                openai_platform_log_url(openai_state.previous_response_id),
                 result.last_response_id,
                 ",".join(partial_response_ids) or None,
                 openai_platform_log_url(result.last_response_id),
@@ -293,7 +372,17 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 raw_response.request_id,
             )
 
-        conversation_id = cast(str | None, getattr(result, "_conversation_id", None))
+        result_conversation_id = (
+            cast(str | None, getattr(result, "conversation_id", None))
+            or cast(str | None, getattr(result, "_conversation_id", None))
+            or conversation_id
+        )
+        thread.metadata = chatkit_metadata_with_openai_state(
+            thread.metadata,
+            conversation_id=result_conversation_id,
+            previous_response_id=result.last_response_id,
+        )
+        await self.store.save_thread(thread, context)
         logger.info(
             "chat turn completed thread=%s model=%s response=%s responses=%s openai_log_url=%s "
             "openai_log_urls=%s conversation=%s conversation_log_url=%s (%.1fms)",
@@ -303,10 +392,35 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             ",".join(response_ids) or None,
             openai_platform_log_url(result.last_response_id),
             ",".join(openai_platform_log_urls(response_ids)) or None,
-            conversation_id,
-            openai_platform_log_url(conversation_id),
+            result_conversation_id,
+            openai_platform_log_url(result_conversation_id),
             (perf_counter() - started_at) * 1000,
         )
+
+    async def _create_openai_conversation(
+        self,
+        *,
+        thread: ThreadMetadata,
+        context: VectorstoreChatContext,
+    ) -> str:
+        metadata = {
+            "app": self._settings.app_name,
+            "surface": "chatkit",
+            "thread_id": thread.id,
+            "user_id": context.clerk_user_id,
+        }
+        if context.thread_origin:
+            metadata["origin"] = context.thread_origin[:512]
+        if isinstance(thread.title, str) and thread.title.strip():
+            metadata["thread_title"] = thread.title.strip()[:512]
+        conversation_id = await self._openai.create_conversation(metadata=metadata)
+        logger.info(
+            "chat conversation created thread=%s conversation=%s conversation_log_url=%s",
+            thread.id,
+            conversation_id,
+            openai_platform_log_url(conversation_id),
+        )
+        return conversation_id
 
     async def _agent_input_for_turn(
         self,
@@ -314,16 +428,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         thread: ThreadMetadata,
         input_user_message: UserMessageItem | None,
         context: VectorstoreChatContext,
+        has_openai_conversation: bool,
     ) -> list[ResponseInputItemParam]:
-        if input_user_message is None:
-            history = await self.store.load_thread_items(
-                thread.id,
-                after=None,
-                limit=80,
-                order="asc",
-                context=context,
-            )
-            return await self._converter.to_agent_input(history.data)
         history = await self.store.load_thread_items(
             thread.id,
             after=None,
@@ -331,8 +437,11 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             order="asc",
             context=context,
         )
-        items = [item for item in history.data if item.id != input_user_message.id]
-        items.append(input_user_message)
+        items = list(history.data)
+        if input_user_message is not None:
+            items = [item for item in items if item.id != input_user_message.id]
+            items.append(input_user_message)
+        items = pending_chatkit_thread_items(items, has_openai_conversation=has_openai_conversation)
         return await self._converter.to_agent_input(items)
 
     async def _selected_source_context_items(

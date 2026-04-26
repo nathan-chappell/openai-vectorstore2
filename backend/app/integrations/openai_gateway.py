@@ -38,6 +38,18 @@ class OpenAIGateway:
     async def close(self) -> None:
         await self._client.close()
 
+    async def create_conversation(self, *, metadata: dict[str, str]) -> str:
+        started_at = perf_counter()
+        conversation = await cast(Any, self._client.conversations.create)(metadata=metadata)
+        conversation_id = str(conversation.id)
+        logger.info(
+            "openai_conversation_created conversation=%s conversation_log_url=%s duration_ms=%.1f",
+            conversation_id,
+            openai_platform_log_url(conversation_id),
+            (perf_counter() - started_at) * 1000,
+        )
+        return conversation_id
+
     async def _create_response(self, *, operation: str, **kwargs: Any) -> Any:
         started_at = perf_counter()
         try:

@@ -77,6 +77,7 @@ def create_services(settings: AppSettings) -> AppServices:
         sources=sources,
         research=research,
         actions=actions,
+        openai=openai,
     )
     return AppServices(
         settings=settings,

@@ -55,6 +55,7 @@ Implementation tasks:
 - [x] Normalize all ChatKit progress icons through the validation-safe wrapper.
 - [x] Make routine request logs compact, suppress duplicate uvicorn access noise, and keep OpenAI response/conversation log URLs easy to scan.
 - [x] Route framework loggers through the root file handler so uvicorn/starlette/alembic warnings land in the app log file.
+- [x] Align ChatKit agent state with OpenAI conversations: create and persist `openai_conversation_id`, track `openai_previous_response_id` for logs/future one-off calls, pass only `conversation_id` into the Agents SDK run, and send only pending ChatKit items after a conversation exists.
 - [x] Rename downloaded research materials with title-based `.pdf`/`.txt` filenames when URL paths use numeric article IDs or unsupported suffixes.
 - [x] Polish the file explorer interaction model: in-app delete confirmation, recursive-folder warning copy, arrow-key focus, Shift+arrow range selection, Alt+Left/Backspace up navigation, `?` shortcut help, and closable/resizable preview.
 

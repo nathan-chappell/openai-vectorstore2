@@ -1552,7 +1552,11 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
         thread = ThreadMetadata(
             id="chat_scope_metadata_test",
             created_at=datetime.now(UTC),
-            metadata={"existing": "value"},
+            metadata={
+                "existing": "value",
+                "openai_conversation_id": "conv_scope_test",
+                "openai_previous_response_id": "resp_scope_test",
+            },
         )
 
         await services.chatkit_server.store.save_thread(thread, context=context)
@@ -1563,6 +1567,8 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
         assert loaded.metadata["selected_source_count"] == 2
         assert loaded.metadata["scope_origin"] == "web"
         assert isinstance(loaded.metadata["scope_updated_at"], str)
+        assert loaded.metadata["openai_conversation_id"] == "conv_scope_test"
+        assert loaded.metadata["openai_previous_response_id"] == "resp_scope_test"
     finally:
         await services.close()
 

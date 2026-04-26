@@ -39,6 +39,11 @@ class FakeOpenAIGateway:
         del name, metadata
         return self.vector_store_id
 
+    async def create_conversation(self, *, metadata: dict[str, str]) -> str:
+        del metadata
+        self._counter += 1
+        return f"conv_fake_{self._counter}"
+
     async def upload_file_bytes(self, *, filename: str, payload: bytes, purpose: object) -> str:
         self._counter += 1
         file_id = f"file_original_{self._counter}"
