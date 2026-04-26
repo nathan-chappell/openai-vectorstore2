@@ -1,5 +1,17 @@
 # Operations
 
+## Logging
+
+Backend logs are written to `.local/logs/openai-vectorstore2.log` by default. Override the path with:
+
+```bash
+LOG_FILE_PATH=.local/logs/openai-vectorstore2.log
+LOG_FILE_MAX_BYTES=5000000
+LOG_FILE_BACKUP_COUNT=3
+```
+
+Set `LOG_FILE_PATH=` to disable file logging.
+
 ## Storage
 
 Local storage is the default. S3-compatible storage is selected with:

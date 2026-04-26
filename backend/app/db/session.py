@@ -6,8 +6,8 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine
-from sqlalchemy.engine import Engine, make_url
+from sqlalchemy import create_engine, inspect
+from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -118,11 +118,13 @@ class DatabaseManager:
                     raise RuntimeError("Synchronous SQLite engine is not configured.")
                 with self._sync_engine.begin() as connection:
                     Base.metadata.create_all(connection)
+                    self._validate_schema_matches_metadata(connection)
             else:
                 if self._async_engine is None:
                     raise RuntimeError("Async engine is not configured.")
                 async with self._async_engine.begin() as connection:
                     await connection.run_sync(Base.metadata.create_all)
+                    await connection.run_sync(self._validate_schema_matches_metadata)
             _INITIALIZED_DATABASES.add(database_url)
 
     def _upgrade_to_head(self) -> None:
@@ -130,6 +132,31 @@ class DatabaseManager:
         config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
         config.set_main_option("sqlalchemy.url", self._settings.sync_database_url)
         command.upgrade(config, "head")
+
+    def _validate_schema_matches_metadata(self, connection: Connection) -> None:
+        inspector = inspect(connection)
+        actual_tables = set(inspector.get_table_names()) - {"alembic_version"}
+        expected_tables = set(Base.metadata.tables)
+        missing_tables = sorted(expected_tables - actual_tables)
+        missing_columns: list[str] = []
+
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in actual_tables:
+                continue
+            actual_columns = {column["name"] for column in inspector.get_columns(table_name)}
+            missing = sorted(set(table.columns.keys()) - actual_columns)
+            if missing:
+                missing_columns.append(f"{table_name}({', '.join(missing)})")
+
+        if not missing_tables and not missing_columns:
+            return
+
+        raise RuntimeError(
+            "Database schema is missing ORM tables or columns after create_all. "
+            "Existing tables are not altered by create_all; set DATABASE_SCHEMA_MODE=migrations "
+            "and run Alembic, or reset the SQLite DB. "
+            f"missing_tables={missing_tables} missing_columns={missing_columns}"
+        )
 
     def session(self) -> AsyncSession | AsyncSessionAdapter:
         if self._use_sync_sqlite:

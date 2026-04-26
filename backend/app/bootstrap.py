@@ -39,7 +39,12 @@ class AppServices:
 
 
 def create_services(settings: AppSettings) -> AppServices:
-    configure_logging(settings.log_level)
+    configure_logging(
+        settings.log_level,
+        file_path=settings.normalized_log_file_path,
+        file_max_bytes=settings.log_file_max_bytes,
+        file_backup_count=settings.log_file_backup_count,
+    )
     set_default_openai_key(settings.openai_api_key.get_secret_value())
     database = DatabaseManager(settings)
     auth = AuthService(settings)

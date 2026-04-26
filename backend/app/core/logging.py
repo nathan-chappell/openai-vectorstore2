@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 import re
 import sys
 
@@ -16,10 +18,18 @@ class AnsiStrippingFormatter(logging.Formatter):
         return ANSI_RE.sub("", super().format(record))
 
 
-def configure_logging(level_name: str) -> None:
+def configure_logging(
+    level_name: str,
+    *,
+    file_path: Path | None = None,
+    file_max_bytes: int = 5_000_000,
+    file_backup_count: int = 3,
+) -> None:
     level = getattr(logging, level_name.upper(), logging.INFO)
     root = logging.getLogger()
-    root.handlers.clear()
+    for existing_handler in root.handlers[:]:
+        root.removeHandler(existing_handler)
+        existing_handler.close()
     root.setLevel(level)
 
     if sys.stderr.isatty():
@@ -40,5 +50,22 @@ def configure_logging(level_name: str) -> None:
     handler.setFormatter(formatter)
     root.addHandler(handler)
 
+    if file_path is not None:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        file_handler = RotatingFileHandler(
+            file_path,
+            maxBytes=max(0, file_max_bytes),
+            backupCount=max(0, file_backup_count),
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(AnsiStrippingFormatter("%(asctime)s %(levelname)-8s %(name)s %(message)s"))
+        root.addHandler(file_handler)
+
     for logger_name in ["httpx", "openai", "sqlalchemy.engine"]:
         logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
+
+    logging.getLogger(__name__).info(
+        "logging_configured level=%s file_path=%s",
+        logging.getLevelName(level),
+        str(file_path) if file_path is not None else "disabled",
+    )

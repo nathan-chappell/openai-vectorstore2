@@ -8,7 +8,7 @@ OpenAI Vectorstore2 is an app-first file explorer backed by OpenAI vector-store 
 - Frontend: Vite, React, TypeScript, Clerk, ChatKit, Playwright.
 - Storage: local file storage by default, with an S3-compatible adapter for deployment.
 - Retrieval: normal ingestion publishes source-level files into OpenAI vector stores with app-owned attributes for source ID, path, type, tags, and created date. Optional semantic split records can be generated explicitly for inspection.
-- Schema: local development can bootstrap with `create_all`; production-like environments can run Alembic migrations with `DATABASE_SCHEMA_MODE=migrations`.
+- Schema: Alembic migrations are the default. `create_all` is only for empty throwaway databases because it does not alter existing tables.
 
 ## Core Workflows
 
@@ -28,6 +28,8 @@ OpenAI Vectorstore2 is an app-first file explorer backed by OpenAI vector-store 
 5. Start the backend with `./.venv/bin/openai-vectorstore2-http`.
 6. Open `http://localhost:8000`.
 7. Point MCP hosts at `http://localhost:8000/mcp/`.
+
+Backend logs are written to `.local/logs/openai-vectorstore2.log` by default.
 
 VS Code users can press F5 to start the backend debugger. The workspace task `npm: build:watch` keeps the frontend bundle fresh for the backend-served app.
 

@@ -22,7 +22,7 @@ class AppSettings(BaseSettings):
     app_base_url: AnyHttpUrl = cast(AnyHttpUrl, "http://localhost:8000")
     app_name: str = "openai-vectorstore2"
     database_url: str = "sqlite+aiosqlite:///./.local/openai-vectorstore2.db"
-    database_schema_mode: Literal["create_all", "migrations"] = "create_all"
+    database_schema_mode: Literal["create_all", "migrations"] = "migrations"
     static_dir: str = "frontend/dist"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
@@ -73,6 +73,9 @@ class AppSettings(BaseSettings):
     mcp_client_session_timeout_seconds: float = 60.0
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+    log_file_path: str | None = ".local/logs/openai-vectorstore2.log"
+    log_file_max_bytes: int = 5_000_000
+    log_file_backup_count: int = 3
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -98,6 +101,7 @@ class AppSettings(BaseSettings):
         "s3_bucket",
         "s3_access_key_id",
         "s3_secret_access_key",
+        "log_file_path",
         mode="before",
     )
     @classmethod
@@ -120,6 +124,18 @@ class AppSettings(BaseSettings):
     @property
     def normalized_local_storage_dir(self) -> Path:
         candidate = Path(self.local_storage_dir).expanduser()
+        if not candidate.is_absolute():
+            candidate = PROJECT_ROOT / candidate
+        return candidate
+
+    @property
+    def normalized_log_file_path(self) -> Path | None:
+        if self.log_file_path is None:
+            return None
+        normalized_value = self.log_file_path.strip()
+        if not normalized_value:
+            return None
+        candidate = Path(normalized_value).expanduser()
         if not candidate.is_absolute():
             candidate = PROJECT_ROOT / candidate
         return candidate

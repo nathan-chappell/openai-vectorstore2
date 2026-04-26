@@ -6,10 +6,10 @@ Alembic is the migration baseline for schema changes.
 
 `DATABASE_SCHEMA_MODE` controls how `DatabaseManager.ensure_ready()` prepares the schema.
 
-- `create_all`: default local-dev mode. SQLAlchemy creates missing tables from current ORM metadata.
-- `migrations`: production-like mode. Alembic runs `upgrade head` using the configured database URL.
+- `migrations`: default mode. Alembic runs `upgrade head` using the configured database URL.
+- `create_all`: creates missing tables from current ORM metadata for empty throwaway databases. It does not alter existing tables, so the app validates the resulting schema and fails with a clear drift error if columns are missing.
 
-Keep `create_all` for fast local iteration unless you are specifically validating migration behavior. Use `migrations` for deployed environments once production schema ownership is needed.
+Use `migrations` for normal local development and deployed environments. Keep `create_all` only for short-lived scratch databases.
 
 ## Commands
 
@@ -43,7 +43,7 @@ The initial migration is `migrations/versions/20260425_0001_initial_schema.py`. 
 
 - app users and libraries
 - tags and source tag links
-- source files, source-level vector index fields, and optional semantic chunks
+- source files and optional semantic chunks
 - generated assets
 - app tasks
 - ChatKit threads, entries, and attachments
