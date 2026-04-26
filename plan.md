@@ -328,7 +328,7 @@ Status: active intake; implement items as concrete plans arrive.
 - [ ] Keep the file explorer dense, fast, and familiar: normal folder/file rows, tight metadata, simple affordances, no marketing-style cards or explanatory copy.
 - [x] Validate hidden-preview and splitter fixes with Playwright desktop and mobile screenshots before marking complete.
 - [x] Add compact file-browser keyboard shortcuts: `F2` renames the focused item, `Backspace` navigates up one folder, and `Delete` deletes the current selection.
-- [ ] Reduce active frontend polling: default background refreshes should run closer to every 5 seconds, while user actions such as upload, delete, research build, selection changes, and explicit refresh should force immediate targeted refreshes.
+- [x] Reduce active frontend polling: active-task background refreshes now run on a named 5-second interval while upload, delete, research build, and explicit refresh paths continue to force immediate targeted refreshes.
 - [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
 ## Near-Term Follow-Ups

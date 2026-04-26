@@ -71,6 +71,7 @@ const SOURCE_TAG_LIMIT = 8;
 const SELECTED_FILE_LIMIT = 10;
 const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
+const ACTIVE_TASK_REFRESH_INTERVAL_MS = 5_000;
 const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
 const PREVIEW_SPLIT_STORAGE_KEY = "openai-vectorstore2.previewSplitPercent";
 const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source file intact.";
@@ -399,7 +400,7 @@ export function App({ authMode }: AppProps) {
     }
     const intervalId = window.setInterval(() => {
       void refreshActivity();
-    }, 2_500);
+    }, ACTIVE_TASK_REFRESH_INTERVAL_MS);
     return () => window.clearInterval(intervalId);
   }, [hasActiveTasks, refreshActivity]);
 
@@ -1228,7 +1229,7 @@ function LegacyApp({ authMode }: AppProps) {
     }
     const intervalId = window.setInterval(() => {
       void refreshActivity();
-    }, 2_500);
+    }, ACTIVE_TASK_REFRESH_INTERVAL_MS);
     void refreshActivity();
     return () => window.clearInterval(intervalId);
   }, [hasActiveTasks, refreshActivity]);
