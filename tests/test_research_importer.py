@@ -11,7 +11,7 @@ import pytest
 from backend import create_fastapi_app
 from backend.app.core.config import AppSettings
 from backend.app.models import ResearchImportCandidate, SourceFile
-from backend.app.schemas import ResearchImportCreateRequest
+from backend.app.schemas import ResearchImportCreateRequest, ResearchLibraryBuildRequest
 from backend.app.services import research as research_module
 from backend.app.services.research import ResearchImportService
 
@@ -197,3 +197,40 @@ async def test_research_import_dedupes_review_candidates_against_ingested_source
             payload = second.json()
             assert payload["duplicate_count"] == 1
             assert payload["candidates"] == []
+
+
+@pytest.mark.asyncio
+async def test_research_library_progress_reports_search_depth_and_slots(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        events: list[tuple[str, str]] = []
+
+        async def record_progress(icon: str, text: str) -> None:
+            events.append((icon, text))
+
+        services = app.state.services
+        response = await services.research.build_library(
+            clerk_user_id="local-dev",
+            payload=ResearchLibraryBuildRequest(
+                seed_type="paper",
+                query="Attention Is All You Need",
+                auto_ingest=False,
+                max_depth=2,
+                max_sources=4,
+                max_candidates_per_source=2,
+                max_pending_candidates=4,
+            ),
+            origin_surface="web",
+            progress_callback=record_progress,
+        )
+
+    messages = [text for _, text in events]
+    assert len(response.candidates) == 4
+    assert any("Searching web for primary references" in message for message in messages)
+    assert any("Expanding references at depth 2 from 2 parent candidates with 2 slots open." == message for message in messages)
+    assert any("Depth 2: searching references from Example reference 1 (1/2, 2 slots left)." == message for message in messages)
+    assert any("Depth 2: Example reference 1 returned 2 candidates; 0 slots left." == message for message in messages)

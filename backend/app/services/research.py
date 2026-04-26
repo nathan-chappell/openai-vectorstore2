@@ -150,6 +150,7 @@ class ResearchImportService:
             candidate_inputs = await self._candidate_inputs_from_seed(
                 seed_material=seed_material,
                 request=payload,
+                progress_callback=progress_callback,
             )
             if not payload.ingest_seed:
                 candidate_inputs.insert(
@@ -211,13 +212,14 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "search",
-                    f"Expanding references at depth {next_depth}.",
+                    f"Expanding references at depth {next_depth} from {len(frontier)} parent candidate{'' if len(frontier) == 1 else 's'} with {remaining_slots} slot{'' if remaining_slots == 1 else 's'} open.",
                 )
                 followup_inputs = await self._candidate_inputs_from_frontier(
                     parents=frontier,
                     request=payload,
                     depth=next_depth,
                     remaining_slots=remaining_slots,
+                    progress_callback=progress_callback,
                 )
                 if target_folder_id is not None:
                     for candidate_input in followup_inputs:
@@ -225,6 +227,11 @@ class ResearchImportService:
                         provenance["target_folder_id"] = target_folder_id
                         candidate_input["provenance"] = provenance
                 if not followup_inputs:
+                    await _emit_research_progress(
+                        progress_callback,
+                        "search",
+                        f"Depth {next_depth} produced no new reference candidates.",
+                    )
                     break
                 persisted, duplicates = await self._persist_candidate_batch(
                     clerk_user_id=clerk_user_id,
@@ -600,12 +607,17 @@ class ResearchImportService:
         updated_candidates: list[ResearchImportCandidateSummary] = []
         seen_urls: set[str] = set()
         seen_hashes: set[str] = set()
-        for candidate in candidates:
+        await _emit_research_progress(
+            progress_callback,
+            "download",
+            f"Preparing to download {len(candidates)} candidate{'' if len(candidates) == 1 else 's'}.",
+        )
+        for index, candidate in enumerate(candidates, start=1):
             try:
                 await _emit_research_progress(
                     progress_callback,
                     "download",
-                    f"Downloading {candidate.title[:80]}.",
+                    f"Downloading {index}/{len(candidates)}: {_progress_snippet(candidate.title)}.",
                 )
                 material = await self._material_from_candidate(candidate)
                 normalized_url = material.normalized_url or candidate.normalized_url
@@ -634,7 +646,7 @@ class ResearchImportService:
                     await _emit_research_progress(
                         progress_callback,
                         "copy-check",
-                        f"Skipped duplicate: {candidate.title[:80]}.",
+                        f"Skipped duplicate {index}/{len(candidates)}: {_progress_snippet(candidate.title)}.",
                     )
                     logger.info(
                         "research_candidate_duplicate_skipped clerk_user_id=%s candidate_id=%s reason=%s",
@@ -674,7 +686,7 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "document",
-                    f"Queued indexing for {material.filename}.",
+                    f"Queued indexing {index}/{len(candidates)}: {_progress_snippet(material.filename)}.",
                 )
                 async with self._database.session() as session:
                     current = await self._candidate_for_user(
@@ -707,7 +719,7 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "alert-circle",
-                    f"Failed to ingest {candidate.title[:80]}.",
+                    f"Failed to ingest {index}/{len(candidates)}: {_progress_snippet(candidate.title)}.",
                 )
 
         return ResearchCandidateIngestResponse(ingested=ingested, candidates=updated_candidates)
@@ -717,6 +729,7 @@ class ResearchImportService:
         *,
         seed_material: ResearchMaterial,
         request: ResearchImportCreateRequest,
+        progress_callback: ResearchProgressCallback | None = None,
     ) -> list[dict[str, object]]:
         candidates: list[dict[str, object]] = []
         text = seed_material.payload.decode("utf-8", errors="replace")
@@ -738,8 +751,19 @@ class ResearchImportService:
                     "content_hash": None,
                 }
             )
+        if candidates:
+            await _emit_research_progress(
+                progress_callback,
+                "search",
+                f"Seed text contained {len(candidates)} explicit URL candidate{'' if len(candidates) == 1 else 's'}.",
+            )
         if request.discover_references and request.max_depth > 0 and request.max_candidates_per_source > 0:
             discovery_query = _discovery_query(seed_material=seed_material, request=request)
+            await _emit_research_progress(
+                progress_callback,
+                "search",
+                f"Searching web for primary references: {_progress_snippet(discovery_query, max_length=110)}.",
+            )
             discovery = await self._openai.discover_research_candidates(
                 query=discovery_query,
                 max_candidates=min(
@@ -768,6 +792,11 @@ class ResearchImportService:
                         "content_hash": None,
                     }
                 )
+            await _emit_research_progress(
+                progress_callback,
+                "search",
+                f"Primary reference search returned {len(discovery.candidates)} candidate{'' if len(discovery.candidates) == 1 else 's'}.",
+            )
         return candidates
 
     async def _candidate_inputs_from_frontier(
@@ -777,6 +806,7 @@ class ResearchImportService:
         request: ResearchImportCreateRequest,
         depth: int,
         remaining_slots: int,
+        progress_callback: ResearchProgressCallback | None = None,
     ) -> list[dict[str, object]]:
         candidates: list[dict[str, object]] = []
         per_parent_limit = min(
@@ -785,13 +815,21 @@ class ResearchImportService:
         )
         if per_parent_limit <= 0 or remaining_slots <= 0:
             return candidates
-        for parent in parents:
+        for parent_index, parent in enumerate(parents, start=1):
             if len(candidates) >= remaining_slots:
                 break
-            discovery = await self._openai.discover_research_candidates(
-                query=_followup_discovery_query(parent=parent, request=request, depth=depth),
-                max_candidates=min(per_parent_limit, remaining_slots - len(candidates)),
+            query = _followup_discovery_query(parent=parent, request=request, depth=depth)
+            slots_before_parent = remaining_slots - len(candidates)
+            await _emit_research_progress(
+                progress_callback,
+                "search",
+                f"Depth {depth}: searching references from {_progress_snippet(parent.title, max_length=72)} ({parent_index}/{len(parents)}, {slots_before_parent} slot{'' if slots_before_parent == 1 else 's'} left).",
             )
+            discovery = await self._openai.discover_research_candidates(
+                query=query,
+                max_candidates=min(per_parent_limit, slots_before_parent),
+            )
+            count_before_parent = len(candidates)
             for item in discovery.candidates:
                 candidates.append(
                     {
@@ -822,6 +860,13 @@ class ResearchImportService:
                 )
                 if len(candidates) >= remaining_slots:
                     break
+            added_count = len(candidates) - count_before_parent
+            slots_after_parent = remaining_slots - len(candidates)
+            await _emit_research_progress(
+                progress_callback,
+                "search",
+                f"Depth {depth}: {_progress_snippet(parent.title, max_length=72)} returned {added_count} candidate{'' if added_count == 1 else 's'}; {slots_after_parent} slot{'' if slots_after_parent == 1 else 's'} left.",
+            )
         return candidates
 
     async def _persist_candidate_inputs(
@@ -1231,6 +1276,13 @@ class ResearchImportService:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def _progress_snippet(value: str, *, max_length: int = 80) -> str:
+    normalized = WHITESPACE_RE.sub(" ", value).strip()
+    if len(normalized) <= max_length:
+        return normalized
+    return f"{normalized[: max_length - 3].rstrip()}..."
 
 
 async def _emit_research_progress(
