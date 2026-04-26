@@ -179,7 +179,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
     mutating = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
     destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
 
-    @server.tool(name="list_sources", description="List sources in the user's indexed file library.", annotations=read_only)
+    @server.tool(
+        name="list_sources", description="List sources in the user's indexed file library.", annotations=read_only
+    )
     async def list_sources_tool(
         query: Annotated[str | None, Field(min_length=1)] = None,
         tag_ids: list[str] | None = None,
@@ -213,7 +215,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         description="List the children of one virtual filesystem folder.",
         annotations=read_only,
     )
-    async def list_filesystem_tool(folder_id: Annotated[str | None, Field(min_length=1)] = None) -> FilesystemListResponse:
+    async def list_filesystem_tool(
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+    ) -> FilesystemListResponse:
         clerk_user_id = current_mcp_clerk_user_id()
         return await _run_logged_tool(
             tool_name="list_filesystem",
@@ -547,11 +551,13 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="start_research_import",
-        description="Start a research import from pasted text, an uploaded base64 file, or a public URL.",
+        description="Start a research import from a topic, paper title, pasted text, an uploaded base64 file, or a public URL.",
         annotations=mutating,
     )
     async def start_research_import_tool(
-        seed_type: Literal["text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"] = "text",
+        seed_type: Literal[
+            "topic", "paper", "text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"
+        ] = "topic",
         text: str | None = None,
         url: Annotated[str | None, Field(max_length=2048)] = None,
         title: Annotated[str | None, Field(max_length=512)] = None,
@@ -560,6 +566,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         media_type: Annotated[str | None, Field(max_length=128)] = None,
         tag_ids: list[str] | None = None,
         folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        folder_name: Annotated[str | None, Field(max_length=255)] = None,
         ingest_seed: bool = True,
         discover_references: bool = True,
         max_depth: Annotated[int, Field(ge=0, le=4)] = 2,
@@ -577,6 +584,7 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             media_type=media_type,
             tag_ids=tag_ids or [],
             folder_id=folder_id,
+            folder_name=folder_name,
             ingest_seed=ingest_seed,
             discover_references=discover_references,
             max_depth=max_depth,
@@ -778,7 +786,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(
-        name="branch_search", description="Layer source-file vector search outward from each layer's hits.", annotations=read_only
+        name="branch_search",
+        description="Layer source-file vector search outward from each layer's hits.",
+        annotations=read_only,
     )
     async def branch_search_tool(
         query: Annotated[str, Field(min_length=1)],
@@ -808,7 +818,9 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             operation=services.sources.branch_search(clerk_user_id=clerk_user_id, request=payload),
         )
 
-    @server.tool(name="qa", description="Answer a question using retrieved source-file vector matches.", annotations=mutating)
+    @server.tool(
+        name="qa", description="Answer a question using retrieved source-file vector matches.", annotations=mutating
+    )
     async def qa_tool(
         prompt: Annotated[str, Field(min_length=1)],
         selected_source_ids: list[str] | None = None,

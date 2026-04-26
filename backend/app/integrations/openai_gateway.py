@@ -175,8 +175,10 @@ class OpenAIGateway:
                             "type": "input_text",
                             "text": (
                                 "Find public reference materials that could help seed a research library. "
+                                "If the seed is a paper title, include the likely primary paper first, then important cited or closely related public references. "
                                 "Return only candidates that are likely to be publicly reachable URLs. "
                                 "Prefer original sources, PDFs, arXiv pages, official docs, and high-signal articles. "
+                                "For each candidate, include a concise description, a useful summary, short suggested tags, authors, publication date, DOI, or arXiv ID when you can infer them from public metadata. "
                                 "Do not include login-gated or paywalled pages when a public alternative is available. "
                                 f"Return at most {max_candidates} candidates.\n\nSeed:\n{query}"
                             ),

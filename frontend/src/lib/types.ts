@@ -53,6 +53,9 @@ export type SourceSummary = {
   status: SourceStatus;
   byte_size: number;
   chunk_count: number;
+  description: string | null;
+  summary: string | null;
+  suggested_tags: string[];
   error_message: string | null;
   created_at: string;
   updated_at: string;
@@ -77,6 +80,9 @@ export type FilesystemEntrySummary = {
   status: SourceStatus | null;
   byte_size: number | null;
   chunk_count: number | null;
+  description: string | null;
+  summary: string | null;
+  suggested_tags: string[];
   tags: TagSummary[];
   openai_original_file_id: string | null;
   openai_vector_file_id: string | null;
@@ -256,7 +262,7 @@ export type IngestFinalizeResponse = {
   task: TaskSummary | null;
 };
 
-export type ResearchSeedKind = "text" | "url" | "pdf_url" | "arxiv_url" | "uploaded_file" | "linkedin_export";
+export type ResearchSeedKind = "topic" | "paper" | "text" | "url" | "pdf_url" | "arxiv_url" | "uploaded_file" | "linkedin_export";
 export type ResearchCandidateSourceType = "text" | "url" | "html" | "pdf" | "arxiv" | "linkedin_export" | "uploaded_file";
 export type ResearchCandidateStatus = "pending" | "approved" | "rejected" | "ingesting" | "ingested" | "failed";
 
@@ -270,6 +276,7 @@ export type ResearchImportCreateRequest = {
   media_type?: string | null;
   tag_ids?: string[];
   folder_id?: string | null;
+  folder_name?: string | null;
   ingest_seed?: boolean;
   discover_references?: boolean;
   max_depth?: number;
@@ -285,6 +292,13 @@ export type ResearchImportCandidateSummary = {
   url: string | null;
   normalized_url: string | null;
   title: string;
+  description: string | null;
+  summary: string | null;
+  suggested_tags: string[];
+  authors: string[];
+  published_at: string | null;
+  doi: string | null;
+  arxiv_id: string | null;
   rationale: string | null;
   score: number | null;
   depth: number;

@@ -385,6 +385,7 @@ class SourceService:
                     or normalized_query in _virtual_path(source).casefold()
                     or normalized_query in source.media_type.casefold()
                     or normalized_query in source.source_kind.casefold()
+                    or normalized_query in _metadata_search_text(source.metadata_json)
                 ]
             if selected_tag_ids:
 
@@ -510,16 +511,14 @@ class SourceService:
                 if not normalized_query:
                     return True
                 name_matches = normalized_query in entry.name.casefold() or normalized_query in entry.path.casefold()
-                source_matches = (
-                    source is not None
-                    and (
-                        normalized_query in source.display_title.casefold()
-                        or normalized_query in source.original_filename.casefold()
-                        or normalized_query in source.id.casefold()
-                        or normalized_query in source.media_type.casefold()
-                        or normalized_query in source.source_kind.casefold()
-                        or source.id in vector_source_id_set
-                    )
+                source_matches = source is not None and (
+                    normalized_query in source.display_title.casefold()
+                    or normalized_query in source.original_filename.casefold()
+                    or normalized_query in source.id.casefold()
+                    or normalized_query in source.media_type.casefold()
+                    or normalized_query in source.source_kind.casefold()
+                    or normalized_query in _metadata_search_text(source.metadata_json)
+                    or source.id in vector_source_id_set
                 )
                 return name_matches or source_matches
 
@@ -668,7 +667,10 @@ class SourceService:
                     descendant.updated_at = now
                     if descendant.source_file is not None:
                         descendant.source_file.updated_at = now
-                        if descendant.source_file.status == "ready" and descendant.source_file.openai_vector_file_id is not None:
+                        if (
+                            descendant.source_file.status == "ready"
+                            and descendant.source_file.openai_vector_file_id is not None
+                        ):
                             reindex_source_ids.append(descendant.source_file.id)
                 library.updated_at = now
             await session.commit()
@@ -825,6 +827,17 @@ class SourceService:
             library = await self._library_for_user(session, app_user=app_user)
             return [self._tag_summary(tag) for tag in sorted(library.tags, key=lambda item: item.name.casefold())]
 
+    async def ensure_auto_tags(self, *, clerk_user_id: str, tag_names: list[str]) -> list[TagSummary]:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to create tags.")
+            library = await self._library_for_user(session, app_user=app_user)
+            tags = await self._ensure_auto_tags(session, library=library, tag_names=tag_names)
+            await session.commit()
+            return [self._tag_summary(tag) for tag in tags]
+
     async def create_tag(
         self,
         *,
@@ -843,7 +856,9 @@ class SourceService:
                 raise ValueError("Tag name is required.")
             slug = slugify(cleaned_name)
             tag = await session.scalar(
-                select(Tag).where(Tag.library_id == library.id, Tag.slug == slug).options(selectinload(Tag.source_links))
+                select(Tag)
+                .where(Tag.library_id == library.id, Tag.slug == slug)
+                .options(selectinload(Tag.source_links))
             )
             if tag is None:
                 tag = Tag(
@@ -1417,7 +1432,9 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
 
-                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                index_material = await self._vector_index_material(
+                    source=source, source_kind=source_kind, payload=payload
+                )
                 source.ingest_strategy = index_material.strategy_label
                 task.state_json = {
                     "stage": "indexing_source_file",
@@ -1704,7 +1721,9 @@ class SourceService:
                     (perf_counter() - save_started_at) * 1000,
                 )
 
-                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                index_material = await self._vector_index_material(
+                    source=source, source_kind=source_kind, payload=payload
+                )
                 vector_file_id = await self._replace_source_vector_file(
                     source=source,
                     filename=index_material.filename,
@@ -1904,7 +1923,9 @@ class SourceService:
 
                 payload = await self._storage.get_bytes(key=source.storage_key)
                 source_kind = cast(SourceKind, source.source_kind)
-                index_material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+                index_material = await self._vector_index_material(
+                    source=source, source_kind=source_kind, payload=payload
+                )
                 source.ingest_strategy = index_material.strategy_label
                 vector_file_id = await self._replace_source_vector_file(
                     source=source,
@@ -2261,10 +2282,7 @@ class SourceService:
             chain.append(cursor)
             cursor = entries_by_id.get(cursor.parent_id) if cursor.parent_id is not None else None
         chain.reverse()
-        return [
-            FilesystemBreadcrumb(id=item.id, name=item.name or "Files", path=item.path)
-            for item in chain
-        ]
+        return [FilesystemBreadcrumb(id=item.id, name=item.name or "Files", path=item.path) for item in chain]
 
     async def _assert_unique_child_name(
         self,
@@ -2352,9 +2370,7 @@ class SourceService:
                 .selectinload(SourceTagLink.source_file)
                 .selectinload(SourceFile.tag_links)
                 .selectinload(SourceTagLink.tag),
-                selectinload(Tag.source_links)
-                .selectinload(SourceTagLink.source_file)
-                .selectinload(SourceFile.chunks),
+                selectinload(Tag.source_links).selectinload(SourceTagLink.source_file).selectinload(SourceFile.chunks),
             )
         )
         if tag is None:
@@ -2509,7 +2525,11 @@ class SourceService:
             if not name:
                 continue
             slug = slugify(name)
-            existing = await session.scalar(select(Tag).where(Tag.library_id == library.id, Tag.slug == slug))
+            existing = await session.scalar(
+                select(Tag)
+                .where(Tag.library_id == library.id, Tag.slug == slug)
+                .options(selectinload(Tag.source_links))
+            )
             if existing is None:
                 existing = Tag(
                     library_id=library.id,
@@ -2679,6 +2699,7 @@ class SourceService:
         )
 
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
+        metadata = dict(source.metadata_json or {})
         return LibrarySourceSummary(
             id=source.id,
             filesystem_entry_id=source.filesystem_entry.id if source.filesystem_entry is not None else None,
@@ -2691,6 +2712,9 @@ class SourceService:
             status=cast(SourceStatus, source.status),
             byte_size=source.byte_size,
             chunk_count=len(source.chunks),
+            description=_metadata_string(metadata, "description"),
+            summary=_metadata_string(metadata, "summary"),
+            suggested_tags=_metadata_string_list(metadata, "suggested_tags"),
             error_message=source.error_message,
             created_at=source.created_at,
             updated_at=source.updated_at,
@@ -2727,6 +2751,7 @@ class SourceService:
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
             )
+        metadata = dict(source.metadata_json or {})
         return FilesystemEntrySummary(
             id=entry.id,
             kind=cast(Any, entry.kind),
@@ -2739,6 +2764,9 @@ class SourceService:
             status=cast(SourceStatus, source.status),
             byte_size=source.byte_size,
             chunk_count=len(source.chunks),
+            description=_metadata_string(metadata, "description"),
+            summary=_metadata_string(metadata, "summary"),
+            suggested_tags=_metadata_string_list(metadata, "suggested_tags"),
             tags=[
                 self._tag_summary(link.tag)
                 for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
@@ -3024,6 +3052,34 @@ def bounded_tag_ids(tag_ids: Sequence[str]) -> list[str]:
 
 def _dict_payload(value: object) -> dict[str, object]:
     return value if isinstance(value, dict) else {}
+
+
+def _metadata_string(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _metadata_string_list(metadata: dict[str, object], key: str) -> list[str]:
+    value = metadata.get(key)
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _metadata_search_text(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    parts: list[str] = []
+    for key in ["description", "summary", "authors", "published_at", "doi", "arxiv_id", "suggested_tags"]:
+        item = value.get(key)
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, list):
+            parts.extend(child for child in item if isinstance(child, str))
+    return " ".join(parts).casefold()
 
 
 def _normalize_chunk_drafts(chunks: list[SemanticChunkDraft], *, fallback_text: str) -> list[SemanticChunkDraft]:

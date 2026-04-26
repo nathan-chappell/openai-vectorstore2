@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
 import html
@@ -108,12 +108,18 @@ class ResearchImportService:
             await session.refresh(task)
 
         seed_material = await self._material_from_seed(payload)
+        target_folder_id = await self._target_folder_for_request(
+            clerk_user_id=clerk_user_id,
+            request=payload,
+            seed_material=seed_material,
+        )
         seed_source: IngestFinalizeResponse | None = None
         candidates: list[ResearchImportCandidateSummary] = []
         duplicate_count = 0
 
         try:
-            if payload.ingest_seed:
+            should_ingest_seed = payload.ingest_seed and payload.seed_type not in {"topic", "paper"}
+            if should_ingest_seed:
                 seed_source = await self._sources.ingest_source(
                     clerk_user_id=clerk_user_id,
                     filename=seed_material.filename,
@@ -123,7 +129,7 @@ class ResearchImportService:
                     user_guidance=None,
                     origin_surface=origin_surface,
                     origin_thread_id=origin_thread_id,
-                    folder_id=payload.folder_id,
+                    folder_id=target_folder_id,
                     virtual_name=seed_material.filename,
                     metadata={
                         **seed_material.provenance,
@@ -144,10 +150,14 @@ class ResearchImportService:
                         "url": seed_material.provenance.get("url"),
                         "normalized_url": seed_material.normalized_url,
                         "title": seed_material.title,
+                        "description": seed_material.provenance.get("description"),
+                        "summary": seed_material.provenance.get("summary"),
+                        "suggested_tags": seed_material.provenance.get("suggested_tags") or [],
                         "rationale": "Initial seed queued for review instead of direct ingestion.",
                         "score": 1.0,
                         "depth": 0,
-                        "provenance": seed_material.provenance | {
+                        "provenance": seed_material.provenance
+                        | {
                             "content_text": seed_material.payload.decode("utf-8", errors="replace")
                             if seed_material.media_type.startswith("text/")
                             else None,
@@ -156,8 +166,13 @@ class ResearchImportService:
                             "content_hash": seed_material.content_hash,
                         },
                         "content_hash": seed_material.content_hash,
-                    }
+                    },
                 )
+            if target_folder_id is not None:
+                for candidate_input in candidate_inputs:
+                    provenance = cast(dict[str, object], candidate_input.get("provenance") or {})
+                    provenance["target_folder_id"] = target_folder_id
+                    candidate_input["provenance"] = provenance
 
             async with self._database.session() as session:
                 task = await self._task_for_user(session, clerk_user_id=clerk_user_id, task_id=task.id)
@@ -176,11 +191,13 @@ class ResearchImportService:
                     "candidate_count": len(persisted),
                     "duplicate_count": duplicate_count,
                     "seed_source_id": seed_source.source.id if seed_source is not None else None,
+                    "target_folder_id": target_folder_id,
                 }
                 task.result_json = {
                     "candidate_count": len(persisted),
                     "duplicate_count": duplicate_count,
                     "seed_source_id": seed_source.source.id if seed_source is not None else None,
+                    "target_folder_id": target_folder_id,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
@@ -340,16 +357,25 @@ class ResearchImportService:
         for candidate in candidates:
             try:
                 material = await self._material_from_candidate(candidate)
+                candidate_folder_id = payload.folder_id or _candidate_target_folder_id(candidate)
+                candidate_tag_ids = (
+                    payload.tag_ids
+                    if payload.tag_ids is not None
+                    else await self._candidate_suggested_tag_ids(
+                        clerk_user_id=clerk_user_id,
+                        candidate=candidate,
+                    )
+                )
                 ingest_response = await self._sources.ingest_source(
                     clerk_user_id=clerk_user_id,
                     filename=material.filename,
                     declared_media_type=material.media_type,
                     payload=material.payload,
-                    tag_ids=payload.tag_ids if payload.tag_ids is not None else [],
+                    tag_ids=candidate_tag_ids,
                     user_guidance=None,
                     origin_surface=origin_surface,
                     origin_thread_id=origin_thread_id,
-                    folder_id=payload.folder_id,
+                    folder_id=candidate_folder_id,
                     virtual_name=material.filename,
                     metadata={
                         **material.provenance,
@@ -400,6 +426,9 @@ class ResearchImportService:
                     "url": url,
                     "normalized_url": normalized_url,
                     "title": _title_from_url(url),
+                    "description": None,
+                    "summary": None,
+                    "suggested_tags": [],
                     "rationale": "URL explicitly present in the seed material.",
                     "score": 0.9,
                     "depth": 1,
@@ -423,10 +452,17 @@ class ResearchImportService:
                         "url": item.url,
                         "normalized_url": _normalize_url(item.url),
                         "title": item.title,
+                        "description": item.description,
+                        "summary": item.summary,
+                        "suggested_tags": item.suggested_tags,
+                        "authors": item.authors,
+                        "published_at": item.published_at,
+                        "doi": item.doi,
+                        "arxiv_id": item.arxiv_id,
                         "rationale": item.rationale,
                         "score": item.score,
                         "depth": 1,
-                        "provenance": {"discovery_source": "openai_web_search", "url": item.url},
+                        "provenance": _discovery_provenance(item),
                         "content_hash": None,
                     }
                 )
@@ -507,7 +543,8 @@ class ResearchImportService:
                 rationale=cast(str | None, item.get("rationale")),
                 score=cast(float | None, item.get("score")),
                 depth=int(cast(int | str, item.get("depth") or 0)),
-                provenance_json=cast(dict[str, object], item.get("provenance") or {}),
+                provenance_json=cast(dict[str, object], item.get("provenance") or {})
+                | _candidate_metadata_from_input(item),
                 content_hash=content_hash,
                 created_at=now,
                 updated_at=now,
@@ -521,6 +558,34 @@ class ResearchImportService:
 
     async def _material_from_seed(self, request: ResearchImportCreateRequest) -> ResearchMaterial:
         seed_type = request.seed_type
+        if seed_type in {"topic", "paper"}:
+            topic = (request.text or request.title or "").strip()
+            if not topic:
+                raise ValueError("A topic or paper seed requires text or title.")
+            payload = topic.encode("utf-8")
+            content_hash = _content_hash(payload)
+            description = (
+                f"Research library seed topic: {topic}"
+                if seed_type == "topic"
+                else f"Research library seed paper: {topic}"
+            )
+            return ResearchMaterial(
+                filename=f"{_safe_filename(topic)}.txt",
+                media_type="text/plain",
+                payload=payload,
+                source_type="text",
+                title=request.title or topic,
+                normalized_url=None,
+                content_hash=content_hash,
+                provenance={
+                    "seed_type": seed_type,
+                    "topic": topic,
+                    "description": description,
+                    "summary": topic,
+                    "suggested_tags": _seed_suggested_tags(topic),
+                    "content_hash": content_hash,
+                },
+            )
         if seed_type in {"url", "pdf_url", "arxiv_url"}:
             if request.url is None or not request.url.strip():
                 raise ValueError("A URL seed requires url.")
@@ -556,7 +621,9 @@ class ResearchImportService:
         if not text:
             raise ValueError("A text or LinkedIn export seed requires text.")
         bounded_text = text[: self._settings.research_import_max_text_chars]
-        filename = request.filename or ("linkedin-export.txt" if seed_type == "linkedin_export" else "research-seed.txt")
+        filename = request.filename or (
+            "linkedin-export.txt" if seed_type == "linkedin_export" else "research-seed.txt"
+        )
         payload = bounded_text.encode("utf-8")
         content_hash = _content_hash(payload)
         return ResearchMaterial(
@@ -594,6 +661,7 @@ class ResearchImportService:
             url=candidate.url,
             title=candidate.title,
             forced_source_type=cast(ResearchCandidateSourceType, candidate.source_type),
+            candidate_provenance=provenance,
         )
 
     async def _fetch_url_material(
@@ -602,6 +670,7 @@ class ResearchImportService:
         url: str,
         title: str | None,
         forced_source_type: ResearchCandidateSourceType | None,
+        candidate_provenance: dict[str, object] | None = None,
     ) -> ResearchMaterial:
         normalized_url = _normalize_url(_arxiv_pdf_url(url) if forced_source_type == "arxiv" else url)
         fetch_url = normalized_url or url
@@ -634,7 +703,7 @@ class ResearchImportService:
             media_type = "text/plain"
             filename = _filename_from_url(str(response.url), title=title, extension=".txt")
         content_hash = _content_hash(output_payload)
-        return ResearchMaterial(
+        material = ResearchMaterial(
             filename=filename,
             media_type=media_type,
             payload=output_payload,
@@ -652,6 +721,75 @@ class ResearchImportService:
                 "fetched_at": _utcnow().isoformat(),
             },
         )
+        if candidate_provenance is None:
+            return material
+        merged_provenance = dict(candidate_provenance) | material.provenance
+        for key in [
+            "description",
+            "summary",
+            "suggested_tags",
+            "authors",
+            "published_at",
+            "doi",
+            "arxiv_id",
+        ]:
+            if key in candidate_provenance and key not in merged_provenance:
+                merged_provenance[key] = candidate_provenance[key]
+        return replace(material, provenance=merged_provenance)
+
+    async def _target_folder_for_request(
+        self,
+        *,
+        clerk_user_id: str,
+        request: ResearchImportCreateRequest,
+        seed_material: ResearchMaterial,
+    ) -> str | None:
+        if request.folder_id is not None:
+            return request.folder_id
+        if request.seed_type not in {"topic", "paper"} and request.folder_name is None:
+            return None
+        parent = await self._ensure_child_folder(
+            clerk_user_id=clerk_user_id,
+            parent_id=None,
+            name="Research",
+        )
+        return await self._ensure_child_folder(
+            clerk_user_id=clerk_user_id,
+            parent_id=parent,
+            name=request.folder_name or seed_material.title,
+        )
+
+    async def _ensure_child_folder(self, *, clerk_user_id: str, parent_id: str | None, name: str) -> str:
+        folder_name = _safe_folder_name(name)
+        listing = await self._sources.list_filesystem(clerk_user_id=clerk_user_id, folder_id=parent_id)
+        for entry in listing.entries:
+            if entry.kind == "folder" and entry.name.casefold() == folder_name.casefold():
+                return entry.id
+        try:
+            created = await self._sources.create_folder(
+                clerk_user_id=clerk_user_id,
+                parent_id=parent_id,
+                name=folder_name,
+            )
+        except ValueError:
+            refreshed = await self._sources.list_filesystem(clerk_user_id=clerk_user_id, folder_id=parent_id)
+            for entry in refreshed.entries:
+                if entry.kind == "folder" and entry.name.casefold() == folder_name.casefold():
+                    return entry.id
+            raise
+        return created.id
+
+    async def _candidate_suggested_tag_ids(
+        self,
+        *,
+        clerk_user_id: str,
+        candidate: ResearchImportCandidate,
+    ) -> list[str]:
+        tag_names = _candidate_suggested_tags(candidate)
+        if not tag_names:
+            return []
+        tags = await self._sources.ensure_auto_tags(clerk_user_id=clerk_user_id, tag_names=tag_names)
+        return [tag.id for tag in tags]
 
     async def _active_user_and_library(self, session: Any, *, clerk_user_id: str) -> tuple[AppUser, UserLibrary]:
         app_user = await self._sources.ensure_app_user(session, clerk_user_id=clerk_user_id)
@@ -701,6 +839,13 @@ class ResearchImportService:
             url=candidate.url,
             normalized_url=candidate.normalized_url,
             title=candidate.title,
+            description=_provenance_string(candidate.provenance_json, "description"),
+            summary=_provenance_string(candidate.provenance_json, "summary"),
+            suggested_tags=_candidate_suggested_tags(candidate),
+            authors=_provenance_string_list(candidate.provenance_json, "authors"),
+            published_at=_provenance_string(candidate.provenance_json, "published_at"),
+            doi=_provenance_string(candidate.provenance_json, "doi"),
+            arxiv_id=_provenance_string(candidate.provenance_json, "arxiv_id"),
             rationale=candidate.rationale,
             score=candidate.score,
             depth=candidate.depth,
@@ -739,7 +884,7 @@ def _research_task_summary(task: AppTask) -> TaskSummary:
 
 
 def _seed_title(payload: ResearchImportCreateRequest) -> str:
-    return (payload.title or payload.url or payload.filename or payload.seed_type).strip()[:120]
+    return (payload.title or payload.url or payload.filename or payload.text or payload.seed_type).strip()[:120]
 
 
 def _extract_urls(text: str) -> list[str]:
@@ -813,6 +958,11 @@ def _safe_filename(value: str) -> str:
     return (cleaned or "research-source")[:180]
 
 
+def _safe_folder_name(value: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "-", value).strip(" .-")
+    return (cleaned or "Research Library")[:120]
+
+
 def _html_to_text(value: str) -> str:
     with_expanded_links = ANCHOR_HREF_RE.sub(_anchor_label_with_href, value)
     without_scripts = SCRIPT_STYLE_RE.sub("\n", with_expanded_links)
@@ -845,9 +995,15 @@ def _content_hash(payload: bytes) -> str:
 def _discovery_query(*, seed_material: ResearchMaterial, request: ResearchImportCreateRequest) -> str:
     seed_text = seed_material.payload.decode("utf-8", errors="replace")
     trimmed = seed_text[:4_000]
+    instruction = (
+        "Find the primary paper and important cited or closely related public references."
+        if request.seed_type == "paper"
+        else "Find high-quality public sources that form a useful starter research library."
+    )
     return "\n".join(
         part
         for part in [
+            instruction,
             f"Title: {request.title or seed_material.title}",
             f"Seed type: {request.seed_type}",
             f"URL: {seed_material.normalized_url}" if seed_material.normalized_url else None,
@@ -855,3 +1011,99 @@ def _discovery_query(*, seed_material: ResearchMaterial, request: ResearchImport
         ]
         if part
     )
+
+
+def _discovery_provenance(item: Any) -> dict[str, object]:
+    metadata = {
+        "discovery_source": "openai_web_search",
+        "url": item.url,
+        "description": item.description,
+        "summary": item.summary,
+        "suggested_tags": item.suggested_tags,
+        "authors": item.authors,
+        "published_at": item.published_at,
+        "doi": item.doi,
+        "arxiv_id": item.arxiv_id,
+    }
+    return {key: value for key, value in metadata.items() if _has_metadata_value(value)}
+
+
+def _candidate_metadata_from_input(item: dict[str, object]) -> dict[str, object]:
+    metadata: dict[str, object] = {}
+    for key in [
+        "description",
+        "summary",
+        "suggested_tags",
+        "authors",
+        "published_at",
+        "doi",
+        "arxiv_id",
+    ]:
+        value = item.get(key)
+        if _has_metadata_value(value):
+            metadata[key] = value
+    return metadata
+
+
+def _has_metadata_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return bool(value)
+    return True
+
+
+def _candidate_target_folder_id(candidate: ResearchImportCandidate) -> str | None:
+    value = dict(candidate.provenance_json or {}).get("target_folder_id")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _candidate_suggested_tags(candidate: ResearchImportCandidate) -> list[str]:
+    return _provenance_string_list(candidate.provenance_json, "suggested_tags")
+
+
+def _provenance_string(provenance: object, key: str) -> str | None:
+    if not isinstance(provenance, dict):
+        return None
+    value = provenance.get(key)
+    if not isinstance(value, str):
+        return None
+    stripped = value.strip()
+    return stripped or None
+
+
+def _provenance_string_list(provenance: object, key: str) -> list[str]:
+    if not isinstance(provenance, dict):
+        return []
+    value = provenance.get(key)
+    if not isinstance(value, list):
+        return []
+    output: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        cleaned = item.strip()
+        key_value = cleaned.casefold()
+        if not cleaned or key_value in seen:
+            continue
+        seen.add(key_value)
+        output.append(cleaned)
+    return output[:8]
+
+
+def _seed_suggested_tags(topic: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", topic)
+    tags: list[str] = []
+    seen: set[str] = set()
+    for word in words:
+        cleaned = word.strip("-").lower()
+        if cleaned in {"the", "and", "for", "with", "from", "paper", "topic"} or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        tags.append(cleaned)
+        if len(tags) >= 4:
+            break
+    return tags

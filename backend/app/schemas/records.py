@@ -21,8 +21,12 @@ TaskOriginSurface: TypeAlias = Literal["web", "mcp", "chatkit", "system"]
 TagMatchMode: TypeAlias = Literal["all", "any"]
 LocatorType: TypeAlias = Literal["page_range", "line_range", "time_range", "generated"]
 AssetKind: TypeAlias = Literal["image", "voice", "source_copy"]
-ResearchSeedKind: TypeAlias = Literal["text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"]
-ResearchCandidateSourceType: TypeAlias = Literal["text", "url", "html", "pdf", "arxiv", "linkedin_export", "uploaded_file"]
+ResearchSeedKind: TypeAlias = Literal[
+    "topic", "paper", "text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"
+]
+ResearchCandidateSourceType: TypeAlias = Literal[
+    "text", "url", "html", "pdf", "arxiv", "linkedin_export", "uploaded_file"
+]
 ResearchCandidateStatus: TypeAlias = Literal["pending", "approved", "rejected", "ingesting", "ingested", "failed"]
 
 
@@ -98,6 +102,9 @@ class LibrarySourceSummary(BaseModel):
     status: SourceStatus
     byte_size: int
     chunk_count: int
+    description: str | None = None
+    summary: str | None = None
+    suggested_tags: list[str] = Field(default_factory=list)
     error_message: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -120,6 +127,9 @@ class FilesystemEntrySummary(BaseModel):
     status: SourceStatus | None = None
     byte_size: int | None = None
     chunk_count: int | None = None
+    description: str | None = None
+    summary: str | None = None
+    suggested_tags: list[str] = Field(default_factory=list)
     tags: list[TagSummary] = Field(default_factory=list)
     openai_original_file_id: str | None = None
     openai_vector_file_id: str | None = None
@@ -251,6 +261,13 @@ class ResearchDiscoveryCandidateDraft(BaseModel):
     url: str = Field(min_length=1, max_length=2048)
     title: str = Field(min_length=1, max_length=512)
     source_type: ResearchCandidateSourceType = "url"
+    description: str | None = Field(default=None, max_length=1024)
+    summary: str | None = Field(default=None, max_length=4096)
+    suggested_tags: list[str] = Field(default_factory=list, max_length=8)
+    authors: list[str] = Field(default_factory=list, max_length=24)
+    published_at: str | None = Field(default=None, max_length=64)
+    doi: str | None = Field(default=None, max_length=128)
+    arxiv_id: str | None = Field(default=None, max_length=64)
     rationale: str | None = None
     score: float | None = Field(default=None, ge=0, le=1)
 
@@ -260,7 +277,7 @@ class ResearchDiscoveryResult(BaseModel):
 
 
 class ResearchImportCreateRequest(BaseModel):
-    seed_type: ResearchSeedKind = "text"
+    seed_type: ResearchSeedKind = "topic"
     text: str | None = None
     url: str | None = Field(default=None, max_length=2048)
     title: str | None = Field(default=None, max_length=512)
@@ -269,6 +286,7 @@ class ResearchImportCreateRequest(BaseModel):
     media_type: str | None = Field(default=None, max_length=128)
     tag_ids: list[str] = Field(default_factory=list, max_length=8)
     folder_id: str | None = None
+    folder_name: str | None = Field(default=None, max_length=255)
     ingest_seed: bool = True
     discover_references: bool = True
     max_depth: int = Field(default=2, ge=0, le=4)
@@ -284,6 +302,13 @@ class ResearchImportCandidateSummary(BaseModel):
     url: str | None = None
     normalized_url: str | None = None
     title: str
+    description: str | None = None
+    summary: str | None = None
+    suggested_tags: list[str] = Field(default_factory=list)
+    authors: list[str] = Field(default_factory=list)
+    published_at: str | None = None
+    doi: str | None = None
+    arxiv_id: str | None = None
     rationale: str | None = None
     score: float | None = None
     depth: int

@@ -33,10 +33,24 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "FileListResponse": ("SourceListResponse", {"has_more", "page", "page_size", "sources", "total_count"}),
     "GeneratedAsset": ("GeneratedAsset", {"byte_size", "download_url", "filename", "id", "kind"}),
     "IngestFinalizeResponse": ("IngestFinalizeResponse", {"source", "task"}),
-    "LibrarySourceDetail": ("SourceDetail", {"chunks", "ingest_strategy", "metadata", "storage_key", "storage_provider"}),
+    "LibrarySourceDetail": (
+        "SourceDetail",
+        {"chunks", "ingest_strategy", "metadata", "storage_key", "storage_provider"},
+    ),
     "LibrarySourceSummary": (
         "SourceSummary",
-        {"chunk_count", "display_title", "id", "openai_vector_file_id", "source_kind", "status", "tags"},
+        {
+            "chunk_count",
+            "description",
+            "display_title",
+            "id",
+            "openai_vector_file_id",
+            "source_kind",
+            "status",
+            "summary",
+            "suggested_tags",
+            "tags",
+        },
     ),
     "ResearchCandidateIngestRequest": (
         "ResearchCandidateIngestRequest",
@@ -54,11 +68,11 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "ResearchCandidateStatusUpdateResponse": ("ResearchCandidateStatusUpdateResponse", {"candidates"}),
     "ResearchImportCandidateSummary": (
         "ResearchImportCandidateSummary",
-        {"id", "status", "source_type", "task_id", "title", "url"},
+        {"description", "id", "status", "source_type", "suggested_tags", "summary", "task_id", "title", "url"},
     ),
     "ResearchImportCreateRequest": (
         "ResearchImportCreateRequest",
-        {"discover_references", "ingest_seed", "seed_type", "text", "url"},
+        {"discover_references", "folder_name", "ingest_seed", "seed_type", "text", "url"},
     ),
     "ResearchImportResponse": ("ResearchImportResponse", {"candidates", "duplicate_count", "seed_source", "task"}),
     "ResplitSourceRequest": ("ResplitSourceRequest", {"tag_ids", "user_guidance"}),
@@ -309,6 +323,52 @@ async def test_http_research_import_ingests_seed_and_queues_url_candidates(
             )
             assert candidates.status_code == 200
             assert candidates.json()["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_http_research_paper_seed_creates_folder_and_enriched_candidates(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create = await client.post(
+                "/api/research/imports",
+                headers=auth_headers,
+                json={
+                    "seed_type": "paper",
+                    "text": "Attention Is All You Need",
+                    "discover_references": True,
+                    "max_candidates_per_source": 2,
+                    "max_pending_candidates": 2,
+                },
+            )
+            assert create.status_code == 200
+            payload = create.json()
+            assert payload["seed_source"] is None
+            assert len(payload["candidates"]) == 2
+            candidate = payload["candidates"][0]
+            assert candidate["description"] == "Short description for example reference 1."
+            assert candidate["summary"] == "Summary for example reference 1 in a research library."
+            assert candidate["suggested_tags"] == ["research", "reference-1"]
+            assert candidate["authors"] == ["Author 1"]
+            assert candidate["published_at"] == "2024"
+            assert candidate["provenance"]["target_folder_id"]
+
+            root = await client.get("/api/filesystem", headers=auth_headers)
+            assert root.status_code == 200
+            research_folder = next(entry for entry in root.json()["entries"] if entry["name"] == "Research")
+            research_listing = await client.get(
+                "/api/filesystem",
+                headers=auth_headers,
+                params={"folder_id": research_folder["id"]},
+            )
+            assert research_listing.status_code == 200
+            assert [entry["name"] for entry in research_listing.json()["entries"]] == ["Attention Is All You Need"]
 
 
 @pytest.mark.asyncio
@@ -840,7 +900,9 @@ async def test_failed_ingest_cleans_up_tracked_openai_files(
             upload = await client.post(
                 "/api/sources",
                 headers=auth_headers,
-                files={"file": ("failing-notes.txt", b"Vector attach failure should clean up OpenAI files.", "text/plain")},
+                files={
+                    "file": ("failing-notes.txt", b"Vector attach failure should clean up OpenAI files.", "text/plain")
+                },
             )
             assert upload.status_code == 200
             upload_payload = upload.json()
@@ -1077,7 +1139,9 @@ async def test_chatkit_attachment_save_backfills_ingest_task_thread_link(
         )
         thread = ThreadMetadata(id="chat_thread_link_test", created_at=datetime.now(UTC))
         await services.chatkit_server.store.save_thread(thread, context=context)
-        linked_attachment = FileAttachment.model_validate(attachment_payload).model_copy(update={"thread_id": thread.id})
+        linked_attachment = FileAttachment.model_validate(attachment_payload).model_copy(
+            update={"thread_id": thread.id}
+        )
         await services.chatkit_server.store.save_attachment(linked_attachment, context=context)
 
         task_detail = await services.actions.get_task(

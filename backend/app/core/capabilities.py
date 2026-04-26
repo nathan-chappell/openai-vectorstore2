@@ -153,7 +153,7 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
     ),
     AppCapability(
         operation="start_research_import",
-        summary="Seed a research import task and discover reviewable reference candidates.",
+        summary="Seed a research import task from a topic, paper, URL, or text and discover reviewable reference candidates.",
         rest_routes=("POST /api/research/imports",),
         chatkit_tool="start_research_import",
         mcp_tools=("start_research_import",),

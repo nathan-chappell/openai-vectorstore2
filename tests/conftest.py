@@ -100,6 +100,11 @@ class FakeOpenAIGateway:
                 url=f"https://example.com/reference-{index}.txt",
                 title=f"Example reference {index}",
                 source_type="url",
+                description=f"Short description for example reference {index}.",
+                summary=f"Summary for example reference {index} in a research library.",
+                suggested_tags=["research", f"reference-{index}"],
+                authors=[f"Author {index}"],
+                published_at="2024",
                 rationale="Fake discovered reference for importer tests.",
                 score=0.8,
             )

@@ -171,89 +171,51 @@ Tests and operations:
 - Playwright can run with Clerk disabled and local-dev auth.
 - Local live checks can use OpenAI and Railway/S3-compatible storage values from ignored `.env`.
 
-## Next Planned Feature: Research Importer For Fast Library Seeding
+## Next Planned Feature: Research Library Builder
 
-Status: planned and ready to implement as the next capability track.
+Status: active implementation track.
 
 Intent:
 
-Add a persistent in-app research importer that can quickly seed a user's library from a small starting point, then discover and queue related references for review. The first supported flow should prioritize public URLs, PDFs/arXiv-style links, pasted text, uploaded files, and manually exported LinkedIn article content. Do not build authenticated LinkedIn scraping in v1; login-gated scraping would be brittle and should not be bypassed.
+The user should be able to give the agent a topic or paper title, such as "Attention Is All You Need", and have the app build a bounded research library under an obvious workspace folder. The builder should find a primary paper when applicable, discover cited and related references, fetch public materials, ingest selected items through the normal source pipeline, and attach useful metadata such as description, summary, source date, path, tags, file type, provenance, and confidence. A default cap around 50 sources keeps the behavior useful without letting discovery run away.
 
-Decisions retained from the added feature plan:
+Current foundation already completed:
 
-- Build this as an app backend feature, not a one-off Codex skill or hosted-container workflow.
-- Keep `SourceService.ingest_source` as the canonical path for creating sources, tags, tasks, OpenAI files, source-level vector-store files, and optional derived split records.
-- Use OpenAI `web_search` for discovery, query expansion, and cited candidate finding.
-- Keep fetching, normalization, dedupe, approval state, ingestion, and provenance in this backend.
-- Use a review queue before reference ingestion. The initial seed may be ingested directly; discovered references should stay pending until approved.
-- Bound default expansion: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task unless settings are changed.
-- Defer deep-research/report-first flows to a later enhancement. They can eventually produce a curated bibliography that feeds the same importer.
+- [x] Persistent `ResearchImportService`, candidate records, source provenance metadata, REST routes, ChatKit tools, MCP tools, frontend API/types, capability matrix entries, and migration/contract coverage.
+- [x] Seed support for pasted text, public URL, PDF/arXiv URL, uploaded file, and exported LinkedIn HTML/text.
+- [x] Fetching, URL normalization, content hashing, duplicate suppression, approval/reject/ingest transitions, and canonical ingestion through `SourceService.ingest_source`.
+- [x] OpenAI web-search discovery for first-pass candidate collection, bounded by settings.
+- [x] Parser/normalizer tests and backend integration tests for seed-to-candidate and approved-candidate ingestion flows.
 
-Implementation outline:
+Refined product decisions:
 
-- Add a `ResearchImportService` that accepts seeds as public URL, PDF/arXiv URL, uploaded file, pasted text, or exported LinkedIn HTML/text.
-- Add persistent candidate records with URL, title, source type, depth, parent candidate/source, rationale, score, status, linked source ID, provenance metadata, and content hash.
-- Add provenance metadata to source records, likely through a `SourceFile.metadata_json` column, including original URL, DOI/arXiv ID when known, import task/candidate IDs, parent source, content hash, and fetch timestamp.
-- Add fetch/normalize helpers:
-  - PDFs store original PDF bytes.
-  - HTML pages become cleaned Markdown or plain text.
-  - arXiv abstract URLs resolve to PDFs when possible.
-  - LinkedIn imports accept pasted/exported content only.
-  - Paywalls, login walls, and anti-bot gates are not bypassed.
-- Add REST endpoints to create an import task, read task candidates, approve/reject candidates, and ingest approved candidates.
-- Expose matching ChatKit and MCP tools for starting imports, listing candidates, approving/rejecting candidates, and ingesting approved candidates.
-- Add a web Research Import panel or explorer action with seed input, bounded depth/candidate controls, task progress, and candidate approve/reject/ingest actions.
-- Update `backend/app/core/capabilities.py`, Pydantic schemas, frontend TypeScript contracts, task kind unions, migrations, and docs to include `research_import`.
+- Build the library builder on top of the importer instead of creating a parallel agent path.
+- Treat a topic or paper title as a first-class seed. It should not be ingested as a tiny text file unless the user explicitly asks; it should primarily drive discovery.
+- Create or reuse a workspace folder for each builder run, using a clean title such as `/Research/Attention Is All You Need` when no folder is supplied.
+- Store richer metadata on both candidates and ingested source files through `provenance_json` and `SourceFile.metadata_json`: description, summary, suggested/model tags, authors, published date when known, DOI/arXiv ID when known, discovery query, discovery depth, parent source/candidate, normalized URL, fetched URL, content hash, and fetch timestamp.
+- Use actual source tags for high-confidence model tags when ingesting builder-created sources, while retaining raw suggested tags in metadata.
+- Keep review mode available, but add an agent-facing build mode that can approve and ingest bounded candidates automatically when requested.
+- Preserve the non-bypass policy: login walls, paywalls, and anti-bot gates become failed/degraded candidates, never scraping targets to work around.
 
-Test plan:
+Implementation track:
 
-- Integration test that a pasted/text seed with explicit URLs creates a `research_import` task, ingests the seed when requested, and leaves references as pending candidates.
-- Integration test that approving candidates and ingesting approved items creates normal source records through `SourceService.ingest_source`.
-- Unit tests for URL/PDF/arXiv/HTML normalization, dedupe/content hash behavior, and LinkedIn exported HTML cleanup.
-- Contract tests for REST schemas, frontend types, ChatKit/MCP tool names, capability matrix, and migrations.
-- Existing ingest, search, QA, vector attribute, PDF batch, MCP, and Playwright checks should continue to pass.
+- [x] Add topic/paper seed contracts and discovery prompting so a bare title can find primary papers plus useful references.
+- [x] Add candidate/source metadata fields in API responses: `description`, `summary`, `suggested_tags`, and optional publication/authorship fields without requiring a table migration yet.
+- [x] Create or reuse a research folder automatically for topic/paper runs, and route seed/candidate ingestion into that folder.
+- [ ] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, optionally auto-approves and ingests public items up to `max_sources`, and records progress/results on the task.
+- [ ] Extend discovery beyond one hop by deriving follow-up queries from ingested/candidate metadata, bounded by `max_depth`, `max_candidates_per_source`, and `max_pending_candidates`.
+- [ ] Add a compact web Research Import/Library Builder panel near explorer upload with seed input, max size/depth controls, task status, and candidate review actions.
+- [ ] Add MCP Apps UI resources for candidate review/library building, not just primitive tools.
+- [ ] Add ChatKit client/widget coordination so the agent can open the research builder panel and show candidate/task state while it works.
+- [ ] Add a research action over the built files: ask a question, retrieve evidence, and return cited results with source references.
 
-## Research Capability Implementation Track
+Verification plan:
 
-Status: backend foundation completed; web review surface and deeper expansion behavior remain active follow-ups.
-
-Phase 1: schema, contracts, and drift guards.
-
-- [ ] Add Alembic migration and ORM records for research import candidates, with fields for library, owner/task, parent source/candidate, URL, title, source type, depth, rationale, score, status, linked source, provenance metadata, content hash, and timestamps.
-- [ ] Add source provenance storage, likely `SourceFile.metadata_json`, for original URL, normalized URL, DOI/arXiv ID when known, import task/candidate IDs, parent source, content hash, fetch timestamp, and importer version.
-- [ ] Add Pydantic request/response models for create import task, list candidates, update candidate status, and ingest approved candidates.
-- [ ] Extend task kind unions, frontend TypeScript contracts, `backend/app/core/capabilities.py`, and MCP/ChatKit operation names with `research_import`.
-- [ ] Add migration drift and contract tests before wiring UI.
-
-Phase 2: seed ingestion, normalization, and dedupe.
-
-- [ ] Implement `ResearchImportService` with pasted text, public URL, PDF/arXiv URL, uploaded file, and exported LinkedIn HTML/text seed inputs.
-- [ ] Normalize URLs and content, compute content hashes, and avoid duplicate pending candidates or duplicate ingested sources inside a library.
-- [ ] Route every approved or directly ingested seed through `SourceService.ingest_source`; do not create a parallel ingest path or implicit semantic split path.
-- [ ] Keep login walls, paywalls, and anti-bot gates as explicit failed/degraded candidate states rather than bypassing them.
-- [x] Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
-
-Phase 3: OpenAI discovery and candidate review.
-
-- [ ] Use OpenAI `web_search` to expand seed queries and discover cited/related candidate URLs with rationale and score.
-- [ ] Enforce default bounds: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task.
-- [ ] Persist candidates as pending records and expose approve/reject/ingest transitions.
-- [ ] Record task state for discovery progress, candidate counts, degraded fetches, and ingestion results.
-- [ ] Add integration tests for seed-to-pending-candidates and approved-candidates-to-normal-sources.
-
-Phase 4: surfaces.
-
-- [ ] Add REST routes for starting imports, reading candidates, approving/rejecting candidates, and ingesting approved candidates.
-- [ ] Add ChatKit tools so the agent can start an import, inspect candidates, approve/reject items, ingest approved items, and report progress.
-- [ ] Add MCP tools with the same app-core operation mapping.
-- [ ] Add a compact web Research Import action/panel near explorer upload, with seed input, bounded controls, task progress, and candidate review.
-- [ ] Add Playwright coverage for the browser review flow once fake or deterministic live discovery is available.
-
-Phase 5: documentation and operations.
-
-- [ ] Document importer limits, provenance, non-bypass policy for gated content, and expected user review workflow.
-- [ ] Add operational notes for cleanup/retry of failed import tasks and stale pending candidates.
-- [ ] Re-run `./.venv/bin/pyright`, focused backend tests, `npm run typecheck`, `npm run build`, and targeted Playwright checks.
+- [x] Integration test: topic seed with fake discovery creates a research folder, pending candidates, and enriched metadata without ingesting the raw topic as a source.
+- [ ] Integration test: build mode auto-ingests approved/fake public candidates into the research folder through `SourceService.ingest_source`.
+- [ ] Contract tests: backend schemas, frontend TypeScript, REST, ChatKit tools, MCP tools, and capability matrix stay aligned.
+- [ ] UI/Playwright test: user starts a research library build from the browser, reviews candidates, and sees ingested files in the created folder.
+- [ ] Re-run `./.venv/bin/pyright`, focused backend tests, `npm run typecheck`, `npm run build`, and targeted Playwright checks for each checkpoint.
 
 ## Browser And Design Fix Queue
 
@@ -268,7 +230,7 @@ Status: active intake; implement items as concrete plans arrive.
 
 ## Near-Term Follow-Ups
 
-- Implement Research Importer as the next substantial feature track.
+- Implement Research Library Builder as the next substantial feature track, starting with topic/paper seeds, richer metadata, automatic folder placement, and agent-facing build mode.
 - Work through the Browser And Design Fix Queue as new instructions arrive.
 - Add focused Playwright flows for normal file-browser behavior: create folder, upload text/json, select files, ask ChatKit a grounded question, reveal/go-to-location, rename/move, and delete.
 - Add backend integration coverage for recursive folder delete, move/rename reindexing, selected-file preparation, and ChatKit client-tool effects.
