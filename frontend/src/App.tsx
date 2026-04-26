@@ -2572,15 +2572,26 @@ const ChatPane = memo(function ChatPane({
           : "Select indexed files, then ask me to search, answer, synthesize, image, or narrate from them.",
         prompts: [
           { label: "Answer from files", prompt: "Answer my question using indexed file matches and cite the source titles.", icon: "check-circle" },
+          { label: "Build research library", prompt: "Build a research library for this topic or paper title, dedupe sources, and show progress in the file browser.", icon: "book-open" },
           { label: "Search trails", prompt: "Search the indexed files around this topic and explain the useful trails.", icon: "sparkle" },
           { label: "Generate from evidence", prompt: "Use retrieved indexed file matches as evidence, and separate facts from speculation.", icon: "bolt" },
         ],
       },
       composer: {
-        placeholder: "Ask the indexed files...",
+        placeholder: "Ask files or build a research library...",
         attachments: {
           enabled: false,
         },
+        tools: [
+          {
+            id: "build_research_library",
+            label: "Build research library",
+            shortLabel: "Research",
+            icon: "book-open",
+            pinned: true,
+            placeholderOverride: "Topic or paper title to build into a research library",
+          },
+        ],
         dictation: { enabled: false },
         models: MODEL_CHOICES.map((choice) => ({ ...choice, default: choice.id === "balanced" })),
       },

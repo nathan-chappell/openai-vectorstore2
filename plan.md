@@ -36,6 +36,7 @@ Decision:
 - Duplicate handling is part of the builder contract: suppress duplicate URLs before persistence, suppress duplicate content hashes after download, and report skipped duplicate candidates clearly instead of creating duplicate files.
 - ChatKit should be the preferred orchestration surface for research builds. It should stream status updates as discovery, reference expansion, download, duplicate skipping, and indexing progresses.
 - The file browser and research panel should show progress affordances for downloading/indexing states so files entering the container feel alive rather than appearing only after completion.
+- The ChatKit agent and pinned composer tool are the primary way to start research builds; the browser and MCP Apps panels should mainly mirror status and remain as fallback/manual surfaces.
 
 ## Current Direction Change: Source-File Vector Indexing
 
@@ -208,6 +209,7 @@ Refined product decisions:
 - Use actual source tags for high-confidence model tags when ingesting builder-created sources, while retaining raw suggested tags in metadata.
 - Keep lower-level candidate review tools available for debugging/manual importer work, but make the normal builder a direct discovery-to-ingestion workflow with skipped duplicates.
 - Use ChatKit progress updates for build stages and per-reference download/index state; the browser panel should render candidate/file progress rather than approval controls.
+- Expose research building as a pinned ChatKit composer tool and starter prompt so users naturally begin the workflow through the agent.
 - Preserve the non-bypass policy: login walls, paywalls, and anti-bot gates become failed/degraded candidates, never scraping targets to work around.
 
 Implementation track:
@@ -244,6 +246,7 @@ Completed in this pass:
 - Changed build mode to ingest pending candidates directly while keeping lower-level approval primitives available for manual importer/debug use.
 - Added fetch-time duplicate detection by normalized URL and downloaded content hash, marking skipped candidates as `duplicate` and avoiding duplicate source files.
 - Added ChatKit progress callbacks for discovery, depth expansion, downloads, duplicate skips, and indexing queue updates.
+- Added a pinned ChatKit composer tool and starter prompt for research builds, making ChatKit the primary start point.
 - Added candidate progress bars in the research panel and file-status progress bars in the file browser for processing/ready/failed states.
 - Updated capability descriptions, ChatKit instructions, MCP Apps copy, TypeScript contracts, and Playwright coverage for the direct-build workflow.
 
@@ -266,6 +269,7 @@ Status: active intake; implement items as concrete plans arrive.
 - [x] Add a draggable horizontal splitter between the explorer/preview region and ChatKit, with sensible min/max widths and persisted preference.
 - [ ] Keep the file explorer dense, fast, and familiar: normal folder/file rows, tight metadata, simple affordances, no marketing-style cards or explanatory copy.
 - [x] Validate hidden-preview and splitter fixes with Playwright desktop and mobile screenshots before marking complete.
+- [ ] Add compact file-browser keyboard shortcuts: `F2` renames the focused item, `Backspace` navigates up one folder, and `Delete` deletes the current selection.
 - [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
 ## Near-Term Follow-Ups

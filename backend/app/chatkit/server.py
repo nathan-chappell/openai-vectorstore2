@@ -1233,6 +1233,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
             "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "When the user asks to research a topic, gather papers, or build a library from a paper title, use build_research_library as the primary path and let the browser panel mirror progress. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Research build tools update the browser's research builder panel so the user can inspect candidate, duplicate, download, and indexing state. "
