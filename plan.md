@@ -25,6 +25,7 @@ The capabilities to preserve and expose are OpenAI vector-store backed indexing/
 - [x] Convert ingestion/search from semantic chunk publication to source-file vector-store indexing.
 - [x] Improve backend OpenAI observability so Responses/ChatKit turns log clickable platform log URLs and local artifact debugging has a Codex skill.
 - [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
+- [ ] Add delete status/progress UX: show a clear deleting state after confirmation, expose recursive folder/source cleanup progress when possible, keep affected rows/modal/status text honest during long deletes, and report deleted/failed counts at completion.
 
 ## Current Direction Change: OpenAI Observability And Debugging
 
