@@ -414,12 +414,16 @@ Current verification commands:
 
 - Should Research Importer provenance be stored directly on `SourceFile.metadata_json`, in separate import/candidate tables only, or both?
 - Should ChatKit structured cards be built with ChatKit/MCP Apps widgets now, or should the next pass stay text/tool-first until importer behavior stabilizes?
+- What ChatKit surface should carry custom source annotations? Official docs cover web-search `message.content[0].annotations` and composer/entity `onClick` callbacks, but this pass did not find a documented custom inline annotation hook for app-owned tool answers; prefer native message annotations if exposed, otherwise build a ChatKit/MCP Apps evidence widget whose source chips call `reveal_file`.
 - Should MCP eventually add a higher-level `ask_library_agent` tool, or should it stay primitive-tool-first unless a real host needs the wrapper?
 
 ## Official References Checked
 
 - ChatKit custom backend: https://developers.openai.com/api/docs/guides/custom-chatkit
 - ChatKit frontend embedding: https://developers.openai.com/api/docs/guides/chatkit
+- ChatKit entity callbacks: https://developers.openai.com/api/docs/guides/chatkit-themes#enable-mentions-in-the-composer-with-entity-tags
+- Responses web-search output annotations: https://developers.openai.com/api/docs/guides/tools-web-search#output-and-citations
+- Citation formatting guidance: https://developers.openai.com/api/docs/guides/citation-formatting
 - MCP Apps resource templates and MIME type: https://developers.openai.com/apps-sdk/build/mcp-server#step-1--register-a-component-template
 - MCP Apps data-tool/render-tool split: https://developers.openai.com/apps-sdk/build/chatgpt-ui#decoupled-pattern
 - MCP Apps tool descriptor metadata: https://developers.openai.com/apps-sdk/reference#_meta-fields-on-tool-descriptor
