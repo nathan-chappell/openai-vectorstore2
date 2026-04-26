@@ -1135,9 +1135,13 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
     serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
     assert "Indexed Files" in serialized
     assert "Query files, filenames, kinds, status" in serialized
+    assert "Research Library Builder" in serialized
+    assert "Build review library" in serialized
+    assert "Review Candidates" in serialized
     assert "Search indexed files with the selected tag scope" in serialized
     assert "Recent Tasks" in serialized
     assert "selectedTagIds" in serialized
+    assert "researchCandidates" in serialized
 
 
 @pytest.mark.asyncio

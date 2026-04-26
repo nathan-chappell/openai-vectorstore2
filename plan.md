@@ -205,7 +205,7 @@ Implementation track:
 - [x] Add an agent-facing `build_research_library` operation that creates the folder, discovers candidates, optionally auto-approves and ingests public items up to `max_sources`, and records progress/results on the task.
 - [x] Add a compact web Research Import/Library Builder panel near explorer upload with seed input, max size/depth controls, task status, and candidate review actions.
 - [x] Extend discovery beyond one hop by deriving follow-up queries from candidate metadata, bounded by `max_depth`, `max_candidates_per_source`, and `max_pending_candidates`.
-- [ ] Add MCP Apps UI resources for candidate review/library building, not just primitive tools.
+- [x] Add MCP Apps UI resources for candidate review/library building, not just primitive tools.
 - [ ] Add ChatKit client/widget coordination so the agent can open the research builder panel and show candidate/task state while it works.
 - [ ] Add a research action over the built files: ask a question, retrieve evidence, and return cited results with source references.
 

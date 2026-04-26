@@ -1074,16 +1074,92 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
         )
         return response.model_dump(mode="json")
 
+    @sources_app.tool("build_research_library_for_ui")
+    async def build_research_library_for_ui_tool(
+        query: str,
+        ctx: Context,
+        seed_type: Literal["topic", "paper"] = "topic",
+        max_depth: Annotated[int, Field(ge=0, le=4)] = 2,
+        max_sources: Annotated[int, Field(ge=1, le=50)] = 12,
+    ) -> dict[str, Any]:
+        del ctx
+        response = await services.research.build_library(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            payload=ResearchLibraryBuildRequest(
+                seed_type=seed_type,
+                query=query,
+                title=query,
+                auto_ingest=False,
+                discover_references=True,
+                max_depth=max_depth,
+                max_sources=max_sources,
+                max_candidates_per_source=min(max_sources, 8),
+                max_pending_candidates=max(50, max_sources * max(1, max_depth + 1)),
+            ),
+            origin_surface="mcp_app",
+        )
+        return response.model_dump(mode="json")
+
+    @sources_app.tool("refresh_research_candidates_for_ui")
+    async def refresh_research_candidates_for_ui_tool(
+        ctx: Context,
+        task_id: str | None = None,
+        status: ResearchCandidateStatus | None = None,
+    ) -> dict[str, Any]:
+        del ctx
+        response = await services.research.list_candidates(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            task_id=task_id,
+            status=status,
+            page=1,
+            page_size=50,
+        )
+        return response.model_dump(mode="json")
+
+    @sources_app.tool("update_research_candidate_status_for_ui")
+    async def update_research_candidate_status_for_ui_tool(
+        candidate_ids: list[str],
+        status: Literal["approved", "rejected", "pending"],
+        ctx: Context,
+    ) -> dict[str, Any]:
+        del ctx
+        response = await services.research.update_candidate_status(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            candidate_ids=candidate_ids,
+            status=status,
+        )
+        return response.model_dump(mode="json")
+
+    @sources_app.tool("ingest_research_candidates_for_ui")
+    async def ingest_research_candidates_for_ui_tool(
+        ctx: Context,
+        task_id: str | None = None,
+        candidate_ids: list[str] | None = None,
+        folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        del ctx
+        response = await services.research.ingest_approved_candidates(
+            clerk_user_id=current_mcp_clerk_user_id(),
+            payload=ResearchCandidateIngestRequest(
+                candidate_ids=candidate_ids,
+                task_id=task_id,
+                folder_id=folder_id,
+            ),
+            origin_surface="mcp_app",
+        )
+        return response.model_dump(mode="json")
+
     @sources_app.ui(
         name="sources",
         title="Indexed Files",
-        description="Browse the current user's indexed files and inspect vector search output.",
+        description="Browse indexed files, build research libraries, and review discovered candidates.",
         annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
     )
     async def sources(ctx: Context) -> PrefabApp:
         initial_sources = await refresh_sources_tool(ctx)
         initial_tags = await refresh_tags_tool(ctx)
         initial_tasks = await refresh_tasks_tool(ctx)
+        initial_research_candidates = await refresh_research_candidates_for_ui_tool(ctx)
         with Card(css_class="max-w-5xl mx-auto") as view:
             with CardHeader(), Column(gap=1):
                 CardTitle("Indexed Files")
@@ -1196,6 +1272,152 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             )
                 Separator()
                 with Column(gap=2):
+                    with Row(gap=2, align="center"):
+                        h3("Research Library Builder")
+                        Button(
+                            "Refresh candidates",
+                            variant="secondary",
+                            on_click=CallTool(
+                                "refresh_research_candidates_for_ui",
+                                on_success=SetState("researchCandidates", RESULT),
+                                on_error=ShowToast(ERROR, variant="error"),
+                            ),
+                        )
+                    with Form(
+                        on_submit=CallTool(
+                            "build_research_library_for_ui",
+                            arguments={
+                                "query": EVENT.formData.research_query,
+                                "seed_type": EVENT.formData.research_seed_type,
+                                "max_depth": EVENT.formData.research_max_depth,
+                                "max_sources": EVENT.formData.research_max_sources,
+                            },
+                            on_success=[
+                                SetState("researchBuild", RESULT),
+                                CallTool(
+                                    "refresh_research_candidates_for_ui",
+                                    arguments={"task_id": RESULT.task.id},  # ty:ignore[invalid-argument-type]
+                                    on_success=SetState("researchCandidates", RESULT),
+                                    on_error=ShowToast(ERROR, variant="error"),
+                                ),
+                                ShowToast("Research library candidates ready", variant="success"),
+                            ],
+                            on_error=ShowToast(ERROR, variant="error"),
+                        )
+                    ):
+                        with Row(gap=2, align="center"):
+                            Input(
+                                name="research_query",
+                                input_type="search",
+                                placeholder="Topic or paper title",
+                            )
+                            Input(
+                                name="research_seed_type",
+                                placeholder="topic or paper",
+                                value="topic",
+                            )
+                            Input(
+                                name="research_max_sources",
+                                input_type="number",
+                                value="12",
+                            )
+                            Input(
+                                name="research_max_depth",
+                                input_type="number",
+                                value="2",
+                            )
+                            Button("Build review library", button_type="submit")
+                    with If(STATE.researchBuild):
+                        with Card(css_class="border border-slate-200"):
+                            with CardContent(), Column(gap=2):
+                                with Row(gap=2, align="center"):
+                                    Text(STATE.researchBuild.task.title)  # ty:ignore[invalid-argument-type]
+                                    Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                    Badge(STATE.researchBuild.target_folder_id, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
+                                Button(
+                                    "Ingest approved",
+                                    on_click=CallTool(
+                                        "ingest_research_candidates_for_ui",
+                                        arguments={
+                                            "task_id": STATE.researchBuild.task.id,
+                                            "folder_id": STATE.researchBuild.target_folder_id,
+                                        },
+                                        on_success=[
+                                            SetState("researchIngest", RESULT),
+                                            CallTool(
+                                                "refresh_research_candidates_for_ui",
+                                                arguments={"task_id": STATE.researchBuild.task.id},
+                                                on_success=SetState("researchCandidates", RESULT),
+                                                on_error=ShowToast(ERROR, variant="error"),
+                                            ),
+                                            CallTool(
+                                                "refresh_sources",
+                                                arguments={"query": STATE.sources.query, "tag_ids": STATE.selectedTagIds},
+                                                on_success=SetState("sources", RESULT),
+                                                on_error=ShowToast(ERROR, variant="error"),
+                                            ),
+                                            CallTool(
+                                                "refresh_tasks",
+                                                on_success=SetState("tasks", RESULT),
+                                                on_error=ShowToast(ERROR, variant="error"),
+                                            ),
+                                            ShowToast("Approved candidates queued for ingest", variant="success"),
+                                        ],
+                                        on_error=ShowToast(ERROR, variant="error"),
+                                    ),
+                                )
+                    with Row(gap=2, align="center"):
+                        h3("Review Candidates")
+                        Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
+                    with ForEach(STATE.researchCandidates.candidates) as candidate:
+                        with Card(css_class="border border-slate-200"):
+                            with CardContent(), Column(gap=2):
+                                with Row(gap=2, align="center"):
+                                    Text(candidate.title)  # ty:ignore[invalid-argument-type]
+                                    Badge(candidate.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                    Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
+                                Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
+                                with Row(gap=2, align="center"):
+                                    Button(
+                                        "Approve",
+                                        variant="secondary",
+                                        on_click=CallTool(
+                                            "update_research_candidate_status_for_ui",
+                                            arguments={"candidate_ids": [candidate.id], "status": "approved"},  # ty:ignore[invalid-argument-type]
+                                            on_success=[
+                                                CallTool(
+                                                    "refresh_research_candidates_for_ui",
+                                                    arguments={"task_id": candidate.task_id},  # ty:ignore[invalid-argument-type]
+                                                    on_success=SetState("researchCandidates", RESULT),
+                                                    on_error=ShowToast(ERROR, variant="error"),
+                                                ),
+                                                ShowToast("Candidate approved", variant="success"),
+                                            ],
+                                            on_error=ShowToast(ERROR, variant="error"),
+                                        ),
+                                    )
+                                    Button(
+                                        "Reject",
+                                        variant="secondary",
+                                        on_click=CallTool(
+                                            "update_research_candidate_status_for_ui",
+                                            arguments={"candidate_ids": [candidate.id], "status": "rejected"},  # ty:ignore[invalid-argument-type]
+                                            on_success=[
+                                                CallTool(
+                                                    "refresh_research_candidates_for_ui",
+                                                    arguments={"task_id": candidate.task_id},  # ty:ignore[invalid-argument-type]
+                                                    on_success=SetState("researchCandidates", RESULT),
+                                                    on_error=ShowToast(ERROR, variant="error"),
+                                                ),
+                                                ShowToast("Candidate rejected", variant="success"),
+                                            ],
+                                            on_error=ShowToast(ERROR, variant="error"),
+                                        ),
+                                    )
+                Separator()
+                with Column(gap=2):
                     h3("Chunk Query")
                     with Form(
                         on_submit=CallTool(
@@ -1269,6 +1491,9 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                 "selectedTagIds": [],
                 "selectedSource": None,
                 "searchResults": None,
+                "researchBuild": None,
+                "researchCandidates": initial_research_candidates,
+                "researchIngest": None,
             },
         )
 
