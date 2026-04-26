@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from backend.app.chatkit.server import selected_scope
+from backend.app.chatkit.server import chatkit_progress_update_event, selected_scope
 from backend.app.chatkit.store import VectorstoreChatContext
 
 
@@ -28,3 +28,12 @@ def test_selected_scope_preserves_explicit_app_source_ids() -> None:
     )
 
     assert selected_scope(context, ["source_b", "file-openai-a"]) == ["source_b"]
+
+
+def test_chatkit_progress_update_event_maps_research_icons() -> None:
+    assert chatkit_progress_update_event("library", "Build").icon == "book-open"
+    assert chatkit_progress_update_event("folder", "Folder").icon == "lucide:folder"
+    assert chatkit_progress_update_event("download", "Download").icon == "lucide:download"
+    assert chatkit_progress_update_event("copy-check", "Duplicate").icon == "lucide:copy-check"
+    assert chatkit_progress_update_event("alert-circle", "Failed").icon == "info"
+    assert chatkit_progress_update_event("search", "Search").icon == "lucide:search"

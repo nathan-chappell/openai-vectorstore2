@@ -2,8 +2,10 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
+import logging
 import mimetypes
 from pathlib import Path
+from time import perf_counter
 from typing import Literal
 
 from chatkit.server import StreamingResult
@@ -59,6 +61,8 @@ from backend.app.schemas import (
 )
 from backend.app.services import AuthenticatedUser
 from backend.app.web_auth import require_active_web_user, require_authenticated_web_user
+
+logger = logging.getLogger(__name__)
 
 
 def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
@@ -566,18 +570,46 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         request: Request,
         user: AuthenticatedUser = Depends(require_active_web_user),
     ) -> Response:
+        started_at = perf_counter()
         raw_request = await request.body()
-        context = await services.chatkit_server.build_request_context(
-            raw_request,
-            clerk_user_id=user.clerk_user_id,
-            user_email=user.email,
-            display_name=user.display_name,
-            bearer_token=user.bearer_token,
-            request_app=request.app,
+        logger.info(
+            "chatkit_http_request_started clerk_user_id=%s bytes=%s",
+            user.clerk_user_id,
+            len(raw_request),
         )
-        result = await services.chatkit_server.process(raw_request, context)
+        try:
+            context = await services.chatkit_server.build_request_context(
+                raw_request,
+                clerk_user_id=user.clerk_user_id,
+                user_email=user.email,
+                display_name=user.display_name,
+                bearer_token=user.bearer_token,
+                request_app=request.app,
+            )
+            result = await services.chatkit_server.process(raw_request, context)
+        except Exception:
+            logger.exception(
+                "chatkit_http_request_failed clerk_user_id=%s bytes=%s duration_ms=%.1f",
+                user.clerk_user_id,
+                len(raw_request),
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
         if isinstance(result, StreamingResult):
+            logger.info(
+                "chatkit_http_stream_started clerk_user_id=%s bytes=%s duration_ms=%.1f",
+                user.clerk_user_id,
+                len(raw_request),
+                (perf_counter() - started_at) * 1000,
+            )
             return StreamingResponse(result, media_type="text/event-stream")
+        logger.info(
+            "chatkit_http_request_completed clerk_user_id=%s bytes=%s response_bytes=%s duration_ms=%.1f",
+            user.clerk_user_id,
+            len(raw_request),
+            len(result.json),
+            (perf_counter() - started_at) * 1000,
+        )
         return Response(content=result.json, media_type="application/json")
 
     @app.post("/api/chatkit/attachments")

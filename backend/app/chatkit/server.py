@@ -63,6 +63,30 @@ STOP_AT_TOOL_NAMES = [
 
 ChatKitToolContext = ToolContext[ChatKitAgentContext[VectorstoreChatContext]]
 
+CHATKIT_PROGRESS_ICON_ALIASES = {
+    "alert-circle": "info",
+    "copy-check": "lucide:copy-check",
+    "download": "lucide:download",
+    "folder": "lucide:folder",
+    "library": "book-open",
+}
+
+
+def chatkit_progress_update_event(icon: str, text: str) -> ProgressUpdateEvent:
+    normalized_icon = icon.strip()
+    if not normalized_icon:
+        return ProgressUpdateEvent(text=text)
+    if normalized_icon.startswith(("lucide:", "vendor:")):
+        return ProgressUpdateEvent(icon=normalized_icon, text=text)
+    aliased_icon = CHATKIT_PROGRESS_ICON_ALIASES.get(normalized_icon)
+    if aliased_icon is not None:
+        return ProgressUpdateEvent(icon=aliased_icon, text=text)
+    return ProgressUpdateEvent(icon=f"lucide:{normalized_icon}", text=text)
+
+
+async def stream_chatkit_progress(ctx: ChatKitToolContext, icon: str, text: str) -> None:
+    await ctx.context.stream(chatkit_progress_update_event(icon, text))
+
 
 class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     """ChatKit surface that talks to app services directly instead of looping through MCP."""
@@ -741,7 +765,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
-                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
+                progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(
@@ -772,9 +796,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 if seed_type in {"topic", "paper", "text", "url", "pdf_url", "arxiv_url", "linkedin_export"}
                 else "topic"
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="library", text="Building a foldered research library from the seed.")
-            )
+            await stream_chatkit_progress(ctx, "library", "Building a foldered research library from the seed.")
             response = await self._research.build_library(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=ResearchLibraryBuildRequest(
@@ -791,7 +813,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
-                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
+                progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(
@@ -891,7 +913,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
-                progress_callback=lambda icon, text: ctx.context.stream(ProgressUpdateEvent(icon=icon, text=text)),
+                progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
             await ctx.context.stream(
                 ProgressUpdateEvent(

@@ -28,7 +28,7 @@ The capabilities to preserve and expose are OpenAI vector-store backed indexing/
 
 ## Current Direction Change: OpenAI Observability And Debugging
 
-Status: implementation pass completed.
+Status: follow-up bugfix pass completed.
 
 Decision:
 
@@ -44,6 +44,14 @@ Implementation tasks:
 - [x] Expand ChatKit turn logging to include every raw response ID with clickable platform URLs plus partial IDs on failures.
 - [x] Add an `openai-log-debugger` Codex skill with a script that fetches Responses and Conversations artifacts from logged IDs or platform URLs.
 - [x] Run focused backend verification, update this checkpoint with results, then commit and push.
+- [x] Fix ChatKit progress update icon validation for research-builder progress events and add request-level ChatKit HTTP logging.
+
+Follow-up verification completed:
+
+- `./.venv/bin/ruff check backend/app/chatkit/server.py backend/app/main.py tests/test_chatkit_scope.py`
+- `./.venv/bin/pytest tests/test_chatkit_scope.py tests/test_logging.py -q`
+- `./.venv/bin/pyright`
+- Validated all current research-service progress icons through the ChatKit progress adapter.
 
 Verification completed in this pass:
 
