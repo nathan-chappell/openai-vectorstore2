@@ -137,6 +137,7 @@ Status: complete for the current baseline.
 - Client-tool calls coordinate file selection, file reveal, search changes, and research builder state.
 - ChatKit treats selected files as retrieval scope first; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
 - ChatKit Responses requests enable server-side context compaction with a configurable compact threshold.
+- ChatKit can name threads early through a side-effect tool that updates thread title metadata.
 
 ### Logging And Debugging
 

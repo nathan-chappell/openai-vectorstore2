@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, datetime
 import json
 import logging
 from time import perf_counter
@@ -61,6 +62,7 @@ MAX_AGENT_TURNS = 20
 CHATKIT_SELECTED_FILE_INPUT_LIMIT = 2
 CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES = 250_000
 CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES = 350_000
+THREAD_TITLE_MAX_CHARS = 72
 STOP_AT_TOOL_NAMES = [
     "set_file_selection",
     "reveal_file",
@@ -526,6 +528,26 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         return {tool.name for tool in self._build_tools()}
 
     def _build_tools(self) -> list[Tool]:
+        @function_tool(name_override="name_thread")
+        async def name_thread_tool(ctx: ChatKitToolContext, title: str) -> dict[str, object]:
+            """Set a concise user-facing title for the current ChatKit thread."""
+            request_context = ctx.context.request_context
+            thread = ctx.context.thread
+            previous_title = thread.title
+            next_title = apply_agent_thread_title(thread, title)
+            await self.store.save_thread(thread, request_context)
+            logger.info(
+                "chat_thread_named thread=%s title=%s changed=%s",
+                thread.id,
+                next_title,
+                previous_title != next_title,
+            )
+            return {
+                "thread_id": thread.id,
+                "title": next_title,
+                "changed": previous_title != next_title,
+            }
+
         @function_tool(name_override="list_sources")
         async def list_sources_tool(
             ctx: ChatKitToolContext,
@@ -1440,6 +1462,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             return response.model_dump(mode="json")
 
         return [
+            name_thread_tool,
             list_sources_tool,
             list_filesystem_tool,
             find_files_tool,
@@ -1488,6 +1511,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
             "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "When a conversation starts or the topic becomes clear, call name_thread early with a concise 3-8 word title. "
             "When the user asks to research a topic, gather papers, or build a library from a paper title, use build_research_library as the primary path and let the browser panel mirror progress. "
             "The app's file explorer is the primary source of file input and selection; selected files are retrieval scope first, and only small ready files may be attached to a user turn as OpenAI file inputs. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
@@ -1517,6 +1541,25 @@ def _string_or_none(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
+def clean_thread_title(title: str) -> str:
+    cleaned = " ".join(title.split()).strip(" -:;,.\"'")
+    if not cleaned:
+        raise ValueError("Thread title is required.")
+    if len(cleaned) <= THREAD_TITLE_MAX_CHARS:
+        return cleaned
+    return cleaned[:THREAD_TITLE_MAX_CHARS].rstrip(" -:;,.\"'")
+
+
+def apply_agent_thread_title(thread: ThreadMetadata, title: str) -> str:
+    cleaned = clean_thread_title(title)
+    metadata = _metadata_dict(thread.metadata)
+    metadata["agent_thread_title"] = cleaned
+    metadata["agent_thread_title_updated_at"] = datetime.now(UTC).isoformat()
+    thread.title = cleaned
+    thread.metadata = metadata
+    return cleaned
+
+
 def selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | None) -> list[str]:
     if explicit_ids:
         source_ids = [
@@ -1542,7 +1585,14 @@ def _title_from_user_message(item: UserMessageItem) -> str | None:
 def chatkit_model_settings_for_model(model: str | None, *, compact_threshold: int | None) -> ModelSettings:
     extra_body: dict[str, object] | None = None
     if compact_threshold is not None and compact_threshold > 0:
-        extra_body = {"context_management": {"compact_threshold": compact_threshold}}
+        extra_body = {
+            "context_management": [
+                {
+                    "type": "compaction",
+                    "compact_threshold": compact_threshold,
+                }
+            ]
+        }
     if isinstance(model, str) and model.startswith("gpt-5"):
         return ModelSettings(
             reasoning=Reasoning(effort="low", summary="auto"),

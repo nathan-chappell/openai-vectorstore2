@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
 AppOperation: TypeAlias = Literal[
+    "name_thread",
     "list_sources",
     "list_filesystem",
     "search_filesystem",
@@ -53,6 +54,11 @@ class AppCapability:
 
 
 APP_CAPABILITIES: tuple[AppCapability, ...] = (
+    AppCapability(
+        operation="name_thread",
+        summary="Set a concise user-facing title for the current ChatKit thread.",
+        chatkit_tool="name_thread",
+    ),
     AppCapability(
         operation="list_sources",
         summary="List and filter source files in the user's indexed file library.",

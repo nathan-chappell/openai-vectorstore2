@@ -8,11 +8,14 @@ from chatkit.types import (
     AssistantMessageItem,
     ClientToolCallItem,
     InferenceOptions,
+    ThreadMetadata,
     UserMessageItem,
     UserMessageTextContent,
 )
 
 from backend.app.chatkit.server import (
+    apply_agent_thread_title,
+    clean_thread_title,
     chatkit_model_settings_for_model,
     chatkit_metadata_with_openai_state,
     chatkit_openai_state,
@@ -94,7 +97,9 @@ def test_chatkit_openai_state_round_trips_metadata() -> None:
 def test_chatkit_model_settings_enable_server_side_compaction() -> None:
     settings = chatkit_model_settings_for_model("gpt-5.4-mini", compact_threshold=80_000)
 
-    assert settings.extra_body == {"context_management": {"compact_threshold": 80_000}}
+    assert settings.extra_body == {
+        "context_management": [{"type": "compaction", "compact_threshold": 80_000}]
+    }
     assert settings.reasoning is not None
     assert settings.reasoning.effort == "low"
     assert settings.reasoning.summary == "auto"
@@ -105,6 +110,29 @@ def test_chatkit_model_settings_can_disable_compaction() -> None:
 
     assert settings.extra_body is None
     assert settings.reasoning is None
+
+
+def test_clean_thread_title_collapses_whitespace_and_bounds_length() -> None:
+    title = clean_thread_title("  Research\nlibrary    context overflow investigation.   ")
+
+    assert title == "Research library context overflow investigation"
+    assert len(clean_thread_title("x" * 100)) == 72
+
+
+def test_apply_agent_thread_title_updates_title_and_metadata() -> None:
+    thread = ThreadMetadata(
+        id="chat_title_test",
+        created_at=NOW,
+        metadata={"existing": "value"},
+    )
+
+    title = apply_agent_thread_title(thread, " Selected file context fixes ")
+
+    assert title == "Selected file context fixes"
+    assert thread.title == "Selected file context fixes"
+    assert thread.metadata["existing"] == "value"
+    assert thread.metadata["agent_thread_title"] == "Selected file context fixes"
+    assert isinstance(thread.metadata["agent_thread_title_updated_at"], str)
 
 
 def test_pending_chatkit_items_replays_history_before_conversation_exists() -> None:
