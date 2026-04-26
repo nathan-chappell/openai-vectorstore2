@@ -1038,6 +1038,7 @@ class SourceService:
         origin_thread_id: str | None = None,
         folder_id: str | None = None,
         virtual_name: str | None = None,
+        metadata: dict[str, object] | None = None,
     ) -> IngestFinalizeResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
@@ -1082,6 +1083,7 @@ class SourceService:
                 byte_size=stored.byte_size,
                 storage_provider=stored.provider,
                 storage_key=stored.key,
+                metadata_json=metadata or {},
                 created_at=now,
                 updated_at=now,
             )
@@ -1122,6 +1124,7 @@ class SourceService:
                     "folder_id": parent.id,
                     "virtual_name": entry_name,
                     "virtual_path": entry_path,
+                    "metadata": metadata or {},
                 },
                 state_json={"stage": "queued", "source_id": source.id},
                 created_at=_utcnow(),
@@ -2687,6 +2690,7 @@ class SourceService:
             storage_provider=source.storage_provider,
             storage_key=source.storage_key,
             ingest_strategy=source.ingest_strategy,
+            metadata=dict(source.metadata_json or {}),
             chunks=[self._chunk_summary(chunk) for chunk in sorted(source.chunks, key=lambda item: item.sequence)],
         )
 

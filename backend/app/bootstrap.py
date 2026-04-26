@@ -8,7 +8,7 @@ from backend.app.core.config import AppSettings
 from backend.app.core.logging import configure_logging
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.services import ActionService, AuthService, SourceService
+from backend.app.services import ActionService, AuthService, ResearchImportService, SourceService
 from backend.app.storage import StorageService, build_storage_service
 
 
@@ -20,6 +20,7 @@ class AppServices:
     storage: StorageService
     openai: OpenAIGateway
     sources: SourceService
+    research: ResearchImportService
     actions: ActionService
     chat_store: VectorstoreChatStore
     chatkit_server: VectorstoreChatKitServer
@@ -55,11 +56,18 @@ def create_services(settings: AppSettings) -> AppServices:
         storage=storage,
         openai=openai,
     )
+    research = ResearchImportService(
+        settings=settings,
+        database=database,
+        sources=sources,
+        openai=openai,
+    )
     chat_store = VectorstoreChatStore(database=database, sources=sources)
     chatkit_server = VectorstoreChatKitServer(
         settings=settings,
         store=chat_store,
         sources=sources,
+        research=research,
         actions=actions,
     )
     return AppServices(
@@ -69,6 +77,7 @@ def create_services(settings: AppSettings) -> AppServices:
         storage=storage,
         openai=openai,
         sources=sources,
+        research=research,
         actions=actions,
         chat_store=chat_store,
         chatkit_server=chatkit_server,

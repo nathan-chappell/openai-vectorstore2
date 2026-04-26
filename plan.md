@@ -1,85 +1,110 @@
-# Plan: Webapp and MCP Apps Exposure
+# Plan: AI File Browser, ChatKit, And MCP Apps
 
-## Planning Work Status
+## Goal
 
-- [x] Analyze backend service, model, persistence, OpenAI gateway, ChatKit, and MCP entry points.
-- [x] Analyze frontend ChatKit surface, REST API client, handwritten TypeScript contracts, and UI test opportunities.
-- [x] Check current OpenAI docs for ChatKit custom backends and MCP Apps UI resource guidance.
-- [x] Write this plan.
-- [x] Review this plan against the repository findings.
-- [x] Implement the current baseline phases below.
-- [x] Keep this file updated as phases move from planned to complete.
+Expose the app's core capabilities in product-ready surfaces:
 
-## Current Implementation Pass: Virtual Filesystem Explorer Rebuild
+1. Webapp: a Vite/React app where users browse an AI-powered virtual filesystem and drive the library through a ChatKit agent.
+2. MCP: an MCP server exposing the same capability set, plus MCP Apps UI resources.
+3. Shared app-core boundary: the prompt originally said "three forms" but listed two external forms. This plan treats the third form as the typed app-core capability layer that keeps REST, ChatKit, MCP, database models, and frontend contracts from drifting.
 
-Status: completed.
+The capabilities to preserve and expose are PDF smart split, app-owned semantic chunks, tag-filtered OpenAI vector-store access, virtual folders/paths, source inspection, search, branch search, grounded QA, freeform generation, generated assets, task/history visibility, and agent-mediated file selection.
+
+## Status Snapshot
+
+- [x] Analyze backend service, model, persistence, OpenAI gateway, ChatKit, MCP, frontend, and UI test entry points.
+- [x] Build the current baseline phases: migrations, task-based ingestion, PDF smart split, tag/vector-store reindexing, ChatKit tools, MCP tools/UI, Playwright, docs, and VS Code launch/build-watch support.
+- [x] Rebuild the web product around a compact virtual filesystem explorer plus ChatKit.
+- [x] Add a DB-backed virtual filesystem layer with folders, paths, rename/move/delete, selected-file scope, and OpenAI file-input preparation for ChatKit.
+- [x] Promote and retain the new Research Importer feature plan as the next planned product feature.
+- [x] Add the first Research Importer backend capability for fast library seeding and reviewed reference ingestion.
+- [x] Apply the first browser/design fixes: hide empty preview, widen preview-on-selection, and add a persisted draggable explorer/chat splitter.
+- [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
+
+## Checkpoint: 2026-04-26 Wrap-Up
+
+Status: implementation checkpoint committed for handoff.
+
+Completed in the current checkpoint:
+
+- Added the Research Importer backend foundation: database model/migration, source provenance metadata, Pydantic schemas, settings, OpenAI web-search discovery gateway, `ResearchImportService`, REST routes, ChatKit tools, MCP tools, capability-matrix entries, frontend API/types, and integration/contract coverage.
+- Kept canonical ingestion through `SourceService.ingest_source`; imported seeds/candidates create normal source records, OpenAI files, vector-store files, tasks, and metadata rather than using a parallel ingest path.
+- Added reviewed candidate state transitions for pending, approved, rejected, ingested, and failed candidates.
+- Implemented the first explorer layout fixes: the preview pane is hidden until a file is selected, selected-file preview gets more room, folder navigation clears stale preview state, and the explorer/chat split is draggable and persisted in `localStorage`.
+- Updated `plan.md` to preserve the Research Importer feature plan and browser/design queue.
+
+Verification completed before pausing:
+
+- `npm run typecheck`
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest tests/test_migrations.py tests/integration/test_app_contracts.py -q`
+
+Known remaining work for the next session:
+
+- Run `npm run build` after this checkpoint.
+- Refresh the Playwright workspace shell assertions for the hidden-preview default state.
+- Add/adjust Playwright coverage for the new splitter and preview-visible-on-selection behavior.
+- Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
+- Build the web Research Import review panel after the browser/file-explorer direction settles.
+- Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
+
+## Current Product Shape
+
+The product is now centered on an AI-powered file explorer:
+
+- The left surface behaves like a normal, compact file explorer with folders, files, query, tags, upload, rename, move, delete, preview, and selected-file scope.
+- The preview pane should stay hidden until a file is selected. Once a file is selected, the preview should open wide enough to be useful for the selected media/text/PDF rather than remaining a cramped placeholder column.
+- ChatKit sits beside the explorer and uses selected ready files as OpenAI file inputs. Composer attachments stay hidden in the current web UX.
+- The horizontal split between the file explorer/preview side and ChatKit should be user-resizable with slider-like drag behavior, so users can allocate more width to browsing/previewing or to chat as needed.
+- OpenAI vector stores remain the semantic retrieval and tag-filtered search layer.
+- The app database owns the virtual filesystem, task lifecycle, tags, provenance, ChatKit tables, source/chunk records, generated assets, and all relationships needed to prevent data-model drift.
+- MCP exposes the same app-core capabilities as tools and Apps UI resources.
+
+## Current Architecture Alignment
+
+Backend:
+
+- FastAPI wires services, REST, ChatKit, MCP, static frontend serving, and auth.
+- `SourceService` owns ingest, PDF/text extraction, semantic splitting, OpenAI file/vector-store publication, tags, virtual filesystem operations, selected-file preparation, reindexing, and cleanup.
+- `ActionService` owns grounded QA, freeform generation, generated assets, and task lifecycle for user-facing actions.
+- `OpenAIGateway` centralizes OpenAI vector stores, files, Responses parsing, retrieval, image, voice, and transcription calls.
+- Alembic migrations and drift tests now guard schema changes.
+
+Frontend:
+
+- Vite/React/TypeScript is in place with `npm run build:watch`, source maps, and production minification disabled until desired.
+- The main app is now an explorer-plus-ChatKit workspace.
+- Playwright covers workspace shell behavior and selected-file ChatKit flows.
+- Follow-up: remove unused legacy React components in `frontend/src/App.tsx` once the virtual explorer stabilizes further.
+
+MCP:
+
+- FastMCP exposes streamable HTTP and stdio entry points.
+- Current tools cover source/file operations, tags, search, branch search, split preview, re-split, QA, freeform, image, voice, task visibility, and virtual filesystem operations.
+- MCP Apps UI resources expose the library/explorer query surface.
+
+Tests and operations:
+
+- Backend integration tests cover contracts, migrations, vector attributes, ingest/search/QA, cleanup, and MCP discovery.
+- Playwright can run with Clerk disabled and local-dev auth.
+- Local live checks can use OpenAI and Railway/S3-compatible storage values from ignored `.env`.
+
+## Next Planned Feature: Research Importer For Fast Library Seeding
+
+Status: planned and ready to implement as the next capability track.
 
 Intent:
 
-Replace the source-list pane with a normal, DB-backed virtual filesystem explorer. Files still map to stored bucket objects, OpenAI Files API originals, OpenAI vector-store chunk files, and app-owned source/chunk records, but the user-facing model is now folders, paths, tags, query, preview, and selected files for ChatKit.
+Add a persistent in-app research importer that can quickly seed a user's library from a small starting point, then discover and queue related references for review. The first supported flow should prioritize public URLs, PDFs/arXiv-style links, pasted text, uploaded files, and manually exported LinkedIn article content. Do not build authenticated LinkedIn scraping in v1; login-gated scraping would be brittle and should not be bypassed.
 
-Decisions:
-
-- Use explicit folder rows in a new `filesystem_entry` table.
-- Keep `SourceFile` as the app-core record for ingested files and link each file entry one-to-one to a source.
-- Allow duplicate file display titles across folders; path uniqueness is now enforced by `(library_id, normalized_path)`.
-- Keep deletes permanent with explicit confirmation.
-- Cap selected ready files sent to ChatKit at 10.
-- Send selected files to ChatKit as OpenAI `input_file` items using `user_data` original file uploads; vector-store search remains the discovery and tag-filter path.
-- Keep tags as app-owned metadata and expose them as filterable OpenAI vector-store attributes using canonical `tags` plus bounded exact-match slots.
-
-Tasks:
-
-- [x] Add virtual filesystem ORM models, Alembic migration, root/folder/source backfill, and source path fields.
-- [x] Add REST APIs for listing folders, searching filesystem entries, creating folders, renaming/moving entries, and permanent recursive deletes.
-- [x] Update `SourceService.ingest_source` so uploads land in the current virtual folder and create file entries.
-- [x] Update vector attributes to v3 with `virtual_path` and `virtual_name` while staying within the 16-key OpenAI metadata limit.
-- [x] Add selected-file OpenAI file-input preparation for ChatKit, including re-uploading legacy originals as `user_data` when needed.
-- [x] Add ChatKit tools for filesystem listing/search/mutation and client-tool coordination (`set_file_selection`, `reveal_file`, `set_file_search`).
-- [x] Add matching MCP tools and capability matrix entries for filesystem operations.
-- [x] Rebuild the web Files pane as a compact explorer with breadcrumbs, rows, query, tags, create folder, rename, delete, drag-to-folder move, upload, and preview.
-- [x] Wire ChatKit client tools into the web explorer.
-- [x] Run `npm run typecheck`.
-- [x] Run `./.venv/bin/pyright`.
-- [x] Run focused backend migration/vector/contract tests.
-- [x] Run `npm run build`.
-- [x] Update/verify Playwright explorer coverage.
-- [x] Commit this virtual filesystem pass.
-
-Implementation notes:
-
-- The new explorer is intentionally operational: a compact toolbar, breadcrumbs, list rows, tags/query controls, current-folder upload, and a preview pane.
-- ChatKit attachments remain hidden in the web composer; selected ready files are supplied by explorer selection and attached server-side as `input_file` content.
-- Rename and move queue reindex tasks for ready files with published chunks so vector-store metadata does not drift from virtual paths.
-- Recursive folder deletion deletes descendant sources through the existing OpenAI/bucket cleanup path before deleting folder rows.
-- In-process source task concurrency now defaults to one runner because live vector-store publishing showed intermittent OpenAI vector-store file polling failures when multiple sources published chunks concurrently.
-- Verification completed:
-  - `npm run typecheck`
-  - `npm run build`
-  - `./.venv/bin/pyright`
-  - `./.venv/bin/pytest tests/test_migrations.py tests/test_vector_attributes.py tests/integration/test_app_contracts.py -q`
-  - `npm run test:e2e -- --grep "workspace shell"`
-  - `npm run test:e2e -- --project=chromium-desktop --grep "explorer-selected"`
-
-## Planned Feature: Research Importer For Fast Library Seeding
-
-Status: planned.
-
-Note:
-
-This section was written by a separate agent while another agent was actively implementing related work. The currently implementing agent should also keep `plan.md` updated as decisions change, phases complete, or implementation details diverge.
-
-Intent:
-
-Add a persistent in-app research importer that can quickly seed a user's library from a small starting point, then discover and queue related references for review. The first supported flow should prioritize public URLs, PDFs/arXiv-style links, pasted text, uploaded files, and manually exported LinkedIn article content. Do not build authenticated LinkedIn scraping in v1 because the LinkedIn activity page is login-gated from this environment and scraping it would be brittle.
-
-Decisions:
+Decisions retained from the added feature plan:
 
 - Build this as an app backend feature, not a one-off Codex skill or hosted-container workflow.
-- Keep `SourceService.ingest_source` as the canonical path for creating sources, chunks, tags, tasks, and OpenAI vector-store files.
-- Use OpenAI `web_search` for discovery, query expansion, and cited candidate finding, but keep fetching, normalization, dedupe, approval state, ingestion, and provenance in our backend.
-- Use a review queue before reference ingestion. The initial seed may be ingested directly; discovered references should be pending until approved.
-- Default expansion should be bounded: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task unless settings are changed.
+- Keep `SourceService.ingest_source` as the canonical path for creating sources, chunks, tags, tasks, OpenAI files, and vector-store files.
+- Use OpenAI `web_search` for discovery, query expansion, and cited candidate finding.
+- Keep fetching, normalization, dedupe, approval state, ingestion, and provenance in this backend.
+- Use a review queue before reference ingestion. The initial seed may be ingested directly; discovered references should stay pending until approved.
+- Bound default expansion: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task unless settings are changed.
 - Defer deep-research/report-first flows to a later enhancement. They can eventually produce a curated bibliography that feeds the same importer.
 
 Implementation outline:
@@ -92,11 +117,11 @@ Implementation outline:
   - HTML pages become cleaned Markdown or plain text.
   - arXiv abstract URLs resolve to PDFs when possible.
   - LinkedIn imports accept pasted/exported content only.
-  - Paywalls, login walls, and anti-bot gates should not be bypassed.
+  - Paywalls, login walls, and anti-bot gates are not bypassed.
 - Add REST endpoints to create an import task, read task candidates, approve/reject candidates, and ingest approved candidates.
 - Expose matching ChatKit and MCP tools for starting imports, listing candidates, approving/rejecting candidates, and ingesting approved candidates.
-- Add a web UI "Research import" panel near upload with seed input, bounded depth/candidate controls, task progress, and candidate approve/reject/ingest actions.
-- Update `backend/app/core/capabilities.py`, Pydantic schemas, frontend TypeScript contracts, and task kind unions to include `research_import`.
+- Add a web Research Import panel or explorer action with seed input, bounded depth/candidate controls, task progress, and candidate approve/reject/ingest actions.
+- Update `backend/app/core/capabilities.py`, Pydantic schemas, frontend TypeScript contracts, task kind unions, migrations, and docs to include `research_import`.
 
 Test plan:
 
@@ -104,657 +129,146 @@ Test plan:
 - Integration test that approving candidates and ingesting approved items creates normal source records through `SourceService.ingest_source`.
 - Unit tests for URL/PDF/arXiv/HTML normalization, dedupe/content hash behavior, and LinkedIn exported HTML cleanup.
 - Contract tests for REST schemas, frontend types, ChatKit/MCP tool names, capability matrix, and migrations.
-- Existing ingest, search, QA, vector attribute, PDF batch, and Playwright checks should continue to pass.
+- Existing ingest, search, QA, vector attribute, PDF batch, MCP, and Playwright checks should continue to pass.
 
-## Current Implementation Pass: Explorer Plus ChatKit Teardown/Rebuild
+## Research Capability Implementation Track
 
-Status: completed.
+Status: not started.
 
-Intent:
+Phase 1: schema, contracts, and drift guards.
 
-The webapp should start from the product's real center of gravity: a sleek AI-powered file browser plus ChatKit. The explorer owns files, tags, query, preview, upload, and selected-file scope. ChatKit owns retrieval, branching, grounded QA, generation, and orchestration over that scope. The older standalone preview/search/actions workbench is now too much surface area for the first product shape and should be torn down rather than polished further.
+- [ ] Add Alembic migration and ORM records for research import candidates, with fields for library, owner/task, parent source/candidate, URL, title, source type, depth, rationale, score, status, linked source, provenance metadata, content hash, and timestamps.
+- [ ] Add source provenance storage, likely `SourceFile.metadata_json`, for original URL, normalized URL, DOI/arXiv ID when known, import task/candidate IDs, parent source, content hash, fetch timestamp, and importer version.
+- [ ] Add Pydantic request/response models for create import task, list candidates, update candidate status, and ingest approved candidates.
+- [ ] Extend task kind unions, frontend TypeScript contracts, `backend/app/core/capabilities.py`, and MCP/ChatKit operation names with `research_import`.
+- [ ] Add migration drift and contract tests before wiring UI.
 
-Tasks:
+Phase 2: seed ingestion, normalization, and dedupe.
 
-- [x] Record the teardown/rebuild direction in this plan.
-- [x] Remove the separate Preview/Search/Actions workbench from the main React shell.
-- [x] Rebuild the web layout as two primary surfaces: explorer on the left and ChatKit on the right.
-- [x] Keep file preview and metadata editing inside the explorer so it behaves like an AI filesystem, not a dashboard.
-- [x] Preserve upload, semantic split preview, tag creation/filtering, source tag editing, re-split, delete, and selected-file ChatKit scope.
-- [x] Add committed text/json sample sources that can be ingested during browser iteration.
-- [x] Update Playwright shell/live checks around the simpler explorer-plus-chat layout.
-- [x] Use Playwright screenshots to iterate on desktop and mobile until the explorer looks clean and compact.
-- [x] Run typecheck, build, and Playwright verification.
-- [x] Commit this teardown/rebuild pass.
+- [ ] Implement `ResearchImportService` with pasted text, public URL, PDF/arXiv URL, uploaded file, and exported LinkedIn HTML/text seed inputs.
+- [ ] Normalize URLs and content, compute content hashes, and avoid duplicate pending candidates or duplicate ingested sources inside a library.
+- [ ] Route every approved or directly ingested seed through `SourceService.ingest_source`; do not create a parallel ingest path.
+- [ ] Keep login walls, paywalls, and anti-bot gates as explicit failed/degraded candidate states rather than bypassing them.
+- [ ] Add focused parser/normalizer tests for HTML cleanup, PDF/arXiv resolution, exported LinkedIn cleanup, URL normalization, and dedupe behavior.
 
-Implementation notes:
+Phase 3: OpenAI discovery and candidate review.
 
-- Removed duplicate direct Search, Branch, Actions, and Results panels from the React shell. Those capabilities now belong to ChatKit for the web product surface.
-- Embedded file preview, chunk map, metadata, tag editing, re-split, upload, query, tags, and selected-file scope inside the explorer.
-- Added a render window for the explorer table so very large libraries do not create a huge DOM while the backend/server-paged explorer is still future work.
-- Fixed two obvious polling/render churn issues: activity polling now depends on selected source ID instead of the selected source object, and source-content preview fetches are keyed by preview-relevant source fields instead of every refreshed detail object.
-- Added `sample_sources/rag-field-notes.txt` and `sample_sources/research-index.json` as ingestion fixtures for Playwright and manual iteration.
-- Verification completed:
-  - `npm run typecheck`
-  - `npm run build`
-  - `npm run test:e2e -- --grep "workspace shell"`
-  - `npm run test:e2e -- --project=chromium-desktop --grep "explorer-selected"`
+- [ ] Use OpenAI `web_search` to expand seed queries and discover cited/related candidate URLs with rationale and score.
+- [ ] Enforce default bounds: max depth 2, max 8 candidates per source, and max 40 pending candidates per import task.
+- [ ] Persist candidates as pending records and expose approve/reject/ingest transitions.
+- [ ] Record task state for discovery progress, candidate counts, degraded fetches, and ingestion results.
+- [ ] Add integration tests for seed-to-pending-candidates and approved-candidates-to-normal-sources.
 
-## Current Implementation Pass: Live ChatKit Attachment QA
+Phase 4: surfaces.
 
-Status: completed.
+- [ ] Add REST routes for starting imports, reading candidates, approving/rejecting candidates, and ingesting approved candidates.
+- [ ] Add ChatKit tools so the agent can start an import, inspect candidates, approve/reject items, ingest approved items, and report progress.
+- [ ] Add MCP tools with the same app-core operation mapping.
+- [ ] Add a compact web Research Import action/panel near explorer upload, with seed input, bounded controls, task progress, and candidate review.
+- [ ] Add Playwright coverage for the browser review flow once fake or deterministic live discovery is available.
 
-Tasks:
+Phase 5: documentation and operations.
 
-- [x] Normalize local Railway S3 settings in ignored `.env` and verify `S3_SECRET_ACCESS_KEY` is present without exposing the value.
-- [x] Add ChatKit direct attachment upload so uploaded files become normal app-core sources.
-- [x] Link ChatKit attachment metadata to source/task records and ChatKit thread IDs.
-- [x] Enable ChatKit composer attachments in the webapp.
-- [x] Disable Clerk explicitly for Playwright while preserving local-dev auth.
-- [x] Add a live Playwright flow that uploads a file through ChatKit, asks a grounded question, and deletes the source.
-- [x] Run typecheck, build, backend tests, and live Playwright checks.
-- [x] Stage tracked changes, confirm `.env` stays unstaged, and commit the implementation.
+- [ ] Document importer limits, provenance, non-bypass policy for gated content, and expected user review workflow.
+- [ ] Add operational notes for cleanup/retry of failed import tasks and stale pending candidates.
+- [ ] Re-run `./.venv/bin/pyright`, focused backend tests, `npm run typecheck`, `npm run build`, and targeted Playwright checks.
 
-## Current Implementation Pass: Explorer Workspace And Scroll Performance
+## Browser And Design Fix Queue
 
-Status: completed.
+Status: active intake; implement items as concrete plans arrive.
 
-Tasks:
+- [ ] Hide the preview surface until a file is selected so empty browsing starts as a clean explorer plus ChatKit layout.
+- [ ] When a file is selected, open a preview area wide enough for the selected media/text/PDF instead of leaving a narrow placeholder.
+- [ ] Add a draggable horizontal splitter between the explorer/preview region and ChatKit, with sensible min/max widths and persisted preference.
+- [ ] Keep the file explorer dense, fast, and familiar: normal folder/file rows, tight metadata, simple affordances, no marketing-style cards or explanatory copy.
+- [ ] Validate browser/design fixes with Playwright desktop and mobile screenshots before marking complete.
+- [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
-- [x] Run parallel read-only reviews of the React/CSS workspace for obvious scroll and render issues.
-- [x] Record the main findings: the current hero/card layout creates a large full-page scroll surface, repeated translucent cards use expensive blur/shadow effects, collapsed search chunks still render full text, and ChatKit rerenders with unrelated workspace state changes.
-- [x] Replace the massive hero with a compact app bar that keeps only useful status, auth, task, and refresh signals.
-- [x] Reshape the workspace into a dense left file explorer, center file preview/workbench, and right ChatKit pane.
-- [x] Make the file explorer Windows-like: simple rows, tight metadata, clear file icons, fast selection, and direct delete/upload affordances.
-- [x] Add source previews by media type: PDF/object preview, image/audio/video native previews, text/chunk preview, and metadata fallback.
-- [x] Apply reasonable React optimizations: memoized ChatKit pane, memoized file rows, set-based selection lookups, lazy rendering for full hit text, and bounded chunk preview rendering.
-- [x] Replace expensive backdrop blur and large repeated shadows with mostly opaque, low-cost operational surfaces.
-- [x] Update Playwright shell checks and screenshots for the new explorer/preview/chat layout.
-- [x] Run typecheck, build, and Playwright smoke coverage.
-- [x] Commit this UI/performance pass once verified.
+## Near-Term Follow-Ups
 
-Implementation notes:
+- Implement Research Importer as the next substantial feature track.
+- Work through the Browser And Design Fix Queue as new instructions arrive.
+- Add focused Playwright flows for normal file-browser behavior: create folder, upload text/json, select files, ask ChatKit a grounded question, reveal/go-to-location, rename/move, and delete.
+- Add backend integration coverage for recursive folder delete, move/rename reindexing, selected-file preparation, and ChatKit client-tool effects.
+- Decide whether ChatKit should eventually expose richer structured widgets for source detail, search hits, task progress, and import candidates.
+- Remove unused legacy frontend components and any stale CSS once the new explorer has fully replaced the old workbench paths.
+- Revisit vector-store publishing retry/backoff if real concurrent ingestion load increases beyond the current single-runner default.
 
-- Replaced the hero/status card with a compact app bar and a full-height workspace grid.
-- Added a dense file-table explorer with upload, split preview, tags, open-preview, and delete actions.
-- Added authenticated source-content preview support in the frontend API and rendered PDF, image, audio, video, text, and chunk fallback previews.
-- Kept direct search/action tools available in the preview pane while leaving ChatKit as the main right-side agentic surface.
-- Memoized ChatKit, file rows, chunk rows, and hit cards; derived selection sets with `useMemo`; rendered full search-hit text only after expansion.
-- Removed Google font loading, translucent backdrop blur, large repeated shadows, and the beige/orange marketing palette from the operational UI.
-- Verification completed:
-  - `npm run typecheck`
-  - `npm run build`
-  - `npm run test:e2e -- --project=chromium-desktop`
-  - `npm run test:e2e -- --project=chromium-mobile`
-  - `npm run test:e2e -- --grep "workspace shell"` for refreshed desktop/mobile screenshots.
+## Completed Implementation History
 
-## Current Implementation Pass: Sleek Explorer Scope Controls
+### Virtual Filesystem Explorer Rebuild
 
 Status: completed.
 
-Tasks:
-
-- [x] Reframe the explorer around the primary concepts: query, tags, and files.
-- [x] Keep upload available but visually secondary to browsing and scoping.
-- [x] Add explicit multi-file selection for ChatKit context while preserving row-click preview.
-- [x] Add local query and tag filtering for fast explorer narrowing.
-- [x] Surface the selected-file count as the chat input scope.
-- [x] Disable ChatKit composer attachments in the webapp; files are selected through the explorer instead.
-- [x] Surface source creation time in the explorer and preview metadata.
-- [x] Update Playwright shell expectations and verify desktop/mobile layout.
-- [x] Align vector-store metadata attributes with the clarified field model: creation time, canonical comma-separated `tags`, source kind, filename, and internal membership slots for exact OpenAI pre-filtering.
-- [x] Add typed date-range filters for vector-store search and DB post-filtering.
-- [x] Update attribute/filter tests for the new OpenAI metadata model.
-- [x] Commit this explorer refinement once verified.
-
-Implementation notes:
-
-- Official OpenAI retrieval docs say vector-store files have at most 16 scalar attribute keys and support comparison/compound filters. The current Python SDK comparison filters include `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, and `nin`, but no substring/contains operator for membership inside a comma-separated string.
-- Because of that, `tags` should be the user-visible metadata field, while internal bounded tag slots remain necessary for exact tag membership pre-filtering unless the OpenAI API adds array/contains-style attributes later.
-- The explorer now treats files, query, and tags as the primary interaction model: row click opens preview, checkboxes select the ChatKit scope, "Select all" scopes the visible filtered files, and upload is visually secondary.
-- The explorer now loads all paged source records for the current library so local query/tag filters and visible-file selection do not silently stop at the first page.
-- ChatKit still uses the same backend agent and `selected_source_ids` metadata, but the web composer no longer exposes attachments or an upload strategy. The older attachment backend path can remain as compatibility plumbing until we deliberately remove it.
-- Vector-store attributes are now versioned as `attributes_version=2` and include `source_id`, `chunk_id`, `source_kind`, `filename`, numeric `created_at`, string `created_date`, canonical comma-separated `tags`, and bounded `tag_1` through `tag_8` membership slots.
-- Search requests now accept `created_after` and `created_before`; OpenAI vector-store filters pre-filter with `gte`/`lte` on `created_at` only when every indexed chunk has v2 attributes, and DB-side hydration always applies the same date bounds to avoid legacy v1 false negatives.
-- Source tag assignment is capped at eight filterable tags, matching the available OpenAI metadata slots instead of allowing a ninth tag that the vector-store prefilter could not represent.
-- SQLite local-dev write pressure was reduced by adding a sync connection timeout, avoiding per-request `last_seen_at` writes when identity is unchanged, and updating upload state from the upload response instead of immediately refreshing every list during background ingest.
-- Verification completed:
-  - `./.venv/bin/pyright`
-  - `./.venv/bin/pytest tests/test_vector_attributes.py tests/integration/test_app_contracts.py`
-  - `npm run typecheck`
-  - `npm run build`
-  - `npm run test:e2e -- --project=chromium-desktop`
-  - `npm run test:e2e -- --project=chromium-mobile`
-
-## Current Implementation Pass: Agentic Filesystem Polish And Progress
-
-Status: completed.
-
-Tasks:
-
-- [x] Persist explorer-selected file scope into ChatKit thread metadata so scope decisions survive beyond a single request.
-- [x] Keep ChatKit composer attachments hidden for the current web UX; file input happens through the explorer.
-- [x] Show selected file names in the explorer scope strip, not only the count.
-- [x] Rename the filtered bulk scope action to "Select visible" so query/tag filtering semantics are clear.
-- [x] Add Enter-to-search and an explicit semantic-search label in the preview workbench.
-- [x] Fix late object-URL cleanup when rapidly switching file previews.
-- [x] Add lightweight polling while background ingest/reindex/resplit tasks are queued or running, so the explorer updates readiness without manual refresh.
-- [x] Add ChatKit progress completion events for long-running tools, including search, branch, split preview, ingest, tag reindexing, grounded answers, freeform drafting, image generation, voice generation, and deletion cleanup.
-- [x] Run typecheck, build, backend integration tests, and Playwright checks.
-- [x] Commit this polish pass once verified.
-
-## Current Implementation Pass: MCP Apps Explorer Query Surface
-
-Status: completed.
-
-Tasks:
-
-- [x] Keep the existing `sources` MCP Apps UI resource as the first render surface.
-- [x] Add file query controls so the MCP Apps UI mirrors the web explorer's query-first flow.
-- [x] Add tag chips backed by app-owned tag records for source filtering and chunk search scope.
-- [x] Add chunk-search results in the MCP UI while preserving `search_chunks` as the canonical data tool.
-- [x] Add source-detail chunk summaries and recent task visibility to the MCP UI resource.
-- [x] Run pyright, backend integration tests, and MCP contract checks.
-- [x] Commit this MCP Apps UI pass once verified.
-
-## Current Implementation Pass: Migration Discipline Baseline
-
-Status: completed.
-
-Tasks:
-
-- [x] Add Alembic as the schema migration tool.
-- [x] Add Alembic configuration and migration environment bound to the app ORM metadata.
-- [x] Create an initial migration from the current ORM state, including app-core, ChatKit, task, asset, tag, source, and chunk tables.
-- [x] Add a schema drift test that upgrades a temporary database to Alembic head and compares migrated tables/columns against `Base.metadata`.
-- [x] Add `DATABASE_SCHEMA_MODE` so local dev can keep `create_all` while production/test environments can bootstrap with Alembic `upgrade head`.
-- [x] Run pyright and migration tests.
-- [x] Commit this migration baseline once verified.
-
-## Current Implementation Pass: Migration Runtime Mode
-
-Status: completed.
-
-Tasks:
-
-- [x] Add `DATABASE_SCHEMA_MODE=create_all|migrations` with a local-dev default of `create_all`.
-- [x] Let `DatabaseManager.ensure_ready()` run Alembic `upgrade head` when migration mode is enabled.
-- [x] Keep `.env.example` explicit about the schema mode while preserving the current local default.
-- [x] Add a focused test proving the app database manager can bootstrap a temp SQLite database through Alembic.
-- [x] Run pyright and migration/backend integration tests.
-- [x] Commit this runtime migration mode once verified.
-
-## Current Implementation Pass: Contributor Docs
-
-Status: completed.
-
-Tasks:
-
-- [x] Update README with the current web, ChatKit, MCP, Playwright, and migration commands.
-- [x] Add architecture docs for app-core boundaries, ChatKit, MCP Apps UI, and vector-store metadata.
-- [x] Add testing docs for backend contracts, Playwright live flow, and migration checks.
-- [x] Add migration docs for Alembic usage, schema modes, and drift checks.
-- [x] Add auth docs for local-dev, Clerk web, MCP HTTP, and stdio.
-- [x] Add operations docs for storage, OpenAI file cleanup, reindexing, and background task behavior.
-- [x] Run docs-adjacent sanity checks.
-- [x] Commit this documentation pass once verified.
-
-## Goal
-
-Expose the app capabilities in product-ready surfaces:
-
-1. Webapp: a Vite/React app where all available functionality is reachable through an agentic ChatKit interface.
-2. MCP: an MCP server exposing the same agentic capability set, plus MCP Apps UI resources.
-3. Shared app-core capability boundary: the prompt says "three forms" but lists two external forms. This plan treats the third form as the internal, typed, reusable app-core interface that prevents web ChatKit, REST, and MCP from drifting. If a third external surface is intended, add it here before implementation.
-
-The core capabilities to preserve and expose are PDF smart splitting, app-owned semantic chunk records, tag-filtered access to OpenAI vector stores, source inspection, search, branch search, QA, freeform generation, image generation, voice generation, and task/history visibility.
-
-## Current Alignment
-
-The repository already has the right general architecture. `README.md` describes an app-first semantic RAG workspace where the backend owns ingestion, splitting, tagging, storage, retrieval, and generation, with ChatKit and MCP as adapters over that app layer.
-
-Backend:
-
-- FastAPI creates services, mounts MCP at `/mcp`, serves REST APIs, serves the SPA, and exposes `/api/chatkit` at `backend/app/main.py`.
-- `backend/app/bootstrap.py` wires a single service graph: database, auth, storage, OpenAI gateway, source service, action service, ChatKit store, and ChatKit server.
-- App-owned SQLAlchemy models already include users, user libraries, tags, source files, source-tag links, semantic chunks, generated assets, tasks, ChatKit threads, ChatKit entries, and ChatKit attachments in `backend/app/models/records.py`.
-- Pydantic app contracts live in `backend/app/schemas/records.py`.
-- `SourceService` already handles upload, PDF/text/conversation extraction, OpenAI semantic splitting, auto-tag creation, chunk persistence, vector-store publication, tag-filtered vector-store search, and branch search in `backend/app/services/sources.py`.
-- `ActionService` already runs QA, freeform, image, voice, task creation, task completion, and generated-asset persistence in `backend/app/services/actions.py`.
-- `OpenAIGateway` centralizes OpenAI vector stores, files, Responses parsing, retrieval, image, voice, and transcription calls in `backend/app/integrations/openai_gateway.py`.
-
-Webapp:
-
-- The frontend is already Vite/React/TypeScript with `build:watch`, sourcemaps, and no minification in `package.json` and `frontend/vite.config.ts`.
-- The app already has a library panel, upload, source selection, tags, search/branch, action buttons, result inspection, and a ChatKit panel in `frontend/src/App.tsx`.
-- ChatKit is already mounted with `@openai/chatkit-react`, authenticated fetch, selected-source metadata injection, and `/api/chatkit` as the backend in `frontend/src/lib/api.ts`.
-- Auth already supports Clerk or local-dev bearer mode via `frontend/src/main.tsx`, `backend/app/web_auth.py`, and `backend/app/services/auth.py`.
-
-MCP:
-
-- MCP is built with FastMCP in `backend/app/mcp/server.py`, mounted over streamable HTTP in `backend/app/main.py`, and exposed over stdio in `backend/app/mcp/stdio.py`.
-- Current MCP tools cover sources, tags, source detail, text ingest, source delete, search, branch search, QA, freeform, image, voice, task list, and task detail.
-- The existing MCP Apps UI is a Prefab "Semantic Sources" view registered from `backend/app/mcp/server.py`, and tests confirm a UI resource URI is advertised.
-
-Tests:
-
-- Current integration tests cover HTTP upload/search/QA and MCP tool discovery in `tests/integration/test_app_contracts.py`.
-- `tests/conftest.py` already has a fake OpenAI gateway pattern that can support broader integration and browser tests without mocking every service boundary.
-
-## Local Environment And Live-Test Setup
-
-Local `.env` handling is now clear enough to run real OpenAI-backed checks when desired, without committing secrets or cluttering the template.
-
-- `.env` is ignored by `.gitignore`, so local credentials stay out of git.
-- The local `.env` can be seeded from `../openai-vectorstore-mcp-app/.env` for the shared keys this app expects:
-  - `OPENAI_API_KEY`
-  - `CLERK_SECRET_KEY`
-  - `APP_SIGNING_SECRET`
-  - `CLERK_ISSUER_URL`
-  - `VITE_CLERK_PUBLISHABLE_KEY`
-- Keep sensible defaults in `AppSettings` and `.env.example`; avoid adding optional local overrides unless they are truly needed.
-- Railway/S3-compatible local `.env` state:
-  - `STORAGE_BACKEND=s3`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_URL_STYLE` are set locally.
-  - `.env.example` keeps secret values empty.
-- Playwright should run with live OpenAI and Railway storage, but with Clerk disabled through test-only env overrides and local-dev auth enabled.
-- With the OpenAI key and app signing secret present, backend real-agent checks can run against the local app. Live Clerk browser checks additionally need a test-user/sign-in strategy.
-- Playwright is installed and available through `npm run test:e2e`; broader screenshot/workflow automation remains a Phase 8 task.
-
-## Drift Risks To Fix Early
-
-The project is already close enough that the largest risk is not missing code, but parallel concepts evolving separately:
-
-- ORM models, Pydantic schemas, frontend TypeScript types, ChatKit tool payloads, and MCP tool payloads are hand-maintained separately.
-- ChatKit tools and MCP tools expose similar actions under different names and slightly different parameter limits.
-- Frontend source selection is passed to ChatKit as per-request metadata, while MCP callers pass source scope explicitly per tool.
-- `AppTask` has `kind="ingest"`, but upload currently runs synchronously and returns `task=None`.
-- Database bootstrapping uses `Base.metadata.create_all`; there is no migration path yet, so production schema changes could drift.
-- OpenAI vector attributes are denormalized at ingest time with `tag_1` through `tag_8`. Tag edits, source title edits, or reindexing will require explicit vector-store synchronization.
-- Source deletion removes app storage and DB records, but does not yet delete or detach OpenAI original files and chunk files.
-- MCP has text ingest but not file/PDF ingest parity with the web upload endpoint.
-- The current MCP Apps UI is useful but source-only; it is not yet the same agentic product surface as ChatKit.
-
-## Phase 1: Stabilize App-Core Contracts
-
-Status: completed for the initial implementation.
-
-Define one typed app-core capability boundary that both ChatKit and MCP call. The goal is not a large abstraction layer; it is a small, typed facade over the existing services so the surfaces cannot drift.
-
-Tasks:
-
-- [x] Create or document a shared operation map for `list_sources`, `list_tags`, `get_source_detail`, `ingest_source`, `delete_source`, `search_chunks`, `branch_search`, `qa`, `freeform`, `generate_image`, `generate_voice`, `list_tasks`, and `get_task`.
-- [x] Keep Pydantic request/response models in `backend/app/schemas/records.py` as the source of truth for app contracts.
-- [x] Add a generated or checked TypeScript contract path. Options:
-  - Generate TS types from Pydantic/OpenAPI during development.
-  - Add a contract test that compares FastAPI OpenAPI schema names and key fields against `frontend/src/lib/types.ts`.
-- [x] Normalize naming between ChatKit and MCP. Prefer user-facing tool names that read naturally but map to the same internal operation names.
-- [x] Add a parity test that asserts ChatKit-exposed tools and MCP-exposed tools cover the same app-core operation set, allowing intentional differences such as render-only MCP UI tools.
-
-Implementation notes:
-
-- Added `backend/app/core/capabilities.py` as the shared operation matrix for app-core, REST, ChatKit, and MCP mappings.
-- Added contract tests that check documented REST routes, MCP tool names/metadata, ChatKit tool names, and key frontend TypeScript fields against FastAPI OpenAPI schemas.
-- Added `VectorstoreChatKitServer.tool_names()` as a public test/introspection hook.
-- Updated `frontend/src/lib/types.ts` to include missing fields for chunk attributes, ingest finalize responses, task payloads, and task details.
-- Updated the frontend `uploadSource` API helper to return the backend's actual `IngestFinalizeResponse` instead of pretending the upload endpoint returns a refreshed source list.
-- Hid the `/mcp` redirect shim from OpenAPI schema generation so schema checks do not see transport plumbing as an app contract.
-
-Acceptance criteria:
-
-- One documented capability matrix exists.
-- A test fails if a new app operation is added to one surface but not deliberately handled by the others.
-- Frontend types have either generation or drift detection.
-
-## Phase 2: Make Ingestion Task-Based And Reconciled
-
-Status: completed for the in-process asyncio background execution baseline.
-
-Move ingestion from a blocking request into app-owned task lifecycle state. Keep the current synchronous path initially if needed, but make the data model represent the real lifecycle.
-
-Tasks:
-
-- [x] Use `AppTask(kind="ingest")` for source upload and MCP ingest.
-- [x] Return `IngestFinalizeResponse.task` from `/api/sources` instead of always returning `task=None`.
-- [x] Track extraction, semantic split, vector-store upload, and final publication in `AppTask.state_json`.
-- [x] Add clear source statuses: keep `processing`, `ready`, `failed`, and consider whether `queued` belongs on `SourceFile` or only on `AppTask`.
-- [x] Make failures reconciled for tracked OpenAI files:
-  - Preserve failed source records with useful `error_message`.
-  - Track OpenAI original file IDs and chunk file IDs created before failure.
-  - Add cleanup or reconciliation code for failed and deleted sources.
-- [x] Add log lines for ingest start, split complete, vector attach complete, ingest complete, ingest failed, cleanup complete, and durations.
-
-Implementation notes:
-
-- Added ingest task creation to `SourceService.ingest_source` using existing `AppTask` fields, without adding schema yet.
-- Web uploads now pass `origin_surface="web"` and MCP text ingest passes `origin_surface="mcp"`.
-- Ingest state now records stages such as `stored_source`, `uploading_original_file`, `extracting_text`, `splitting_semantically`, `publishing_chunks`, `completed`, and `failed`.
-- Integration tests now assert upload returns a completed ingest task and task history includes both ingest and QA tasks.
-- Added OpenAI cleanup calls for source deletion: chunk files are detached from the vector store, tracked OpenAI files are deleted, and task `source_file_id` references are nulled before deleting the source row.
-- Added failure-time cleanup for tracked OpenAI files when ingest fails after original or chunk files have been created.
-- Integration tests now verify delete cleanup and failed-ingest cleanup through the fake OpenAI gateway.
-- Added lifecycle logs for ingest start, split completion, chunk publication, ingest completion, ingest failure, and OpenAI cleanup.
-- Added a lazy in-process asyncio ingest runner on `SourceService`, bounded by `task_runner_max_concurrency`.
-- Upload and MCP file/text ingest now return after creating a source plus `AppTask(status="queued")`; the background worker moves the task through `running`, `completed`, `failed`, or `cancelled`.
-- The worker reopens fresh DB sessions, reads the stored source payload from app storage, and reconciles the same extraction, semantic split, OpenAI upload, vector publication, source status, task result, and failure cleanup state as the previous inline path.
-- `AppServices.close()` now stops source background tasks before closing OpenAI/auth/database clients.
-- Integration tests now poll task detail until completion/failure before asserting search, QA, source detail, MCP ingest behavior, and cleanup.
-- Source statuses remain `processing`, `ready`, and `failed`; queue state lives on `AppTask`.
-- Remaining Phase 2 hardening: durable queue/restart recovery, explicit delete-vs-running-ingest cancellation semantics, and optional user-facing retry/reconcile commands.
-
-Decision updates:
-
-- Background ingestion will use an in-process asyncio worker first, bounded by `task_runner_max_concurrency`.
-- Queue state should live on `AppTask`; source records can continue using `processing`, `ready`, and `failed`.
-
-Acceptance criteria:
-
-- Uploading a source creates an ingest task visible through `/api/tasks`.
-- The UI can show an upload as queued/running/failed/ready without guessing.
-- A failed ingest does not leave untracked OpenAI vector-store files.
-
-## Phase 3: First-Class PDF Smart Split
-
-Status: completed for the current web, ChatKit, REST, MCP, and MCP Apps baseline.
-
-PDF smart split already exists as a hidden path inside upload. Make it first-class so the app can preview, tune, re-run, and expose it through ChatKit and MCP.
-
-Tasks:
-
-- [x] Extract PDF text by page into a typed intermediate structure instead of one large string. Preserve page numbers and source offsets.
-- [x] Use `semantic_split_pdf_batch_pages` from `AppSettings`; it currently exists but is not used.
-- [x] Add a page-batched smart split strategy that can handle large PDFs without overflowing model input.
-- [x] Add a split-preview model that includes proposed chunks, titles, summaries, keywords, locators, and auto-tags before vector-store publication.
-- [x] Decide whether split preview is persisted as task `state_json`, a new table, or only a transient response. Prefer task state first unless preview editing becomes complex.
-- [x] Add a re-split operation for a failed or ready source that invalidates/replaces chunks and vector-store files safely.
-- Expose PDF smart split through:
-  - [x] Web ChatKit tool.
-  - [x] REST endpoint for upload/preview/finalize if needed by the UI.
-  - [x] MCP file/PDF ingest tool.
-  - [x] MCP Apps UI controls.
-
-Implementation notes:
-
-- Added `PdfTextBatch` and `build_pdf_text_batches()` to preserve page markers and group extracted PDF text by `semantic_split_pdf_batch_pages`.
-- `SourceService` now routes PDFs through a page-batched semantic split path when more than one batch is needed.
-- Added focused parser tests for page batch labels, page marker preservation, and fallback behavior when extracted text has no page markers.
-- Added MCP `ingest_file_source` as a base64 file/PDF ingest route over the same app-core ingestion operation.
-- Added transient `SplitPreviewResponse` contracts and `SourceService.preview_semantic_split()` for inspect-only previews over raw file/text payloads.
-- Added `POST /api/sources/split-preview`, ChatKit `preview_semantic_split`, MCP `preview_text_split`, and MCP `preview_file_split`. These run extraction and semantic/PDF batching but do not create sources, tasks, chunks, OpenAI files, or vector-store attachments.
-- Added frontend TypeScript/API contracts for split previews so a UI can call the REST preview path later.
-- Added integration tests that prove REST and MCP previews return chunk/tag drafts while leaving source/task state empty.
-- Added a task-backed `resplit_source` operation exposed through REST, ChatKit, and MCP. It computes the new split before deleting old chunk/vector files so pre-replacement failures preserve existing ready chunks.
-- Re-split preserves the original OpenAI file when present, replaces old semantic chunk rows after successful split, detaches/deletes old chunk vector files, and records replacement progress in `AppTask(kind="resplit")`.
-- Added frontend TypeScript/API contracts for re-split and integration tests for successful replacement plus failed pre-replacement preservation.
-- Added direct webapp controls to stage selected files, run inspect-only split preview before upload, enqueue upload, and queue a safe re-split for the selected source.
-- Added MCP Apps UI controls to inspect a source from the rendered source browser and queue a re-split from the app UI.
-- Added a generated two-page PDF fixture test that exercises real PDF extraction, page markers, and page-range batching.
-- Remaining Phase 3 work: none for the current baseline. Future polish can add editable preview history, richer per-page offsets, and native host file inputs where available.
-
-Decision updates:
-
-- Split preview should be inspect-only. Users iterate by asking the agent to adjust guidance and re-run the split, rather than manually editing chunk drafts.
-- Split preview is transient for now, not persisted in task state or a preview table.
-
-Acceptance criteria:
-
-- Large PDFs split in batches with correct page-range locators.
-- The same split result shape is used by web, ChatKit, and MCP.
-- Tests cover PDF extraction and chunk locator behavior with a small fixture PDF.
-
-## Phase 4: Tag Model And Vector-Store Filter Correctness
+Implemented:
+
+- New `filesystem_entry` ORM table, Alembic migration, root/folder/source backfill, and source path fields.
+- REST APIs for listing folders, searching filesystem entries, creating folders, renaming/moving entries, recursive permanent deletes, and current-folder ingest.
+- Vector attributes v3 with `virtual_path` and `virtual_name` while staying inside OpenAI's 16-key metadata limit.
+- Selected-file OpenAI file-input preparation for ChatKit, including re-uploading legacy originals as `user_data` when needed.
+- ChatKit tools for filesystem listing/search/mutation and client-tool coordination: `set_file_selection`, `reveal_file`, and `set_file_search`.
+- Matching MCP tools and capability matrix entries for filesystem operations.
+- Compact web explorer with breadcrumbs, rows, query, tags, create folder, rename, delete, drag-to-folder move, upload, preview, and ChatKit selection scope.
+
+Verification completed:
+
+- `npm run typecheck`
+- `npm run build`
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest tests/test_migrations.py tests/test_vector_attributes.py tests/integration/test_app_contracts.py -q`
+- `npm run test:e2e -- --grep "workspace shell"`
+- `npm run test:e2e -- --project=chromium-desktop --grep "explorer-selected"`
+
+### Earlier Completed Phases
 
 Status: completed for the current baseline.
 
-Tag-filtered access already works through vector attributes. Harden it so tag edits and app metadata remain synchronized with OpenAI vector-store filters.
+- App-core contracts and drift checks: added a shared capability matrix and contract tests across REST, ChatKit, MCP, and frontend TypeScript fields.
+- Task-based ingestion: uploads and MCP ingests create `AppTask` rows, run through the in-process asyncio worker, track stage state, and reconcile failures/cleanup.
+- PDF smart split: added page-batched PDF splitting, split preview, re-split, REST/ChatKit/MCP exposure, and parser/PDF fixture tests.
+- Tag model and vector filters: kept tags source-scoped, added bounded OpenAI metadata slots, date filters, vector attribute versions, tag update/reindex, and DB post-filtering.
+- ChatKit webapp: expanded app tools, persisted selected-file scope in thread metadata, hid composer attachments for the current UX, and added progress events.
+- MCP server and MCP Apps UI: added file ingest, explorer query/tag UI, source detail, search results, task visibility, and contract coverage.
+- Migration discipline: added Alembic, initial migration, runtime migration mode, and schema drift tests.
+- Explorer and performance passes: replaced the large hero/card layout with a dense explorer/chat shell, simplified the palette, memoized expensive React regions, bounded rendered lists, and added screenshot smoke checks.
+- Documentation and operations: updated README and docs for architecture, ChatKit, MCP, auth, testing, migrations, storage, cleanup, and reindexing.
+- Developer workflow: added VS Code launch support and ensured `npm run build:watch` exists.
 
-Tasks:
+## Data Model And Drift Guardrails
 
-- [x] Add manual tag create/update/delete operations if users need editable tags.
-- [x] Decide whether tags attach only to sources or can also attach to chunks. Current model attaches tags to sources.
-- [x] Keep `TAG_SLOT_COUNT=8` as an explicit product limitation or redesign attributes for more tags per source if OpenAI vector-store filtering supports the needed shape.
-- [x] Add reindexing when tags change, because vector attributes are currently written once at chunk publication.
-- [x] Add a `vector_attributes_version` concept, either in chunk metadata or in settings, so future reindexing can detect stale chunks.
-- [x] Add DB post-filtering fallback only if OpenAI vector-store filters cannot express a future tag model.
-- [x] Add tests for all/any tag matching and source-kind/source-id combinations.
+- ChatKit and app-core state should stay intentionally related:
+  - `AppChatThread` stores thread metadata including selected-file scope.
+  - `AppTask.origin_thread_id` links agent work back to ChatKit.
+  - `AppChatAttachment` remains compatibility plumbing for older ChatKit attachment hosts.
+  - `SourceFile`, `SemanticChunk`, tags, filesystem entries, generated assets, and task records are the app-owned source of truth.
+- `SourceService.ingest_source` remains the canonical ingest path for web, ChatKit, MCP, and future Research Importer flows.
+- Virtual paths are app-owned. OpenAI Files API IDs, vector-store chunk file IDs, and bucket object keys are implementation details tracked by source/chunk/filesystem records.
+- Tags remain source-level metadata for the current baseline. OpenAI vector-store filtering uses canonical `tags` plus bounded exact-match tag slots.
+- New schema changes must include Alembic migrations and drift tests.
+- New app operations must update the capability matrix, Pydantic contracts, frontend types, ChatKit tools, MCP tools, and tests together.
 
-Implementation notes:
+## Local Environment And Verification
 
-- Confirmed the current baseline keeps tags source-scoped. Chunk-level tags remain a future schema/product change, not an accidental parallel model.
-- Kept `TAG_SLOT_COUNT=8` as an explicit vector-attribute limit and added `VECTOR_ATTRIBUTES_VERSION=1` to chunk vector attributes.
-- Added vector attribute/filter construction tests for versioning, bounded tag slots, all/any tag groups, source IDs, and source kind filters.
-- Updated the fake OpenAI gateway to evaluate the same OpenAI vector-store filter shape used by app search, then added HTTP integration coverage for tag all/any, selected source, and source-kind filters.
-- Added DB-side post-filtering after vector search hydration so stale or overly broad vector-store results cannot escape app-owned source/tag/kind constraints.
-- Added `update_source_tags` across REST, ChatKit, MCP, frontend API/types, and the direct webapp inspector. It queues `AppTask(kind="reindex")`, updates source tag links, republishes existing chunk files with refreshed vector attributes, and best-effort deletes old chunk vector files.
-- Added integration coverage proving a source can move from one tag to another, old vector files are detached/deleted, and tag-filtered search follows the new app-owned tags.
-- Added manual tag create/update/delete operations across REST, ChatKit, and MCP. Tag rename/delete returns affected reindex tasks so vector-store tag slots stay aligned with app-owned tag names and slugs.
-- Added a small explorer affordance for creating manual tags without leaving the file browser. Rename/delete remain agent/tool operations for now to avoid crowding the explorer.
-- Added integration coverage for manual tag creation, tag rename reindexing, deleted-tag reindexing, and continued tag-filtered search after the slug changes.
-- Remaining Phase 4 work: optional retry/reconcile affordances for failed tag reindex tasks.
+- `.env` is ignored and can be seeded from `../openai-vectorstore-mcp-app/.env` for shared local secrets.
+- Keep `.env.example` light; optional settings should have defaults in `AppSettings`.
+- Mandatory settings such as `OPENAI_API_KEY` should remain real settings and fail clearly if missing.
+- Railway/S3-compatible storage is supported locally through `STORAGE_BACKEND=s3`, `S3_ENDPOINT`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`, `S3_REGION`, and `S3_URL_STYLE`; examples keep secret values empty.
+- Playwright should run with Clerk disabled through test-only env overrides and local-dev auth enabled.
 
-Acceptance criteria:
+Current verification commands:
 
-- Tag-filtered search returns the same logical result set from REST, ChatKit, and MCP.
-- Reindexing is deterministic and observable through logs/tasks.
-- Tag changes cannot silently leave stale vector-store filters.
-
-## Phase 5: Agentic ChatKit Webapp
-
-Status: completed for the current baseline.
-
-Make ChatKit the main way to access the app, with the surrounding UI acting as context, inspection, and control surface.
-
-Tasks:
-
-- Keep the current custom ChatKit backend pattern. Official docs describe this as implementing `ChatKitServer`, persisting threads/messages/files with a `Store`, forwarding requests to the server, and passing custom context into `server.process`.
-- [x] Expand ChatKit tool coverage so the agent can directly list sources/tags, inspect source details, ingest text snippets, preview splits, re-split, update source tags, guarded-delete sources, search, branch, run actions, and inspect task progress.
-- [x] Move selected source scope from only request metadata toward explicit thread/app state:
-  - [x] Continue sending current selections from the frontend.
-  - [x] Store meaningful scope decisions in thread metadata or app task input when the agent acts.
-  - [x] Make the scope visible in the UI and in task history.
-- Add ChatKit widgets or structured outputs for:
-  - Search hits with citations and locators.
-  - Branch search levels.
-  - Source detail and chunk map.
-  - Generated asset links/previews.
-  - Ingest progress and split preview.
-- [x] Decide whether ChatKit attachments should become source ingestion inputs. The backend has ChatKit attachment storage, while the composer currently disables attachments.
-- [x] Keep ChatKit attachment ingestion as backend compatibility plumbing, but do not expose composer attachments in the current web UX:
-  - [x] direct upload endpoint receives authenticated app fetches if an older host uses it.
-  - [x] uploaded files are immediately queued through `SourceService.ingest_source(origin_surface="chatkit")`.
-  - [x] `AppChatAttachment` metadata links attachment IDs to source and task IDs so chat history and app-core task history stay related.
-- Replace the standalone action buttons with agent-friendly controls where useful, but keep direct controls for repeatable workflows like upload, source selection, and filter editing.
-- [x] Add helpful progress events for all long-running tools, not only search/branch/image.
-- Tighten layout and styling after functionality is stable. The current UI works, but it uses a hero-like layout and broad cards; for an operational RAG workspace, move toward denser, quieter controls.
-
-Implementation notes:
-
-- Added ChatKit tools for `get_source_detail`, `ingest_text_source`, `delete_source` with explicit confirmation, `list_tasks`, and `get_task`.
-- Updated ingest tasks so ChatKit-origin text ingest can carry `origin_thread_id`, matching the task/thread linkage planned for ChatKit and app-core drift control.
-- Added a compact recent-task strip to the webapp shell so queued/running/completed work is visible outside chat.
-- Persisted selected-file scope into ChatKit thread metadata (`selected_source_ids`, count, origin, timestamp) whenever threads are saved, and the live ChatKit QA test now asserts task input contains the selected source scope.
-- Decision update: the web ChatKit composer should not expose attachments for the current product direction; file input belongs to the explorer. The attachment endpoint remains compatibility plumbing, and attachments still become normal app-core sources if used by an older host.
-- Added completion progress updates for ChatKit's long-running app tools so the agent surface reports hit counts, level counts, proposed split sizes, task IDs/statuses, queued reindex counts, generated asset IDs, and delete cleanup completion.
-- Added lightweight frontend background-task polling so queued/running ingest, re-split, and reindex work refreshes the explorer and selected preview automatically while work is active.
-- Tightened filesystem UX details: selected file names appear in the ChatKit scope strip, filtered bulk selection now says "Select visible", semantic search runs on Enter, and preview object URLs are revoked even when source switching races a blob load.
-- Remaining Phase 5 polish: custom ChatKit widgets/structured cards can be added later once we decide whether to use ChatKit Studio widget templates or keep the agent text-first. The current baseline exposes every app-core operation through ChatKit tools and progress events.
-
-Acceptance criteria:
-
-- A user can upload or select sources, ask ChatKit to search/branch/answer/generate, and inspect cited chunks without leaving the agentic flow.
-- ChatKit history persists and reloads across sessions.
-- ChatKit actions create tasks with `origin_surface="chatkit"` and correct `origin_thread_id`.
-
-## Phase 6: MCP Server And MCP Apps UI
-
-Status: completed for the current baseline.
-
-Turn the MCP server from a useful tool adapter into a ChatGPT Apps-ready surface with data tools, render tools, auth metadata, and file/PDF parity.
-
-Tasks:
-
-- Preserve the current streamable HTTP and stdio entry points.
-- Add ChatGPT Apps-ready auth:
-  - Serve protected-resource metadata for `/mcp/`.
-  - Publish or integrate the required authorization-server metadata for the chosen Clerk/OAuth setup.
-  - Add security schemes and scope checks to MCP tool descriptors.
-  - Verify audience/resource/scopes consistently.
-  - Document HTTPS and `APP_BASE_URL` requirements.
-- Split data tools from render tools, following current OpenAI Apps guidance:
-  - Data tools return JSON only.
-  - Render tools attach `_meta.ui.resourceUri` and, for ChatGPT compatibility, `_meta["openai/outputTemplate"]` when needed.
-- Expand MCP Apps UI beyond the current sources browser:
-  - [x] Library browser.
-  - [x] Source detail and chunk inspection.
-  - [x] Search results.
-  - Branch levels.
-  - Split preview and ingest progress.
-  - [x] Task history.
-  - Generated assets.
-- Add file/PDF ingest parity:
-  - Support ChatGPT Apps file inputs where available.
-  - Keep `ingest_text_source` for simple text.
-  - Add `ingest_file_source` or `ingest_pdf_source` that reaches the same app-core ingestion operation as web upload.
-- Decide whether to expose an MCP-level agent tool that wraps the same ChatKit/Agents SDK behavior, or keep MCP as tool primitives for the host model. Prefer primitives plus render tools first, then add a higher-level `ask_library_agent` only if real hosts need it.
-- Consider adding canonical `search` and `fetch` tools for Company Knowledge/deep research compatibility while preserving app-specific `search_chunks`.
-
-Acceptance criteria:
-
-- MCP hosts can use the same capabilities as the webapp, including PDF smart split and tag-filtered retrieval.
-- MCP Apps UI resources use `text/html;profile=mcp-app` and versioned `ui://` URIs.
-- Tool descriptors advertise correct read-only/destructive hints, security schemes, and UI resource metadata.
-- Tests verify tool discovery, metadata, auth challenge, UI resource MIME, and data/render split.
-
-Implementation notes:
-
-- Added MCP `ingest_file_source` with `filename`, `payload_base64`, optional `media_type`, tags, and guidance. It routes through `SourceService.ingest_source` with `origin_surface="mcp"`.
-- Updated the capability matrix so one app-core operation can map to multiple MCP tools.
-- Contract tests now require `ingest_file_source` to be advertised with `filename` and `payload_base64`, and a behavioral MCP test verifies it creates a ready source plus an MCP-origin ingest task.
-- Expanded the existing `sources` MCP Apps UI resource so it now has a file query bar, tag filter chips, semantic chunk search results, source detail chunk summaries, and recent task visibility.
-- Remaining MCP file work: native Apps file params, UI controls, auth metadata, and data/render split.
-
-Decision updates:
-
-- Production Apps/MCP auth should commit to Clerk as the OAuth/linking provider rather than staying generic.
-
-## Phase 7: Data Model And Migration Discipline
-
-Status: completed for the current baseline.
-
-The backend tables are "probably setup fine" for local development, but production needs migration discipline before more tables and fields are added.
-
-Tasks:
-
-- [x] Add Alembic or an equivalent migration path before changing schema heavily.
-- [x] Create an initial migration from the current ORM state.
-- Add migrations for:
-  - Ingest task state refinements.
-  - Any split preview persistence.
-  - Vector attribute versioning or reindex metadata.
-  - OAuth/client/linking state if Clerk does not own it fully.
-  - Any app-core operation audit tables, if needed.
-- [x] Add a schema check in CI that detects model drift from migrations.
-- [x] Add a runtime schema mode that can use Alembic migrations instead of `create_all`.
-- Keep ChatKit tables and app-core tables intentionally related:
-  - `AppChatThread` and `AppTask.origin_thread_id`.
-  - `AppChatAttachment` and source ingestion, if attachments become sources.
-  - Generated assets and tasks.
-
-Acceptance criteria:
-
-- [x] New database state has an initial migration baseline and a drift check instead of relying only on `create_all`.
-- [x] The relationship between ChatKit state and app-core state is documented in this plan and covered by integration tests for thread/task/attachment linkage.
-
-## Phase 8: Automated Tests And Codex-Driven UI Checks
-
-Status: completed for the current baseline.
-
-Keep the integration-test preference. Add browser automation only where it verifies real user workflows and layout behavior.
-
-Backend integration tests:
-
-- Expand `tests/integration/test_app_contracts.py` to cover tag filters, branch search, task lifecycle, failure state, delete cleanup, and MCP parity.
-- Add tests for PDF smart split with a fixture PDF.
-- Add tests for OpenAI vector-store filter construction, especially all/any tags and source/source-kind combinations.
-
-Frontend and browser tests:
-
-- [x] Add Playwright.
-- Run the FastAPI app with the fake OpenAI gateway and built frontend.
-- Test upload, source selection, search, QA, generated asset display, and task visibility.
-- Add ChatKit smoke tests for mount, authenticated `/api/chatkit` fetch, selected-source metadata, streamed response rendering, and history load.
-- Add a live ChatKit attachment test for upload, ingest completion, grounded QA, explicit delete confirmation, and source cleanup.
-- Add screenshot checks at desktop, 1280px, 820px, and mobile breakpoints for:
-  - Three-column layout.
-  - ChatKit panel placement.
-  - No text clipping.
-  - No overlapping controls.
-  - Results and source cards not resizing unexpectedly.
-
-Codex-driven UI tests:
-
-- Add a documented command that starts the app in test mode and lets Codex or Playwright capture screenshots.
-- Store screenshots as artifacts rather than committing generated screenshots by default.
-- Consider a small "UI smoke skill" later if repeated browser verification becomes common.
-
-Current readiness notes:
-
-- Added `@playwright/test`, `playwright.config.ts`, `npm run test:e2e`, and a first smoke spec at `frontend/e2e/workspace.spec.ts`.
-- The smoke spec starts the FastAPI app with local-dev auth and isolated local SQLite/storage settings, starts Vite with Clerk disabled, opens desktop and mobile Chromium views, verifies the main workspace regions, and captures screenshots into ignored `output/playwright/` artifacts.
-- Current live-test direction: default `npm run test:e2e` should use real `OPENAI_API_KEY` and Railway S3 settings from `.env`, while overriding Clerk env vars to empty values for Playwright.
-- Expected manual run path outside Playwright: `npm run build:watch`, run the FastAPI app from `.venv`, then open `http://localhost:8000`; alternatively run `npm run dev` against the backend on `localhost:8000`.
-- Live UI testing with Clerk needs Clerk keys plus a deterministic test-user/sign-in flow. Local-dev auth can cover non-Clerk browser smoke tests once Playwright is installed.
-
-Acceptance criteria:
-
-- `./.venv/bin/pytest`, `./.venv/bin/pyright`, `npm run typecheck`, and a Playwright smoke suite cover the main surfaces.
-- Browser tests can run with local-dev auth and fake OpenAI behavior.
-- Remaining Phase 8 polish: add more breakpoint screenshot assertions, generated asset display coverage, and fake-OpenAI browser flows if live-test cost or flakiness becomes a problem.
-
-## Phase 9: Documentation And Operational Readiness
-
-Status: completed for the current baseline.
-
-Update docs as the implementation catches up.
-
-Tasks:
-
-- [x] Update `README.md` so it distinguishes current local capabilities from ChatGPT Apps production requirements.
-- [x] Add a `docs/` directory with:
-  - [x] Architecture and capability matrix.
-  - [x] Data model and migration policy.
-  - [x] ChatKit webapp behavior.
-  - [x] MCP server and Apps UI behavior.
-  - [x] Auth setup for local-dev, Clerk web, MCP HTTP, stdio, and ChatGPT Apps.
-  - [x] Testing and screenshot workflow.
-- [x] Add `.env.example` entries for any new OAuth, MCP Apps, or ChatKit settings.
-- [x] Add operational notes for OpenAI file/vector-store cleanup and reindexing.
-
-Acceptance criteria:
-
-- [x] A new contributor can run the webapp, run MCP locally, understand required production auth, and run tests from docs alone.
-
-## Suggested Order
-
-1. Stabilize app-core contracts and drift checks.
-2. Add migration discipline before schema changes.
-3. Convert ingestion into task-based lifecycle state.
-4. Make PDF smart split first-class and batch-aware.
-5. Harden tag/vector-store reindexing.
-6. Upgrade ChatKit webapp into the primary agentic surface.
-7. Bring MCP and MCP Apps UI to parity.
-8. Add Playwright and screenshot-driven UI checks.
-9. Update docs and deployment guidance.
+- `./.venv/bin/pyright`
+- `./.venv/bin/pytest`
+- `npm run typecheck`
+- `npm run build`
+- `npm run test:e2e`
 
 ## Open Questions
 
-- Resolved: PDF split preview is inspect-only; users should iterate by asking the agent to adjust/re-run splitting guidance.
-- Resolved: background ingestion should use an in-process asyncio worker first.
-- Resolved: production MCP/Apps auth should commit to Clerk.
-- Resolved for the current baseline: the "third form" is treated as the shared app-core capability boundary rather than another external surface.
-- Resolved: ChatKit attachments remain backend compatibility plumbing, but the current web UX does not expose composer attachments.
-- Resolved for the current baseline: MCP exposes primitive tools plus Apps UI resources; a high-level `ask_library_agent` tool can be added later only if host behavior shows it is needed.
-- Resolved for the current baseline: tags remain source-level metadata fields.
-- Resolved for the current baseline: the eight-tag vector attribute limit is accepted for the first production version.
+- Should Research Importer candidates appear in the main explorer tree before approval, or only inside a separate review queue until ingested?
+- Should Research Importer provenance be stored directly on `SourceFile.metadata_json`, in separate import/candidate tables only, or both?
+- Should ChatKit structured cards be built with ChatKit/MCP Apps widgets now, or should the next pass stay text/tool-first until importer behavior stabilizes?
+- Should MCP eventually add a higher-level `ask_library_agent` tool, or should it stay primitive-tool-first unless a real host needs the wrapper?
 
 ## Official References Checked
 

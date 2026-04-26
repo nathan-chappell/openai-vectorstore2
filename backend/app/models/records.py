@@ -31,6 +31,7 @@ class AppUser(Base):
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="user")
     chat_threads: Mapped[list["AppChatThread"]] = relationship(back_populates="user")
     chat_attachments: Mapped[list["AppChatAttachment"]] = relationship(back_populates="user")
+    research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(back_populates="user")
 
 
 class UserLibrary(Base):
@@ -56,6 +57,9 @@ class UserLibrary(Base):
     tags: Mapped[list["Tag"]] = relationship(back_populates="library", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="library")
     assets: Mapped[list["StoredAsset"]] = relationship(back_populates="library", cascade="all, delete-orphan")
+    research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(
+        back_populates="library", cascade="all, delete-orphan"
+    )
 
 
 class Tag(Base):
@@ -95,6 +99,7 @@ class SourceFile(Base):
     openai_original_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     openai_original_file_purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
     ingest_strategy: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    metadata_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
@@ -106,6 +111,14 @@ class SourceFile(Base):
     chunks: Mapped[list["SemanticChunk"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
     tag_links: Mapped[list["SourceTagLink"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="source_file")
+    research_seed_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(
+        back_populates="parent_source_file",
+        foreign_keys=lambda: ResearchImportCandidate.parent_source_file_id,
+    )
+    research_linked_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(
+        back_populates="linked_source_file",
+        foreign_keys=lambda: ResearchImportCandidate.linked_source_file_id,
+    )
 
 
 class FilesystemEntry(Base):
@@ -234,6 +247,57 @@ class AppTask(Base):
     library: Mapped[UserLibrary] = relationship(back_populates="tasks")
     source_file: Mapped[SourceFile | None] = relationship(back_populates="tasks")
     assets: Mapped[list[StoredAsset]] = relationship(back_populates="task")
+    research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(back_populates="task")
+
+
+class ResearchImportCandidate(Base):
+    __tablename__ = "research_import_candidate"
+    __table_args__ = (
+        Index("ix_research_candidate_library_status_created", "library_id", "status", "created_at"),
+        Index("ix_research_candidate_task_depth", "task_id", "depth"),
+        Index("ix_research_candidate_normalized_url", "library_id", "normalized_url"),
+        Index("ix_research_candidate_content_hash", "library_id", "content_hash"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    library_id: Mapped[str] = mapped_column(ForeignKey("user_library.id"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), nullable=False, index=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("app_task.id"), nullable=False, index=True)
+    parent_candidate_id: Mapped[str | None] = mapped_column(
+        ForeignKey("research_import_candidate.id"), nullable=True, index=True
+    )
+    parent_source_file_id: Mapped[str | None] = mapped_column(ForeignKey("source_file.id"), nullable=True, index=True)
+    linked_source_file_id: Mapped[str | None] = mapped_column(ForeignKey("source_file.id"), nullable=True, index=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    source_type: Mapped[str] = mapped_column(String(32), nullable=False)
+    url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    normalized_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    title: Mapped[str] = mapped_column(String(512), nullable=False)
+    rationale: Mapped[str | None] = mapped_column(Text, nullable=True)
+    score: Mapped[float | None] = mapped_column(nullable=True)
+    depth: Mapped[int] = mapped_column(nullable=False, default=0)
+    provenance_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    content_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    library: Mapped[UserLibrary] = relationship(back_populates="research_candidates")
+    user: Mapped[AppUser] = relationship(back_populates="research_candidates")
+    task: Mapped[AppTask] = relationship(back_populates="research_candidates")
+    parent_candidate: Mapped["ResearchImportCandidate | None"] = relationship(
+        back_populates="child_candidates",
+        remote_side=lambda: ResearchImportCandidate.id,
+    )
+    child_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(back_populates="parent_candidate")
+    parent_source_file: Mapped[SourceFile | None] = relationship(
+        back_populates="research_seed_candidates",
+        foreign_keys=[parent_source_file_id],
+    )
+    linked_source_file: Mapped[SourceFile | None] = relationship(
+        back_populates="research_linked_candidates",
+        foreign_keys=[linked_source_file_id],
+    )
 
 
 class AppChatThread(Base):

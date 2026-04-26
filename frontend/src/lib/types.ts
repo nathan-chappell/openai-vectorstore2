@@ -191,6 +191,7 @@ export type SourceDetail = SourceSummary & {
   storage_provider: string;
   storage_key: string;
   ingest_strategy: string | null;
+  metadata: Record<string, unknown>;
   chunks: ChunkSummary[];
 };
 
@@ -251,9 +252,87 @@ export type IngestFinalizeResponse = {
   task: TaskSummary | null;
 };
 
+export type ResearchSeedKind = "text" | "url" | "pdf_url" | "arxiv_url" | "uploaded_file" | "linkedin_export";
+export type ResearchCandidateSourceType = "text" | "url" | "html" | "pdf" | "arxiv" | "linkedin_export" | "uploaded_file";
+export type ResearchCandidateStatus = "pending" | "approved" | "rejected" | "ingesting" | "ingested" | "failed";
+
+export type ResearchImportCreateRequest = {
+  seed_type: ResearchSeedKind;
+  text?: string | null;
+  url?: string | null;
+  title?: string | null;
+  filename?: string | null;
+  payload_base64?: string | null;
+  media_type?: string | null;
+  tag_ids?: string[];
+  folder_id?: string | null;
+  ingest_seed?: boolean;
+  discover_references?: boolean;
+  max_depth?: number;
+  max_candidates_per_source?: number;
+  max_pending_candidates?: number;
+};
+
+export type ResearchImportCandidateSummary = {
+  id: string;
+  task_id: string;
+  status: ResearchCandidateStatus;
+  source_type: ResearchCandidateSourceType;
+  url: string | null;
+  normalized_url: string | null;
+  title: string;
+  rationale: string | null;
+  score: number | null;
+  depth: number;
+  parent_candidate_id: string | null;
+  parent_source_file_id: string | null;
+  linked_source_file_id: string | null;
+  provenance: Record<string, unknown>;
+  content_hash: string | null;
+  error_message: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ResearchImportResponse = {
+  task: TaskSummary;
+  seed_source: SourceSummary | null;
+  candidates: ResearchImportCandidateSummary[];
+  duplicate_count: number;
+};
+
+export type ResearchCandidateListResponse = {
+  candidates: ResearchImportCandidateSummary[];
+  total_count: number;
+  page: number;
+  page_size: number;
+  has_more: boolean;
+};
+
+export type ResearchCandidateStatusUpdateRequest = {
+  candidate_ids: string[];
+  status: "approved" | "rejected" | "pending";
+};
+
+export type ResearchCandidateStatusUpdateResponse = {
+  candidates: ResearchImportCandidateSummary[];
+};
+
+export type ResearchCandidateIngestRequest = {
+  candidate_ids?: string[] | null;
+  task_id?: string | null;
+  tag_ids?: string[] | null;
+  folder_id?: string | null;
+};
+
+export type ResearchCandidateIngestResponse = {
+  ingested: IngestFinalizeResponse[];
+  candidates: ResearchImportCandidateSummary[];
+};
+
 export type TaskSummary = {
   id: string;
-  kind: "ingest" | "resplit" | "reindex" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
+  kind: "ingest" | "resplit" | "reindex" | "research_import" | "qa" | "freeform" | "branch_search" | "image_gen" | "voice_gen";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   title: string;
   origin_surface: "web" | "mcp" | "chatkit" | "system";

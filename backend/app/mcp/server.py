@@ -58,6 +58,13 @@ from backend.app.schemas import (
     IngestFinalizeResponse,
     LibrarySourceDetail,
     QaRequest,
+    ResearchCandidateIngestRequest,
+    ResearchCandidateIngestResponse,
+    ResearchCandidateListResponse,
+    ResearchCandidateStatus,
+    ResearchCandidateStatusUpdateResponse,
+    ResearchImportCreateRequest,
+    ResearchImportResponse,
     SearchRequest,
     SearchResponse,
     SplitPreviewResponse,
@@ -154,6 +161,7 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
             "You are the MCP adapter for an app-first semantic RAG workspace. The app owns ingestion, "
             "semantic chunks, storage, retrieval, and generation. Use sources for a visual library UI; "
             "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
+            "start_research_import, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
             "search_chunks, branch_search, qa, freeform, generate_image, generate_voice, update_source_tags, "
             "list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
@@ -532,6 +540,130 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 declared_media_type=media_type,
                 payload=payload,
                 user_guidance=user_guidance,
+            ),
+        )
+
+    @server.tool(
+        name="start_research_import",
+        description="Start a research import from pasted text, an uploaded base64 file, or a public URL.",
+        annotations=mutating,
+    )
+    async def start_research_import_tool(
+        seed_type: Literal["text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"] = "text",
+        text: str | None = None,
+        url: Annotated[str | None, Field(max_length=2048)] = None,
+        title: Annotated[str | None, Field(max_length=512)] = None,
+        filename: Annotated[str | None, Field(max_length=255)] = None,
+        payload_base64: str | None = None,
+        media_type: Annotated[str | None, Field(max_length=128)] = None,
+        tag_ids: list[str] | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        ingest_seed: bool = True,
+        discover_references: bool = True,
+        max_depth: Annotated[int, Field(ge=0, le=4)] = 2,
+        max_candidates_per_source: Annotated[int, Field(ge=0, le=20)] = 8,
+        max_pending_candidates: Annotated[int, Field(ge=0, le=200)] = 40,
+    ) -> ResearchImportResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = ResearchImportCreateRequest(
+            seed_type=seed_type,
+            text=text,
+            url=url,
+            title=title,
+            filename=filename,
+            payload_base64=payload_base64,
+            media_type=media_type,
+            tag_ids=tag_ids or [],
+            folder_id=folder_id,
+            ingest_seed=ingest_seed,
+            discover_references=discover_references,
+            max_depth=max_depth,
+            max_candidates_per_source=max_candidates_per_source,
+            max_pending_candidates=max_pending_candidates,
+        )
+        return await _run_logged_tool(
+            tool_name="start_research_import",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json", exclude={"payload_base64"}),
+            operation=services.research.create_import(
+                clerk_user_id=clerk_user_id,
+                payload=payload,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
+        name="list_research_candidates",
+        description="List research import candidates by task or review status.",
+        annotations=read_only,
+    )
+    async def list_research_candidates_tool(
+        task_id: Annotated[str | None, Field(min_length=1)] = None,
+        status: ResearchCandidateStatus | None = None,
+        page: Annotated[int, Field(ge=1)] = 1,
+        page_size: Annotated[int, Field(ge=1, le=100)] = 50,
+    ) -> ResearchCandidateListResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="list_research_candidates",
+            clerk_user_id=clerk_user_id,
+            arguments={"task_id": task_id, "status": status, "page": page, "page_size": page_size},
+            operation=services.research.list_candidates(
+                clerk_user_id=clerk_user_id,
+                task_id=task_id,
+                status=status,
+                page=page,
+                page_size=page_size,
+            ),
+        )
+
+    @server.tool(
+        name="update_research_candidate_status",
+        description="Approve, reject, or return research import candidates to pending review.",
+        annotations=mutating,
+    )
+    async def update_research_candidate_status_tool(
+        candidate_ids: list[str],
+        status: Literal["approved", "rejected", "pending"],
+    ) -> ResearchCandidateStatusUpdateResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="update_research_candidate_status",
+            clerk_user_id=clerk_user_id,
+            arguments={"candidate_ids": candidate_ids, "status": status},
+            operation=services.research.update_candidate_status(
+                clerk_user_id=clerk_user_id,
+                candidate_ids=candidate_ids,
+                status=status,
+            ),
+        )
+
+    @server.tool(
+        name="ingest_research_candidates",
+        description="Ingest approved research candidates through the normal source ingestion path.",
+        annotations=mutating,
+    )
+    async def ingest_research_candidates_tool(
+        candidate_ids: list[str] | None = None,
+        task_id: Annotated[str | None, Field(min_length=1)] = None,
+        tag_ids: list[str] | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+    ) -> ResearchCandidateIngestResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = ResearchCandidateIngestRequest(
+            candidate_ids=candidate_ids,
+            task_id=task_id,
+            tag_ids=tag_ids,
+            folder_id=folder_id,
+        )
+        return await _run_logged_tool(
+            tool_name="ingest_research_candidates",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=services.research.ingest_approved_candidates(
+                clerk_user_id=clerk_user_id,
+                payload=payload,
+                origin_surface="mcp",
             ),
         )
 
@@ -1096,6 +1228,19 @@ def _summarize_result(result: object) -> object:
             "tags": len(result.split.tags),
             "extracted_character_count": result.extracted_character_count,
         }
+    if isinstance(result, ResearchImportResponse):
+        return {
+            "task_id": result.task.id,
+            "candidates": len(result.candidates),
+            "duplicate_count": result.duplicate_count,
+            "seed_source_id": result.seed_source.id if result.seed_source is not None else None,
+        }
+    if isinstance(result, ResearchCandidateListResponse):
+        return {"returned": len(result.candidates), "total_count": result.total_count}
+    if isinstance(result, ResearchCandidateStatusUpdateResponse):
+        return {"updated": len(result.candidates)}
+    if isinstance(result, ResearchCandidateIngestResponse):
+        return {"ingested": len(result.ingested), "candidates": len(result.candidates)}
     if isinstance(result, TagMutationResponse):
         return {"tag_id": result.tag.id if result.tag is not None else None, "tasks": len(result.tasks)}
     if isinstance(result, IngestFinalizeResponse):

@@ -62,6 +62,13 @@ class AppSettings(BaseSettings):
     semantic_split_pdf_batch_pages: int = 25
     semantic_split_text_batch_lines: int = 2_000
     semantic_chunk_max_search_results: int = 12
+    research_import_max_depth: int = 2
+    research_import_max_candidates_per_source: int = 8
+    research_import_max_pending_candidates: int = 40
+    research_import_fetch_timeout_seconds: float = 15.0
+    research_import_max_fetch_bytes: int = 12_000_000
+    research_import_max_text_chars: int = 120_000
+    research_import_user_agent: str = "openai-vectorstore2-research-importer/0.1"
     task_runner_max_concurrency: int = 1
     mcp_client_session_timeout_seconds: float = 60.0
 

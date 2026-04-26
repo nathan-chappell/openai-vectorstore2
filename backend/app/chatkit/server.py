@@ -26,11 +26,14 @@ from backend.app.schemas import (
     FreeformRequest,
     ImageGenerationRequest,
     QaRequest,
+    ResearchCandidateIngestRequest,
+    ResearchCandidateStatusUpdateRequest,
+    ResearchImportCreateRequest,
     SearchRequest,
     TaskKind,
     VoiceGenerationRequest,
 )
-from backend.app.services import ActionService, SourceService
+from backend.app.services import ActionService, ResearchImportService, SourceService
 
 logger = logging.getLogger("chatkit.server")
 
@@ -55,12 +58,14 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         settings: AppSettings,
         store: VectorstoreChatStore,
         sources: SourceService,
+        research: ResearchImportService,
         actions: ActionService,
     ) -> None:
         super().__init__(store=store, attachment_store=store)
         self._settings = settings
         self._store = store
         self._sources = sources
+        self._research = research
         self._actions = actions
         self._converter = VectorstoreThreadItemConverter()
 
@@ -624,6 +629,110 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return response.model_dump(mode="json")
 
+        @function_tool(name_override="start_research_import")
+        async def start_research_import_tool(
+            ctx: ChatKitToolContext,
+            seed_type: str = "text",
+            text: str | None = None,
+            url: str | None = None,
+            title: str | None = None,
+            ingest_seed: bool = True,
+            discover_references: bool = True,
+            max_depth: int = 2,
+            max_candidates_per_source: int = 8,
+            max_pending_candidates: int = 40,
+        ) -> dict[str, object]:
+            """Start a research import from pasted text or a public URL and queue discovered candidates for review."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(icon="search", text="Starting research import and collecting review candidates."))
+            response = await self._research.create_import(
+                clerk_user_id=request_context.clerk_user_id,
+                payload=ResearchImportCreateRequest(
+                    seed_type=cast(Any, seed_type if seed_type in {"text", "url", "pdf_url", "arxiv_url", "linkedin_export"} else "text"),
+                    text=text,
+                    url=url,
+                    title=title,
+                    ingest_seed=ingest_seed,
+                    discover_references=discover_references,
+                    max_depth=max(0, min(max_depth, 4)),
+                    max_candidates_per_source=max(0, min(max_candidates_per_source, 20)),
+                    max_pending_candidates=max(0, min(max_pending_candidates, 200)),
+                ),
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            await ctx.context.stream(
+                ProgressUpdateEvent(
+                    icon="check-circle",
+                    text=f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'} for review.",
+                )
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="list_research_candidates")
+        async def list_research_candidates_tool(
+            ctx: ChatKitToolContext,
+            task_id: str | None = None,
+            status: str | None = None,
+            page_size: int = 20,
+        ) -> dict[str, object]:
+            """List research import candidates by task or review status."""
+            request_context = ctx.context.request_context
+            normalized_status = status if status in {"pending", "approved", "rejected", "ingesting", "ingested", "failed"} else None
+            response = await self._research.list_candidates(
+                clerk_user_id=request_context.clerk_user_id,
+                task_id=task_id,
+                status=cast(Any, normalized_status),
+                page=1,
+                page_size=max(1, min(page_size, 50)),
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="update_research_candidate_status")
+        async def update_research_candidate_status_tool(
+            ctx: ChatKitToolContext,
+            candidate_ids: list[str],
+            status: str,
+        ) -> dict[str, object]:
+            """Approve, reject, or return research import candidates to pending review."""
+            request_context = ctx.context.request_context
+            response = await self._research.update_candidate_status(
+                clerk_user_id=request_context.clerk_user_id,
+                candidate_ids=candidate_ids,
+                status=ResearchCandidateStatusUpdateRequest(candidate_ids=candidate_ids, status=cast(Any, status)).status,
+            )
+            return response.model_dump(mode="json")
+
+        @function_tool(name_override="ingest_research_candidates")
+        async def ingest_research_candidates_tool(
+            ctx: ChatKitToolContext,
+            candidate_ids: list[str] | None = None,
+            task_id: str | None = None,
+            tag_ids: list[str] | None = None,
+            folder_id: str | None = None,
+        ) -> dict[str, object]:
+            """Ingest approved research candidates through the app's normal source ingestion path."""
+            request_context = ctx.context.request_context
+            await ctx.context.stream(ProgressUpdateEvent(icon="document", text="Queuing approved research candidates for ingestion."))
+            response = await self._research.ingest_approved_candidates(
+                clerk_user_id=request_context.clerk_user_id,
+                payload=ResearchCandidateIngestRequest(
+                    candidate_ids=candidate_ids,
+                    task_id=task_id,
+                    tag_ids=tag_ids,
+                    folder_id=folder_id,
+                ),
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            await ctx.context.stream(
+                ProgressUpdateEvent(
+                    icon="check-circle",
+                    text=f"Queued {len(response.ingested)} approved candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
+                )
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="resplit_source")
         async def resplit_source_tool(
             ctx: ChatKitToolContext,
@@ -704,6 +813,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "ingest",
                 "resplit",
                 "reindex",
+                "research_import",
                 "qa",
                 "freeform",
                 "branch_search",
@@ -877,6 +987,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             search_chunks_tool,
             branch_search_tool,
             preview_semantic_split_tool,
+            start_research_import_tool,
+            list_research_candidates_tool,
+            update_research_candidate_status_tool,
+            ingest_research_candidates_tool,
             resplit_source_tool,
             update_source_tags_tool,
             delete_source_tool,
@@ -900,7 +1014,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the semantic library assistant for an app-first OpenAI vector-store RAG workspace. "
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search chunks, "
             "branch through related semantic chunks, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its published chunks, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "to replace its published chunks, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "

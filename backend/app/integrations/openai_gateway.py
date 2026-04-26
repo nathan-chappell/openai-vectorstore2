@@ -14,7 +14,7 @@ from openai.types.shared_params.comparison_filter import ComparisonFilter
 from openai.types.shared_params.compound_filter import CompoundFilter
 
 from backend.app.core.config import AppSettings
-from backend.app.schemas import ChunkHit, SemanticSplitResult
+from backend.app.schemas import ChunkHit, ResearchDiscoveryResult, SemanticSplitResult
 
 logger = logging.getLogger(__name__)
 
@@ -155,6 +155,39 @@ class OpenAIGateway:
         parsed = response.output_parsed
         if parsed is None:
             raise RuntimeError("OpenAI did not return a semantic split payload.")
+        return parsed
+
+    async def discover_research_candidates(
+        self,
+        *,
+        query: str,
+        max_candidates: int,
+    ) -> ResearchDiscoveryResult:
+        response = await self._client.responses.parse(
+            model=self._settings.openai_fast_model,
+            text_format=ResearchDiscoveryResult,
+            tools=[cast(Any, {"type": "web_search_preview", "search_context_size": "medium"})],
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": (
+                                "Find public reference materials that could help seed a research library. "
+                                "Return only candidates that are likely to be publicly reachable URLs. "
+                                "Prefer original sources, PDFs, arXiv pages, official docs, and high-signal articles. "
+                                "Do not include login-gated or paywalled pages when a public alternative is available. "
+                                f"Return at most {max_candidates} candidates.\n\nSeed:\n{query}"
+                            ),
+                        }
+                    ],
+                }
+            ],
+        )
+        parsed = response.output_parsed
+        if parsed is None:
+            raise RuntimeError("OpenAI did not return research discovery candidates.")
         return parsed
 
     async def attach_chunk_to_vector_store(

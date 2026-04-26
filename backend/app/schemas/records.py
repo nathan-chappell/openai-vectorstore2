@@ -13,7 +13,7 @@ SourceKind: TypeAlias = Literal["pdf", "text", "conversation", "image", "audio",
 SourceStatus: TypeAlias = Literal["processing", "ready", "failed"]
 FilesystemEntryKind: TypeAlias = Literal["folder", "file"]
 TaskKind: TypeAlias = Literal[
-    "ingest", "resplit", "reindex", "qa", "freeform", "branch_search", "image_gen", "voice_gen"
+    "ingest", "resplit", "reindex", "research_import", "qa", "freeform", "branch_search", "image_gen", "voice_gen"
 ]
 ActionKind: TypeAlias = Literal["qa", "freeform", "image_gen", "voice_gen"]
 TaskStatus: TypeAlias = Literal["queued", "running", "completed", "failed", "cancelled"]
@@ -21,6 +21,9 @@ TaskOriginSurface: TypeAlias = Literal["web", "mcp", "chatkit", "system"]
 TagMatchMode: TypeAlias = Literal["all", "any"]
 LocatorType: TypeAlias = Literal["page_range", "line_range", "time_range", "generated"]
 AssetKind: TypeAlias = Literal["image", "voice", "source_copy"]
+ResearchSeedKind: TypeAlias = Literal["text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"]
+ResearchCandidateSourceType: TypeAlias = Literal["text", "url", "html", "pdf", "arxiv", "linkedin_export", "uploaded_file"]
+ResearchCandidateStatus: TypeAlias = Literal["pending", "approved", "rejected", "ingesting", "ingested", "failed"]
 
 
 class AuthUser(BaseModel):
@@ -181,6 +184,7 @@ class LibrarySourceDetail(LibrarySourceSummary):
     storage_provider: str
     storage_key: str
     ingest_strategy: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
     chunks: list[ChunkSummary] = Field(default_factory=list)
 
 
@@ -238,6 +242,92 @@ class SplitPreviewResponse(BaseModel):
     extracted_character_count: int
     split: SemanticSplitResult
     previewed_at: datetime
+
+
+class ResearchDiscoveryCandidateDraft(BaseModel):
+    url: str = Field(min_length=1, max_length=2048)
+    title: str = Field(min_length=1, max_length=512)
+    source_type: ResearchCandidateSourceType = "url"
+    rationale: str | None = None
+    score: float | None = Field(default=None, ge=0, le=1)
+
+
+class ResearchDiscoveryResult(BaseModel):
+    candidates: list[ResearchDiscoveryCandidateDraft] = Field(default_factory=list)
+
+
+class ResearchImportCreateRequest(BaseModel):
+    seed_type: ResearchSeedKind = "text"
+    text: str | None = None
+    url: str | None = Field(default=None, max_length=2048)
+    title: str | None = Field(default=None, max_length=512)
+    filename: str | None = Field(default=None, max_length=255)
+    payload_base64: str | None = None
+    media_type: str | None = Field(default=None, max_length=128)
+    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    folder_id: str | None = None
+    ingest_seed: bool = True
+    discover_references: bool = True
+    max_depth: int = Field(default=2, ge=0, le=4)
+    max_candidates_per_source: int = Field(default=8, ge=0, le=20)
+    max_pending_candidates: int = Field(default=40, ge=0, le=200)
+
+
+class ResearchImportCandidateSummary(BaseModel):
+    id: str
+    task_id: str
+    status: ResearchCandidateStatus
+    source_type: ResearchCandidateSourceType
+    url: str | None = None
+    normalized_url: str | None = None
+    title: str
+    rationale: str | None = None
+    score: float | None = None
+    depth: int
+    parent_candidate_id: str | None = None
+    parent_source_file_id: str | None = None
+    linked_source_file_id: str | None = None
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    content_hash: str | None = None
+    error_message: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ResearchImportResponse(BaseModel):
+    task: "TaskSummary"
+    seed_source: LibrarySourceSummary | None = None
+    candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
+    duplicate_count: int = 0
+
+
+class ResearchCandidateListResponse(BaseModel):
+    candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
+    total_count: int
+    page: int
+    page_size: int
+    has_more: bool
+
+
+class ResearchCandidateStatusUpdateRequest(BaseModel):
+    candidate_ids: list[str] = Field(min_length=1, max_length=100)
+    status: Literal["approved", "rejected", "pending"]
+
+
+class ResearchCandidateStatusUpdateResponse(BaseModel):
+    candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
+
+
+class ResearchCandidateIngestRequest(BaseModel):
+    candidate_ids: list[str] | None = Field(default=None, max_length=100)
+    task_id: str | None = None
+    tag_ids: list[str] | None = Field(default=None, max_length=8)
+    folder_id: str | None = None
+
+
+class ResearchCandidateIngestResponse(BaseModel):
+    ingested: list[IngestFinalizeResponse] = Field(default_factory=list)
+    candidates: list[ResearchImportCandidateSummary] = Field(default_factory=list)
 
 
 class SearchRequest(BaseModel):
@@ -369,3 +459,4 @@ class TaskListResponse(BaseModel):
 
 IngestFinalizeResponse.model_rebuild()
 TagMutationResponse.model_rebuild()
+ResearchImportResponse.model_rebuild()

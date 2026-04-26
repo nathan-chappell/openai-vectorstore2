@@ -33,6 +33,14 @@ from backend.app.schemas import (
     IngestFinalizeResponse,
     LibrarySourceDetail,
     QaRequest,
+    ResearchCandidateIngestRequest,
+    ResearchCandidateIngestResponse,
+    ResearchCandidateListResponse,
+    ResearchCandidateStatus,
+    ResearchCandidateStatusUpdateRequest,
+    ResearchCandidateStatusUpdateResponse,
+    ResearchImportCreateRequest,
+    ResearchImportResponse,
     ResplitSourceRequest,
     SearchRequest,
     SearchResponse,
@@ -353,6 +361,72 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/tags")
     async def list_tags_api(user: AuthenticatedUser = Depends(require_active_web_user)) -> list[TagSummary]:
         return await services.sources.list_tags(clerk_user_id=user.clerk_user_id)
+
+    @app.post("/api/research/imports")
+    async def create_research_import_api(
+        payload: ResearchImportCreateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> ResearchImportResponse:
+        try:
+            return await services.research.create_import(
+                clerk_user_id=user.clerk_user_id,
+                payload=payload,
+                origin_surface="web",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    @app.get("/api/research/candidates")
+    async def list_research_candidates_api(
+        user: AuthenticatedUser = Depends(require_active_web_user),
+        task_id: str | None = Query(default=None),
+        status_filter: ResearchCandidateStatus | None = Query(default=None, alias="status"),
+        page: int = Query(default=1, ge=1),
+        page_size: int = Query(default=50, ge=1, le=100),
+    ) -> ResearchCandidateListResponse:
+        return await services.research.list_candidates(
+            clerk_user_id=user.clerk_user_id,
+            task_id=task_id,
+            status=status_filter,
+            page=page,
+            page_size=page_size,
+        )
+
+    @app.post("/api/research/candidates/status")
+    async def update_research_candidate_status_api(
+        payload: ResearchCandidateStatusUpdateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> ResearchCandidateStatusUpdateResponse:
+        try:
+            return await services.research.update_candidate_status(
+                clerk_user_id=user.clerk_user_id,
+                candidate_ids=payload.candidate_ids,
+                status=payload.status,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    @app.post("/api/research/candidates/ingest")
+    async def ingest_research_candidates_api(
+        payload: ResearchCandidateIngestRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> ResearchCandidateIngestResponse:
+        try:
+            return await services.research.ingest_approved_candidates(
+                clerk_user_id=user.clerk_user_id,
+                payload=payload,
+                origin_surface="web",
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     @app.post("/api/tags")
     async def create_tag_api(

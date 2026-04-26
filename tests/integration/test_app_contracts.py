@@ -33,8 +33,31 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "FileListResponse": ("SourceListResponse", {"has_more", "page", "page_size", "sources", "total_count"}),
     "GeneratedAsset": ("GeneratedAsset", {"byte_size", "download_url", "filename", "id", "kind"}),
     "IngestFinalizeResponse": ("IngestFinalizeResponse", {"source", "task"}),
-    "LibrarySourceDetail": ("SourceDetail", {"chunks", "ingest_strategy", "storage_key", "storage_provider"}),
+    "LibrarySourceDetail": ("SourceDetail", {"chunks", "ingest_strategy", "metadata", "storage_key", "storage_provider"}),
     "LibrarySourceSummary": ("SourceSummary", {"chunk_count", "display_title", "id", "source_kind", "status", "tags"}),
+    "ResearchCandidateIngestRequest": (
+        "ResearchCandidateIngestRequest",
+        {"candidate_ids", "folder_id", "tag_ids", "task_id"},
+    ),
+    "ResearchCandidateIngestResponse": ("ResearchCandidateIngestResponse", {"candidates", "ingested"}),
+    "ResearchCandidateListResponse": (
+        "ResearchCandidateListResponse",
+        {"candidates", "has_more", "page", "page_size", "total_count"},
+    ),
+    "ResearchCandidateStatusUpdateRequest": (
+        "ResearchCandidateStatusUpdateRequest",
+        {"candidate_ids", "status"},
+    ),
+    "ResearchCandidateStatusUpdateResponse": ("ResearchCandidateStatusUpdateResponse", {"candidates"}),
+    "ResearchImportCandidateSummary": (
+        "ResearchImportCandidateSummary",
+        {"id", "status", "source_type", "task_id", "title", "url"},
+    ),
+    "ResearchImportCreateRequest": (
+        "ResearchImportCreateRequest",
+        {"discover_references", "ingest_seed", "seed_type", "text", "url"},
+    ),
+    "ResearchImportResponse": ("ResearchImportResponse", {"candidates", "duplicate_count", "seed_source", "task"}),
     "ResplitSourceRequest": ("ResplitSourceRequest", {"tag_ids", "user_guidance"}),
     "SearchResponse": ("SearchResponse", {"hits", "query"}),
     "SemanticChunkDraft": (
@@ -97,6 +120,7 @@ def test_frontend_types_cover_public_schema_contracts(
         assert expected_fields <= _exported_type_fields(frontend_source, frontend_type)
     assert '"resplit"' in frontend_source
     assert '"reindex"' in frontend_source
+    assert '"research_import"' in frontend_source
 
 
 @pytest.mark.asyncio
@@ -239,6 +263,113 @@ async def test_http_split_preview_is_inspect_only(
             openai_gateway = app.state.services.openai
             assert openai_gateway.deleted_file_ids == []
             assert openai_gateway.detached_vector_store_file_ids == []
+
+
+@pytest.mark.asyncio
+async def test_http_research_import_ingests_seed_and_queues_url_candidates(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create = await client.post(
+                "/api/research/imports",
+                headers=auth_headers,
+                json={
+                    "seed_type": "text",
+                    "title": "Importer seed",
+                    "text": "Read this first. Related reference: https://example.com/research-note",
+                    "ingest_seed": True,
+                    "discover_references": False,
+                },
+            )
+            assert create.status_code == 200
+            payload = create.json()
+            assert payload["task"]["kind"] == "research_import"
+            assert payload["task"]["status"] == "completed"
+            assert payload["seed_source"]["status"] == "processing"
+            assert len(payload["candidates"]) == 1
+            [candidate] = payload["candidates"]
+            assert candidate["status"] == "pending"
+            assert candidate["normalized_url"] == "https://example.com/research-note"
+
+            tasks = await client.get("/api/tasks", headers=auth_headers)
+            assert tasks.status_code == 200
+            task_kinds = {task["kind"] for task in tasks.json()["tasks"]}
+            assert {"research_import", "ingest"} <= task_kinds
+
+            candidates = await client.get(
+                "/api/research/candidates",
+                headers=auth_headers,
+                params={"task_id": payload["task"]["id"], "status": "pending"},
+            )
+            assert candidates.status_code == 200
+            assert candidates.json()["total_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_http_research_candidate_approval_ingests_through_source_service(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            create = await client.post(
+                "/api/research/imports",
+                headers=auth_headers,
+                json={
+                    "seed_type": "text",
+                    "title": "Pending seed",
+                    "filename": "pending-seed.txt",
+                    "text": "Pending research candidate about alpha semantic retrieval.",
+                    "ingest_seed": False,
+                    "discover_references": False,
+                },
+            )
+            assert create.status_code == 200
+            [candidate] = create.json()["candidates"]
+
+            approve = await client.post(
+                "/api/research/candidates/status",
+                headers=auth_headers,
+                json={"candidate_ids": [candidate["id"]], "status": "approved"},
+            )
+            assert approve.status_code == 200
+            assert approve.json()["candidates"][0]["status"] == "approved"
+
+            ingest = await client.post(
+                "/api/research/candidates/ingest",
+                headers=auth_headers,
+                json={"candidate_ids": [candidate["id"]]},
+            )
+            assert ingest.status_code == 200
+            ingest_payload = ingest.json()
+            assert len(ingest_payload["ingested"]) == 1
+            source = ingest_payload["ingested"][0]["source"]
+            task = ingest_payload["ingested"][0]["task"]
+            assert task["kind"] == "ingest"
+            assert ingest_payload["candidates"][0]["status"] == "ingested"
+            assert ingest_payload["candidates"][0]["linked_source_file_id"] == source["id"]
+
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=task["id"],
+                expected_status="completed",
+            )
+            detail = await client.get(f"/api/sources/{source['id']}", headers=auth_headers)
+            assert detail.status_code == 200
+            metadata = detail.json()["metadata"]
+            assert metadata["research_candidate_id"] == candidate["id"]
+            assert metadata["research_import_task_id"] == create.json()["task"]["id"]
 
 
 @pytest.mark.asyncio

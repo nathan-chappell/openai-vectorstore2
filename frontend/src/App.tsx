@@ -1,6 +1,6 @@
 import { ChatKit, type UseChatKitOptions, useChatKit } from "@openai/chatkit-react";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
-import type { MouseEvent as ReactMouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as ReactPointerEvent } from "react";
 
 import {
   authenticatedFetch,
@@ -60,6 +60,7 @@ const SOURCE_TAG_LIMIT = 8;
 const SELECTED_FILE_LIMIT = 10;
 const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
+const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -104,6 +105,8 @@ export function App({ authMode }: AppProps) {
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
+  const workspaceGridRef = useRef<HTMLElement | null>(null);
+  const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
@@ -124,6 +127,13 @@ export function App({ authMode }: AppProps) {
   const selectedSourceTagChanged = selectedSource
     ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
     : false;
+  const workspaceStyle = useMemo(
+    () =>
+      ({
+        "--workspace-explorer-width": `${workspaceSplitPercent}%`,
+      }) as CSSProperties & Record<"--workspace-explorer-width", string>,
+    [workspaceSplitPercent],
+  );
 
   const cacheEntries = useCallback((entries: FilesystemEntrySummary[]): void => {
     setKnownEntries((current) => {
@@ -298,6 +308,7 @@ export function App({ authMode }: AppProps) {
         setSelectedEntryIds([]);
         setSelectedSourceIds([]);
         setFocusedEntryId(null);
+        setSelectedSource(null);
         void loadFolder(entry.id);
         return;
       }
@@ -315,6 +326,7 @@ export function App({ authMode }: AppProps) {
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
+      setSelectedSource(null);
       void loadFolder(folderId);
     },
     [loadFolder],
@@ -586,6 +598,35 @@ export function App({ authMode }: AppProps) {
     [cacheEntries, knownEntries, loadFolder, openSource],
   );
 
+  const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const grid = workspaceGridRef.current;
+    if (!grid) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-workspace");
+    const updateFromPointer = (clientX: number): void => {
+      const rect = grid.getBoundingClientRect();
+      const nextPercent = clamp(((clientX - rect.left) / rect.width) * 100, 46, 76);
+      setWorkspaceSplitPercent(nextPercent);
+      window.localStorage.setItem(WORKSPACE_SPLIT_STORAGE_KEY, String(Math.round(nextPercent)));
+    };
+    updateFromPointer(event.clientX);
+    const handlePointerMove = (moveEvent: PointerEvent): void => {
+      updateFromPointer(moveEvent.clientX);
+    };
+    const stopResize = (): void => {
+      document.body.classList.remove("resizing-workspace");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize, { once: true });
+    window.addEventListener("pointercancel", stopResize, { once: true });
+  }, []);
+
   return (
     <main className="app-shell">
       <WorkspaceHeader
@@ -597,7 +638,7 @@ export function App({ authMode }: AppProps) {
         onRefresh={() => void refreshAll()}
       />
 
-      <section className="workspace-grid" aria-label="Semantic workspace">
+      <section ref={workspaceGridRef} className="workspace-grid" style={workspaceStyle} aria-label="Semantic workspace">
         <FileExplorer
           breadcrumbs={filesystem?.breadcrumbs ?? []}
           busy={busy}
@@ -637,6 +678,18 @@ export function App({ authMode }: AppProps) {
           onToggleExplorerTag={toggleExplorerTag}
           onUpload={() => void handleUpload()}
           onUploadGuidanceChange={setUploadGuidance}
+        />
+
+        <button
+          type="button"
+          className="workspace-splitter"
+          role="separator"
+          aria-label="Resize workspace"
+          aria-orientation="vertical"
+          aria-valuemin={46}
+          aria-valuemax={76}
+          aria-valuenow={Math.round(workspaceSplitPercent)}
+          onPointerDown={beginWorkspaceResize}
         />
 
         <aside className="chat-panel" aria-label="Semantic copilot">
@@ -1226,7 +1279,7 @@ const FileExplorer = memo(function FileExplorer({
         })}
       </nav>
 
-      <div className="filesystem-layout">
+      <div className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}>
         <section className="file-browser" aria-label="File list">
           <div className="file-list-header">
             <span>Name</span>
@@ -1280,20 +1333,22 @@ const FileExplorer = memo(function FileExplorer({
           </section>
         </section>
 
-        <div className="explorer-detail" aria-label="File detail">
-          <SourcePreview
-            busy={busy}
-            selectedSource={selectedSource}
-            selectedSourceTagChanged={selectedSourceTagChanged}
-            selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
-            tags={tags}
-            uploadGuidance={uploadGuidance}
-            onSaveTags={onSaveTags}
-            onTagToggle={onTagToggle}
-            onUploadGuidanceChange={onUploadGuidanceChange}
-            onResplit={onResplit}
-          />
-        </div>
+        {selectedSource ? (
+          <div className="explorer-detail" aria-label="File detail">
+            <SourcePreview
+              busy={busy}
+              selectedSource={selectedSource}
+              selectedSourceTagChanged={selectedSourceTagChanged}
+              selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+              tags={tags}
+              uploadGuidance={uploadGuidance}
+              onSaveTags={onSaveTags}
+              onTagToggle={onTagToggle}
+              onUploadGuidanceChange={onUploadGuidanceChange}
+              onResplit={onResplit}
+            />
+          </div>
+        ) : null}
       </div>
     </aside>
   );
@@ -2100,6 +2155,18 @@ function formatLocator(chunk: ChunkSummary): string {
       : `${Math.round(locator.start_seconds)}s`;
   }
   return chunk.strategy_label;
+}
+
+function readStoredWorkspaceSplit(): number {
+  if (typeof window === "undefined") {
+    return 64;
+  }
+  const stored = Number(window.localStorage.getItem(WORKSPACE_SPLIT_STORAGE_KEY));
+  return Number.isFinite(stored) ? clamp(stored, 46, 76) : 64;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, value));
 }
 
 const ChatPane = memo(function ChatPane({

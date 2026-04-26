@@ -8,7 +8,14 @@ import pytest
 
 from backend.app.core.config import AppSettings
 from backend.app.integrations.openai_gateway import VectorSearchCandidate
-from backend.app.schemas import ChunkHit, ChunkLocator, SemanticChunkDraft, SemanticSplitResult
+from backend.app.schemas import (
+    ChunkHit,
+    ChunkLocator,
+    ResearchDiscoveryCandidateDraft,
+    ResearchDiscoveryResult,
+    SemanticChunkDraft,
+    SemanticSplitResult,
+)
 
 
 class FakeOpenAIGateway:
@@ -82,6 +89,20 @@ class FakeOpenAIGateway:
         if "bravo" in normalized_text:
             tags.append("bravo")
         return SemanticSplitResult(strategy_label="fake_semantic", tags=tags, chunks=chunks)
+
+    async def discover_research_candidates(self, *, query: str, max_candidates: int) -> ResearchDiscoveryResult:
+        del query
+        candidates = [
+            ResearchDiscoveryCandidateDraft(
+                url=f"https://example.com/reference-{index}.txt",
+                title=f"Example reference {index}",
+                source_type="url",
+                rationale="Fake discovered reference for importer tests.",
+                score=0.8,
+            )
+            for index in range(1, max_candidates + 1)
+        ]
+        return ResearchDiscoveryResult(candidates=candidates)
 
     async def attach_chunk_to_vector_store(
         self,

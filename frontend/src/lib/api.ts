@@ -10,6 +10,14 @@ import type {
   FilesystemSearchResponse,
   FilesystemUpdateEntryRequest,
   IngestFinalizeResponse,
+  ResearchCandidateIngestRequest,
+  ResearchCandidateIngestResponse,
+  ResearchCandidateListResponse,
+  ResearchCandidateStatus,
+  ResearchCandidateStatusUpdateRequest,
+  ResearchCandidateStatusUpdateResponse,
+  ResearchImportCreateRequest,
+  ResearchImportResponse,
   ResplitSourceRequest,
   SearchFilterPayload,
   SearchResponse,
@@ -244,6 +252,52 @@ export async function updateTag(tagId: string, payload: TagUpdateRequest): Promi
 
 export async function deleteTag(tagId: string): Promise<TagMutationResponse> {
   return apiRequest<TagMutationResponse>(`/tags/${encodeURIComponent(tagId)}`, { method: "DELETE" });
+}
+
+export async function createResearchImport(payload: ResearchImportCreateRequest): Promise<ResearchImportResponse> {
+  return apiRequest<ResearchImportResponse>("/research/imports", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listResearchCandidates(params: {
+  taskId?: string | null;
+  status?: ResearchCandidateStatus | null;
+  page?: number;
+  pageSize?: number;
+} = {}): Promise<ResearchCandidateListResponse> {
+  const searchParams = new URLSearchParams();
+  if (params.taskId) {
+    searchParams.set("task_id", params.taskId);
+  }
+  if (params.status) {
+    searchParams.set("status", params.status);
+  }
+  if (params.page) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.pageSize) {
+    searchParams.set("page_size", String(params.pageSize));
+  }
+  const suffix = searchParams.toString();
+  return apiRequest<ResearchCandidateListResponse>(suffix ? `/research/candidates?${suffix}` : "/research/candidates");
+}
+
+export async function updateResearchCandidateStatus(
+  payload: ResearchCandidateStatusUpdateRequest,
+): Promise<ResearchCandidateStatusUpdateResponse> {
+  return apiRequest<ResearchCandidateStatusUpdateResponse>("/research/candidates/status", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function ingestResearchCandidates(payload: ResearchCandidateIngestRequest): Promise<ResearchCandidateIngestResponse> {
+  return apiRequest<ResearchCandidateIngestResponse>("/research/candidates/ingest", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function searchChunks(payload: {
