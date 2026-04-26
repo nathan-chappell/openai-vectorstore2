@@ -135,6 +135,8 @@ Status: complete for the current baseline.
 - ChatKit threads persist selected-file scope and OpenAI conversation state.
 - ChatKit agent runs use OpenAI conversation IDs for durable context and track response IDs for logs/debugging.
 - Client-tool calls coordinate file selection, file reveal, search changes, and research builder state.
+- ChatKit treats selected files as retrieval scope first; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
+- ChatKit Responses requests enable server-side context compaction with a configurable compact threshold.
 
 ### Logging And Debugging
 
@@ -165,6 +167,7 @@ Status: mostly complete; view split remains next.
 - `SourceFile`, filesystem entries, tags, tasks, generated assets, and ChatKit records are the app-owned source of truth.
 - OpenAI file IDs, vector-store file IDs, bucket keys, and response/conversation IDs are implementation details tracked in app records or logs.
 - Virtual paths are app-owned and should stay stable across REST, ChatKit, MCP, and frontend behavior.
+- Prefer passing app IDs, source IDs, task IDs, and resource URLs between surfaces; fetch full resource content through APIs, tools, or cache lookups instead of copying bulky content through chat state.
 - Tags remain source-level metadata. OpenAI vector filtering uses canonical `tags` plus bounded exact-match tag slots.
 - New schema changes require Alembic migrations and drift tests.
 - New app operations should update the capability matrix, Pydantic contracts, frontend types, ChatKit tools, MCP tools, and tests together.

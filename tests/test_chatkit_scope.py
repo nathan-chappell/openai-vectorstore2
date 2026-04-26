@@ -13,6 +13,7 @@ from chatkit.types import (
 )
 
 from backend.app.chatkit.server import (
+    chatkit_model_settings_for_model,
     chatkit_metadata_with_openai_state,
     chatkit_openai_state,
     chatkit_progress_update_event,
@@ -88,6 +89,22 @@ def test_chatkit_openai_state_round_trips_metadata() -> None:
     assert metadata["existing"] == "value"
     assert state.conversation_id == "conv_123"
     assert state.previous_response_id == "resp_456"
+
+
+def test_chatkit_model_settings_enable_server_side_compaction() -> None:
+    settings = chatkit_model_settings_for_model("gpt-5.4-mini", compact_threshold=80_000)
+
+    assert settings.extra_body == {"context_management": {"compact_threshold": 80_000}}
+    assert settings.reasoning is not None
+    assert settings.reasoning.effort == "low"
+    assert settings.reasoning.summary == "auto"
+
+
+def test_chatkit_model_settings_can_disable_compaction() -> None:
+    settings = chatkit_model_settings_for_model("gpt-4.1", compact_threshold=None)
+
+    assert settings.extra_body is None
+    assert settings.reasoning is None
 
 
 def test_pending_chatkit_items_replays_history_before_conversation_exists() -> None:

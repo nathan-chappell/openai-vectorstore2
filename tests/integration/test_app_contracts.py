@@ -1395,6 +1395,69 @@ async def test_mcp_file_ingest_tool_runs_against_app_core(
 
 
 @pytest.mark.asyncio
+async def test_source_file_inputs_skip_large_selected_files(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    small_payload = b"small selected source."
+    oversized_payload = b"x" * 80
+    second_payload = b"second selected source that fits."
+    try:
+        small = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="small-selection.txt",
+            declared_media_type="text/plain",
+            payload=small_payload,
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="system",
+        )
+        oversized = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="oversized-selection.txt",
+            declared_media_type="text/plain",
+            payload=oversized_payload,
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="system",
+        )
+        second = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="second-selection.txt",
+            declared_media_type="text/plain",
+            payload=second_payload,
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="system",
+        )
+        for response in (small, oversized, second):
+            assert response.task is not None
+            await _wait_for_service_task(services, task_id=response.task.id, expected_status="completed")
+
+        capped_by_file = await services.sources.ensure_source_file_inputs(
+            clerk_user_id="local-dev",
+            source_ids=[oversized.source.id, small.source.id, second.source.id],
+            limit=2,
+            max_file_bytes=64,
+            max_total_bytes=128,
+        )
+        capped_by_total = await services.sources.ensure_source_file_inputs(
+            clerk_user_id="local-dev",
+            source_ids=[small.source.id, second.source.id],
+            limit=3,
+            max_total_bytes=len(small_payload) + 5,
+        )
+    finally:
+        await services.close()
+
+    assert [item.source_id for item in capped_by_file] == [small.source.id, second.source.id]
+    assert [item.byte_size for item in capped_by_file] == [len(small_payload), len(second_payload)]
+    assert [item.source_id for item in capped_by_total] == [small.source.id]
+
+
+@pytest.mark.asyncio
 async def test_mcp_answer_research_library_uses_scoped_sources(
     configured_settings: AppSettings,
     fake_openai: None,

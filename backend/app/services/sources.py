@@ -128,6 +128,7 @@ class SourceFileInput:
     virtual_path: str
     display_title: str
     media_type: str
+    byte_size: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -781,19 +782,42 @@ class SourceService:
         clerk_user_id: str,
         source_ids: list[str],
         limit: int = CHAT_FILE_INPUT_LIMIT,
+        max_file_bytes: int | None = None,
+        max_total_bytes: int | None = None,
     ) -> list[SourceFileInput]:
         await self._database.ensure_ready()
-        bounded_source_ids = list(dict.fromkeys(source_id.strip() for source_id in source_ids if source_id.strip()))[
-            : max(0, limit)
-        ]
+        bounded_source_ids = list(dict.fromkeys(source_id.strip() for source_id in source_ids if source_id.strip()))
+        output_limit = max(0, limit)
+        total_bytes = 0
         output: list[SourceFileInput] = []
         async with self._database.session() as session:
             for source_id in bounded_source_ids:
+                if len(output) >= output_limit:
+                    break
                 try:
                     source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
                 except FileNotFoundError:
                     continue
                 if source.status != "ready":
+                    continue
+                if max_file_bytes is not None and source.byte_size > max_file_bytes:
+                    logger.debug(
+                        "source_file_input_skipped_size clerk_user_id=%s source_id=%s bytes=%s max_file_bytes=%s",
+                        clerk_user_id,
+                        source.id,
+                        source.byte_size,
+                        max_file_bytes,
+                    )
+                    continue
+                if max_total_bytes is not None and total_bytes + source.byte_size > max_total_bytes:
+                    logger.debug(
+                        "source_file_input_skipped_total clerk_user_id=%s source_id=%s bytes=%s total_bytes=%s max_total_bytes=%s",
+                        clerk_user_id,
+                        source.id,
+                        source.byte_size,
+                        total_bytes,
+                        max_total_bytes,
+                    )
                     continue
                 if source.openai_original_file_id is None or source.openai_original_file_purpose != "user_data":
                     payload = await self._storage.get_bytes(key=source.storage_key)
@@ -816,8 +840,10 @@ class SourceService:
                         virtual_path=_virtual_path(source),
                         display_title=source.display_title,
                         media_type=source.media_type,
+                        byte_size=source.byte_size,
                     )
                 )
+                total_bytes += source.byte_size
             await session.commit()
         return output
 

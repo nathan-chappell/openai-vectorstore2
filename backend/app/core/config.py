@@ -58,6 +58,7 @@ class AppSettings(BaseSettings):
     openai_transcription_model: str = "gpt-4o-transcribe-diarize"
     openai_poll_interval_ms: int = 1_000
     openai_default_voice: str = "alloy"
+    openai_context_compact_threshold: int | None = 80_000
 
     semantic_split_pdf_batch_pages: int = 25
     semantic_split_text_batch_lines: int = 2_000
@@ -102,6 +103,7 @@ class AppSettings(BaseSettings):
         "s3_access_key_id",
         "s3_secret_access_key",
         "log_file_path",
+        "openai_context_compact_threshold",
         mode="before",
     )
     @classmethod

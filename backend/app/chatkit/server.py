@@ -58,6 +58,9 @@ MODEL_ALIASES = {
     "powerful": "gpt-5.5",
 }
 MAX_AGENT_TURNS = 20
+CHATKIT_SELECTED_FILE_INPUT_LIMIT = 2
+CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES = 250_000
+CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES = 350_000
 STOP_AT_TOOL_NAMES = [
     "set_file_selection",
     "reveal_file",
@@ -299,13 +302,17 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             context=context,
             has_openai_conversation=had_openai_conversation,
         )
-        selected_source_context = await self._selected_source_context_items(context=context)
+        selected_source_context = await self._selected_source_context_items(
+            context=context,
+            attach_files=input_user_message is not None,
+        )
         if selected_source_context:
             agent_input = selected_source_context + agent_input
 
         logger.info(
             "chat turn started thread=%s model=%s conversation=%s conversation_log_url=%s "
-            "previous_response=%s previous_response_log_url=%s selected_sources=%s input_items=%s history_mode=%s",
+            "previous_response=%s previous_response_log_url=%s selected_sources=%s input_items=%s "
+            "history_mode=%s compact_threshold=%s",
             thread.id,
             requested_model,
             conversation_id,
@@ -315,6 +322,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             len(context.selected_source_ids),
             len(agent_input),
             "pending" if had_openai_conversation else "bootstrap",
+            self._settings.openai_context_compact_threshold,
         )
         agent_context = ChatKitAgentContext[VectorstoreChatContext](
             thread=thread,
@@ -324,7 +332,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         agent = Agent[ChatKitAgentContext[VectorstoreChatContext]](
             name="indexed_file_vectorstore_agent",
             model=requested_model,
-            model_settings=_model_settings_override_for_model(requested_model) or ModelSettings(),
+            model_settings=chatkit_model_settings_for_model(
+                requested_model,
+                compact_threshold=self._settings.openai_context_compact_threshold,
+            ),
             tools=self._build_tools(),
             instructions=self._agent_instructions,
             tool_use_behavior=StopAtTools(stop_at_tool_names=STOP_AT_TOOL_NAMES),
@@ -449,27 +460,47 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         self,
         *,
         context: VectorstoreChatContext,
+        attach_files: bool,
     ) -> list[ResponseInputItemParam]:
         if not context.selected_source_ids:
+            return []
+        if not attach_files:
             return []
         file_inputs = await self._sources.ensure_source_file_inputs(
             clerk_user_id=context.clerk_user_id,
             source_ids=context.selected_source_ids,
+            limit=CHATKIT_SELECTED_FILE_INPUT_LIMIT,
+            max_file_bytes=CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES,
+            max_total_bytes=CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES,
         )
-        if not file_inputs:
-            return []
+        selected_count = len(list(dict.fromkeys(context.selected_source_ids)))
         source_lines = [
-            f"- {item.virtual_path}: app source_id={item.source_id}; media_type={item.media_type}; attached OpenAI file_id={item.file_id}"
+            f"- {item.virtual_path}: app source_id={item.source_id}; media_type={item.media_type}; "
+            f"bytes={item.byte_size}; attached OpenAI file_id={item.file_id}"
             for item in file_inputs
         ]
+        if source_lines:
+            source_text = "\n".join(source_lines)
+        else:
+            source_text = "- No selected files were small enough for direct attachment on this turn."
+        remaining_count = max(0, selected_count - len(file_inputs))
+        remaining_text = (
+            f" {remaining_count} selected file{'' if remaining_count == 1 else 's'} "
+            "remain available through retrieval tools instead of direct attachment."
+            if remaining_count
+            else ""
+        )
         content: list[dict[str, object]] = [
             {
                 "type": "input_text",
                 "text": (
-                    "The user selected these files in the app explorer. They are attached as input_file content "
-                    "for this turn and should be treated as the primary file scope unless the user asks to widen it. "
-                    "When calling app tools, pass the app source_id values as selected_source_ids; do not pass OpenAI file_id values. "
-                    f"At most {len(file_inputs)} selected files are attached.\n" + "\n".join(source_lines)
+                    f"The user selected {selected_count} file{'' if selected_count == 1 else 's'} in the app explorer. "
+                    "Treat the selection as the primary retrieval scope unless the user asks to widen it. "
+                    "Use search_chunks or answer_from_library to search the full selected scope; those tools automatically use "
+                    "the current selection when selected_source_ids is omitted. "
+                    "When calling app tools, pass app source_id values as selected_source_ids; do not pass OpenAI file_id values. "
+                    f"Attached {len(file_inputs)} small selected file{'' if len(file_inputs) == 1 else 's'} for direct reading."
+                    f"{remaining_text}\n{source_text}"
                 ),
             }
         ]
@@ -1458,7 +1489,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
             "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "When the user asks to research a topic, gather papers, or build a library from a paper title, use build_research_library as the primary path and let the browser panel mirror progress. "
-            "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
+            "The app's file explorer is the primary source of file input and selection; selected files are retrieval scope first, and only small ready files may be attached to a user turn as OpenAI file inputs. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Research build tools update the browser's research builder panel so the user can inspect candidate, duplicate, download, and indexing state. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
@@ -1508,10 +1539,16 @@ def _title_from_user_message(item: UserMessageItem) -> str | None:
     return combined if len(combined) <= 72 else combined[:69].rstrip() + "..."
 
 
-def _model_settings_override_for_model(model: str | None) -> ModelSettings | None:
-    if not isinstance(model, str) or not model.startswith("gpt-5"):
-        return None
-    return ModelSettings(reasoning=Reasoning(effort="low", summary="auto"))
+def chatkit_model_settings_for_model(model: str | None, *, compact_threshold: int | None) -> ModelSettings:
+    extra_body: dict[str, object] | None = None
+    if compact_threshold is not None and compact_threshold > 0:
+        extra_body = {"context_management": {"compact_threshold": compact_threshold}}
+    if isinstance(model, str) and model.startswith("gpt-5"):
+        return ModelSettings(
+            reasoning=Reasoning(effort="low", summary="auto"),
+            extra_body=extra_body,
+        )
+    return ModelSettings(extra_body=extra_body)
 
 
 class VectorstoreThreadItemConverter(ThreadItemConverter):
