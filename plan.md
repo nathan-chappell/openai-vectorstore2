@@ -25,7 +25,7 @@ The capabilities to preserve and expose are OpenAI vector-store backed indexing/
 - [x] Convert ingestion/search from semantic chunk publication to source-file vector-store indexing.
 - [x] Improve backend OpenAI observability so Responses/ChatKit turns log clickable platform log URLs and local artifact debugging has a Codex skill.
 - [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
-- [ ] Add delete status/progress UX: show a clear deleting state after confirmation, expose recursive folder/source cleanup progress when possible, keep affected rows/modal/status text honest during long deletes, and report deleted/failed counts at completion.
+- [x] Add delete status/progress UX: show a clear deleting state after confirmation, keep the modal/status text honest during long deletes, disable accidental dismissal while deletion is running, and report deleted counts or failure messages at completion.
 - [ ] Add granular research discovery progress events: while expanding references by depth, surface active web/search requests, query/depth labels, candidate counts, duplicate/failed/skipped updates, and queue/indexing transitions so long phases do not appear stuck.
 - [x] Stabilize ChatKit thread-event state handling: keep `ChatPane` props/options steady while selection changes, defer App state mutations from `handleClientTool` until outside ChatKit event handling, and de-dupe repeated research-builder ingested updates.
 - [ ] Verify the minified React #185/maximum update depth fix in a real streamed ChatKit research run, capture console/log evidence, and address any remaining polling or refresh collision found there.

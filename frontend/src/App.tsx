@@ -77,6 +77,7 @@ const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source 
 type ResearchBuilderSeedKind = Extract<ResearchSeedKind, "topic" | "paper">;
 type DeleteDialogState = {
   entries: FilesystemEntrySummary[];
+  phase: "confirming" | "deleting";
 };
 const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
   { id: "topic", label: "Topic" },
@@ -560,7 +561,7 @@ export function App({ authMode }: AppProps) {
     if (!entries.length) {
       return;
     }
-    setDeleteDialog({ entries });
+    setDeleteDialog({ entries, phase: "confirming" });
   }, [knownEntries, selectedEntryIds]);
 
   const confirmDeleteSelectedEntries = useCallback(async (): Promise<void> => {
@@ -569,6 +570,12 @@ export function App({ authMode }: AppProps) {
     }
     const entryIds = deleteDialog.entries.map((entry) => entry.id);
     setBusy(true);
+    setDeleteDialog((current) => current ? { ...current, phase: "deleting" } : current);
+    setStatus(
+      `Deleting ${entryIds.length} selected item${entryIds.length === 1 ? "" : "s"}${
+        deleteDialog.entries.some((entry) => entry.kind === "folder") ? " and nested folder contents" : ""
+      }.`,
+    );
     try {
       const result = await deleteFilesystemEntries({ entry_ids: entryIds, confirm: true });
       setSelectedEntryIds([]);
@@ -584,6 +591,7 @@ export function App({ authMode }: AppProps) {
         }.`,
       );
     } catch (error) {
+      setDeleteDialog((current) => current ? { ...current, phase: "confirming" } : current);
       setStatus(error instanceof Error ? error.message : "Delete failed.");
     } finally {
       setBusy(false);
@@ -1078,6 +1086,7 @@ export function App({ authMode }: AppProps) {
         <DeleteEntriesDialog
           busy={busy}
           entries={deleteDialog.entries}
+          phase={deleteDialog.phase}
           onCancel={() => setDeleteDialog(null)}
           onConfirm={() => void confirmDeleteSelectedEntries()}
         />
@@ -1924,26 +1933,29 @@ const FileExplorer = memo(function FileExplorer({
 function DeleteEntriesDialog({
   busy,
   entries,
+  phase,
   onCancel,
   onConfirm,
 }: {
   busy: boolean;
   entries: FilesystemEntrySummary[];
+  phase: DeleteDialogState["phase"];
   onCancel: () => void;
   onConfirm: () => void;
 }) {
   const folderCount = entries.filter((entry) => entry.kind === "folder").length;
   const fileCount = entries.length - folderCount;
   const sampleNames = entries.slice(0, 5).map((entry) => entry.name || entry.path);
+  const deleting = phase === "deleting";
   return (
-    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+    <div className="modal-backdrop" role="presentation" onMouseDown={deleting ? undefined : onCancel}>
       <section
         className="confirmation-dialog"
         role="dialog"
         aria-modal="true"
         aria-labelledby="delete-dialog-title"
         onKeyDown={(event) => {
-          if (event.key === "Escape") {
+          if (event.key === "Escape" && !deleting) {
             event.preventDefault();
             onCancel();
           }
@@ -1966,12 +1978,22 @@ function DeleteEntriesDialog({
           ))}
           {entries.length > sampleNames.length ? <li>{entries.length - sampleNames.length} more...</li> : null}
         </ul>
+        {deleting ? (
+          <div className="delete-progress" role="status" aria-live="polite">
+            <span>
+              Deleting {entries.length} selected item{entries.length === 1 ? "" : "s"}...
+            </span>
+            <span className="delete-progress-track" aria-hidden="true">
+              <span />
+            </span>
+          </div>
+        ) : null}
         <div className="dialog-actions">
-          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy} autoFocus>
+          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy || deleting} autoFocus>
             Cancel
           </button>
-          <button type="button" className="danger-solid-button" onClick={onConfirm} disabled={busy}>
-            Delete
+          <button type="button" className="danger-solid-button" onClick={onConfirm} disabled={busy || deleting}>
+            {deleting ? "Deleting" : "Delete"}
           </button>
         </div>
       </section>

@@ -233,6 +233,7 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
     expect(route.request().method()).toBe("POST");
     const payload = route.request().postDataJSON() as { entry_ids: string[]; confirm: boolean };
     expect(payload).toEqual({ entry_ids: ["entry-shortcut-note", "entry-second-shortcut-note"], confirm: true });
+    await new Promise((resolve) => setTimeout(resolve, 150));
     deleted = true;
     await route.fulfill({ json: { deleted_entry_ids: ["entry-shortcut-note", "entry-second-shortcut-note"], deleted_source_ids: [] } });
   });
@@ -302,6 +303,8 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   await expect(page.getByRole("dialog", { name: "Delete selected items?" })).toBeVisible();
   await expect(page.getByText("Folders are deleted recursively")).toBeVisible();
   await page.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByText("Deleting 2 selected items...")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Deleting" })).toBeDisabled();
   await expect(page.locator(".file-rows")).toContainText("Folder is empty.");
   await page.screenshot({ path: testInfo.outputPath("workspace-shortcuts.png"), fullPage: true });
 });
