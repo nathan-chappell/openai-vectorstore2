@@ -531,11 +531,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Rename or recolor a tag, queuing reindex tasks when filter slugs change."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="settings-slider", text="Updating tag metadata and queuing affected reindex tasks."
-                )
-            )
+            await stream_chatkit_progress(ctx, "settings-slider", "Updating tag metadata and queuing affected reindex tasks.")
             response = await self._sources.update_tag(
                 clerk_user_id=request_context.clerk_user_id,
                 tag_id=tag_id,
@@ -544,11 +540,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Tag updated. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Tag updated. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -562,20 +557,17 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     "message": "Ask the user to confirm tag deletion, then call delete_tag again with confirm=true.",
                 }
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="settings-slider", text="Deleting tag and queuing affected reindex tasks.")
-            )
+            await stream_chatkit_progress(ctx, "settings-slider", "Deleting tag and queuing affected reindex tasks.")
             response = await self._sources.delete_tag(
                 clerk_user_id=request_context.clerk_user_id,
                 tag_id=tag_id,
                 origin_surface="chatkit",
                 origin_thread_id=ctx.context.thread.id,
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Tag deleted. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Tag deleted. Queued {len(response.tasks)} reindex task{'' if len(response.tasks) == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -601,7 +593,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             if not text.strip():
                 raise ValueError("Text source content is required.")
             request_context = ctx.context.request_context
-            await ctx.context.stream(ProgressUpdateEvent(icon="document", text="Queuing text source ingestion."))
+            await stream_chatkit_progress(ctx, "document", "Queuing text source ingestion.")
             response = await self._sources.ingest_source(
                 clerk_user_id=request_context.clerk_user_id,
                 filename=filename.strip() or "note.txt",
@@ -615,10 +607,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             task_label = (
                 f"task {response.task.id[:8]} ({response.task.status})" if response.task else "no task returned"
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle", text=f"Source {response.source.id[:8]} queued for ingestion as {task_label}."
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Source {response.source.id[:8]} queued for ingestion as {task_label}.",
             )
             return response.model_dump(mode="json")
 
@@ -634,9 +626,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Search OpenAI vector-store indexed source files, filtered by selected files, tags, or paths."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="search", text=f"Searching indexed files for '{query[:80]}'.")
-            )
+            await stream_chatkit_progress(ctx, "search", f"Searching indexed files for '{query[:80]}'.")
             response = await self._sources.search(
                 clerk_user_id=request_context.clerk_user_id,
                 request=SearchRequest(
@@ -649,11 +639,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
             )
             source_count = len({hit.source_file_id for hit in response.hits})
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Found {len(response.hits)} file match{'' if len(response.hits) == 1 else 'es'} across {source_count} source{'' if source_count == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Found {len(response.hits)} file match{'' if len(response.hits) == 1 else 'es'} across {source_count} source{'' if source_count == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -670,9 +659,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Run layered source-file vector search, using hits from each layer to branch outward."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="compass", text="Branching through indexed source-file neighborhoods.")
-            )
+            await stream_chatkit_progress(ctx, "compass", "Branching through indexed source-file neighborhoods.")
             response = await self._sources.branch_search(
                 clerk_user_id=request_context.clerk_user_id,
                 request=BranchSearchRequest(
@@ -686,11 +673,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
             )
             hit_count = sum(len(level.hits) for level in response.levels)
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Explored {len(response.levels)} level{'' if len(response.levels) == 1 else 's'} with {hit_count} hit{'' if hit_count == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Explored {len(response.levels)} level{'' if len(response.levels) == 1 else 's'} with {hit_count} hit{'' if hit_count == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -704,9 +690,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Preview semantic split records and auto-tags for text without creating a source or publishing vectors."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="batch", text="Previewing semantic split without publishing chunks.")
-            )
+            await stream_chatkit_progress(ctx, "batch", "Previewing semantic split without publishing chunks.")
             response = await self._sources.preview_semantic_split(
                 clerk_user_id=request_context.clerk_user_id,
                 filename=filename,
@@ -714,14 +698,13 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 payload=text.encode("utf-8"),
                 user_guidance=user_guidance,
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=(
-                        f"Preview ready: {len(response.split.chunks)} chunk{'' if len(response.split.chunks) == 1 else 's'}, "
-                        f"{len(response.split.tags)} tag{'' if len(response.split.tags) == 1 else 's'}, strategy {response.ingest_strategy}."
-                    ),
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                (
+                    f"Preview ready: {len(response.split.chunks)} chunk{'' if len(response.split.chunks) == 1 else 's'}, "
+                    f"{len(response.split.tags)} tag{'' if len(response.split.tags) == 1 else 's'}, strategy {response.ingest_strategy}."
+                ),
             )
             return response.model_dump(mode="json")
 
@@ -741,9 +724,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Start a lower-level research import from a topic, paper title, pasted text, or public URL."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="search", text="Starting research import and collecting candidates.")
-            )
+            await stream_chatkit_progress(ctx, "search", "Starting research import and collecting candidates.")
             response = await self._research.create_import(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=ResearchImportCreateRequest(
@@ -767,11 +748,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_thread_id=ctx.context.thread.id,
                 progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Research import complete with {len(response.candidates)} candidate{'' if len(response.candidates) == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -815,15 +795,14 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_thread_id=ctx.context.thread.id,
                 progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=(
-                        f"Research library build complete with {len(response.ingested)} indexed source"
-                        f"{'' if len(response.ingested) == 1 else 's'} and {response.duplicate_count} duplicate"
-                        f"{'' if response.duplicate_count == 1 else 's'} skipped."
-                    ),
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                (
+                    f"Research library build queued {len(response.ingested)} source"
+                    f"{'' if len(response.ingested) == 1 else 's'} for indexing and skipped {response.duplicate_count} duplicate"
+                    f"{'' if response.duplicate_count == 1 else 's'}."
+                ),
             )
             payload = response.model_dump(mode="json")
             ctx.context.client_tool_call = ClientToolCall(
@@ -900,9 +879,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Ingest approved lower-level research candidates through the app's normal source ingestion path."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="document", text="Queuing approved lower-level research candidates for ingestion.")
-            )
+            await stream_chatkit_progress(ctx, "document", "Queuing approved lower-level research candidates for ingestion.")
             response = await self._research.ingest_approved_candidates(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=ResearchCandidateIngestRequest(
@@ -915,11 +892,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_thread_id=ctx.context.thread.id,
                 progress_callback=lambda icon, text: stream_chatkit_progress(ctx, icon, text),
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Queued {len(response.ingested)} lower-level candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Queued {len(response.ingested)} lower-level candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
             )
             payload = response.model_dump(mode="json")
             resolved_task_id = task_id
@@ -962,11 +938,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 )
             if not selected_source_ids:
                 selected_source_ids = selected_scope(request_context, None)
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="search",
-                    text=f"Researching {len(selected_source_ids) or 'all'} indexed source{'' if len(selected_source_ids) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "search",
+                f"Researching {len(selected_source_ids) or 'all'} indexed source{'' if len(selected_source_ids) == 1 else 's'}.",
             )
             response = await self._actions.qa(
                 clerk_user_id=request_context.clerk_user_id,
@@ -979,11 +954,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Research answer ready with {len(response.hits)} cited match{'' if len(response.hits) == 1 else 'es'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Research answer ready with {len(response.hits)} cited match{'' if len(response.hits) == 1 else 'es'}.",
             )
             return response.model_dump(mode="json")
 
@@ -996,9 +970,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Queue a re-split that replaces one source's optional split records using its stored payload."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="reload", text="Queuing a safe re-split for the selected source.")
-            )
+            await stream_chatkit_progress(ctx, "reload", "Queuing a safe re-split for the selected source.")
             response = await self._sources.resplit_source(
                 clerk_user_id=request_context.clerk_user_id,
                 source_id=source_id,
@@ -1010,10 +982,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             task_label = (
                 f"task {response.task.id[:8]} ({response.task.status})" if response.task else "no task returned"
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle", text=f"Re-split queued for source {response.source.id[:8]} as {task_label}."
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Re-split queued for source {response.source.id[:8]} as {task_label}.",
             )
             return response.model_dump(mode="json")
 
@@ -1025,9 +997,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Replace a source's tag assignments and queue vector-store reindexing."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="settings-slider", text="Queuing tag reindex for the selected source.")
-            )
+            await stream_chatkit_progress(ctx, "settings-slider", "Queuing tag reindex for the selected source.")
             response = await self._sources.update_source_tags(
                 clerk_user_id=request_context.clerk_user_id,
                 source_id=source_id,
@@ -1038,10 +1008,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             task_label = (
                 f"task {response.task.id[:8]} ({response.task.status})" if response.task else "no task returned"
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle", text=f"Tag reindex queued for source {response.source.id[:8]} as {task_label}."
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Tag reindex queued for source {response.source.id[:8]} as {task_label}.",
             )
             return response.model_dump(mode="json")
 
@@ -1059,14 +1029,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     "message": "Ask the user to confirm deletion, then call delete_source again with confirm=true.",
                 }
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="reload", text="Deleting source and cleaning up stored files.")
-            )
+            await stream_chatkit_progress(ctx, "reload", "Deleting source and cleaning up stored files.")
             deleted_id = await self._sources.delete_source(
                 clerk_user_id=request_context.clerk_user_id,
                 source_id=source_id,
             )
-            await ctx.context.stream(ProgressUpdateEvent(icon="check-circle", text=f"Deleted source {deleted_id[:8]}."))
+            await stream_chatkit_progress(ctx, "check-circle", f"Deleted source {deleted_id[:8]}.")
             return {"deleted_source_id": deleted_id}
 
         @function_tool(name_override="list_tasks")
@@ -1117,9 +1085,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Run a QA action that retrieves chunks and answers from the evidence."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="search", text="Retrieving chunks and drafting a grounded answer.")
-            )
+            await stream_chatkit_progress(ctx, "search", "Retrieving chunks and drafting a grounded answer.")
             response = await self._actions.qa(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=QaRequest(
@@ -1132,11 +1098,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Grounded answer complete as task {response.task_id[:8]} with {len(response.hits)} citation{'' if len(response.hits) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Grounded answer complete as task {response.task_id[:8]} with {len(response.hits)} citation{'' if len(response.hits) == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -1152,7 +1117,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Run a free-form writing action with optional grounded/creative retrieval context."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(ProgressUpdateEvent(icon="write", text="Drafting from the library context."))
+            await stream_chatkit_progress(ctx, "write", "Drafting from the library context.")
             response = await self._actions.freeform(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=FreeformRequest(
@@ -1166,11 +1131,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 ),
                 origin_surface="chatkit",
             )
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle",
-                    text=f"Draft complete as task {response.task_id[:8]} with {len(response.hits)} retrieved chunk{'' if len(response.hits) == 1 else 's'}.",
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Draft complete as task {response.task_id[:8]} with {len(response.hits)} retrieved chunk{'' if len(response.hits) == 1 else 's'}.",
             )
             return response.model_dump(mode="json")
 
@@ -1185,9 +1149,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Generate an image, optionally grounded in retrieved indexed file matches."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(
-                ProgressUpdateEvent(icon="images", text="Generating an image asset from retrieved context.")
-            )
+            await stream_chatkit_progress(ctx, "images", "Generating an image asset from retrieved context.")
             response = await self._actions.image(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=ImageGenerationRequest(
@@ -1201,10 +1163,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_surface="chatkit",
             )
             asset_text = f" and asset {response.asset.id[:8]}" if response.asset else ""
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle", text=f"Image generation complete as task {response.task_id[:8]}{asset_text}."
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Image generation complete as task {response.task_id[:8]}{asset_text}.",
             )
             return response.model_dump(mode="json")
 
@@ -1221,7 +1183,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Generate a narrated audio asset from provided text or a prompt."""
             request_context = ctx.context.request_context
-            await ctx.context.stream(ProgressUpdateEvent(icon="play", text="Generating a voice asset."))
+            await stream_chatkit_progress(ctx, "play", "Generating a voice asset.")
             response = await self._actions.voice(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=VoiceGenerationRequest(
@@ -1237,10 +1199,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 origin_surface="chatkit",
             )
             asset_text = f" and asset {response.asset.id[:8]}" if response.asset else ""
-            await ctx.context.stream(
-                ProgressUpdateEvent(
-                    icon="check-circle", text=f"Voice generation complete as task {response.task_id[:8]}{asset_text}."
-                )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Voice generation complete as task {response.task_id[:8]}{asset_text}.",
             )
             return response.model_dump(mode="json")
 

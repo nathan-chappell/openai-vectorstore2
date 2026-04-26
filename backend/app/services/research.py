@@ -465,22 +465,26 @@ class ResearchImportService:
             )
 
     async def linked_source_ids_for_task(self, *, clerk_user_id: str, task_id: str) -> list[str]:
-        response = await self.list_candidates(
-            clerk_user_id=clerk_user_id,
-            task_id=task_id,
-            status="ingested",
-            page=1,
-            page_size=100,
-        )
-        source_ids: list[str] = []
-        seen: set[str] = set()
-        for candidate in response.candidates:
-            source_id = candidate.linked_source_file_id
-            if source_id is None or source_id in seen:
-                continue
-            seen.add(source_id)
-            source_ids.append(source_id)
-        return source_ids
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self._sources.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            source_ids = list(
+                (
+                    await session.execute(
+                        select(SourceFile.id)
+                        .join(ResearchImportCandidate, ResearchImportCandidate.linked_source_file_id == SourceFile.id)
+                        .join(UserLibrary, UserLibrary.id == ResearchImportCandidate.library_id)
+                        .where(
+                            UserLibrary.user_id == app_user.id,
+                            ResearchImportCandidate.task_id == task_id,
+                            ResearchImportCandidate.status.in_(["ingesting", "ingested"]),
+                            SourceFile.status == "ready",
+                        )
+                        .order_by(ResearchImportCandidate.created_at.asc())
+                    )
+                ).scalars()
+            )
+        return list(dict.fromkeys(source_ids))
 
     async def update_candidate_status(
         self,
@@ -675,7 +679,7 @@ class ResearchImportService:
                     current = await self._candidate_for_user(
                         session, clerk_user_id=clerk_user_id, candidate_id=candidate.id
                     )
-                    current.status = "ingested"
+                    current.status = "ingesting"
                     current.linked_source_file_id = ingest_response.source.id
                     current.content_hash = material.content_hash
                     current.provenance_json = dict(current.provenance_json or {}) | material.provenance
@@ -1184,10 +1188,21 @@ class ResearchImportService:
         return task
 
     def _candidate_summary(self, candidate: ResearchImportCandidate) -> ResearchImportCandidateSummary:
+        status = cast(ResearchCandidateStatus, candidate.status)
+        error_message = candidate.error_message
+        if candidate.linked_source_file is not None and status in {"ingesting", "ingested"}:
+            if candidate.linked_source_file.status == "ready":
+                status = "ingested"
+                error_message = None
+            elif candidate.linked_source_file.status == "failed":
+                status = "failed"
+                error_message = candidate.linked_source_file.error_message or error_message
+            elif candidate.linked_source_file.status == "processing":
+                status = "ingesting"
         return ResearchImportCandidateSummary(
             id=candidate.id,
             task_id=candidate.task_id,
-            status=cast(ResearchCandidateStatus, candidate.status),
+            status=status,
             source_type=cast(ResearchCandidateSourceType, candidate.source_type),
             url=candidate.url,
             normalized_url=candidate.normalized_url,
@@ -1207,7 +1222,7 @@ class ResearchImportService:
             linked_source_file_id=candidate.linked_source_file_id,
             provenance=dict(candidate.provenance_json or {}),
             content_hash=candidate.content_hash,
-            error_message=candidate.error_message,
+            error_message=error_message,
             created_at=candidate.created_at,
             updated_at=candidate.updated_at,
         )

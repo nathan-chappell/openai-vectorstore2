@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import httpx
@@ -9,6 +10,7 @@ import pytest
 
 from backend import create_fastapi_app
 from backend.app.core.config import AppSettings
+from backend.app.models import ResearchImportCandidate, SourceFile
 from backend.app.schemas import ResearchImportCreateRequest
 from backend.app.services import research as research_module
 from backend.app.services.research import ResearchImportService
@@ -84,6 +86,52 @@ async def test_research_import_linkedin_export_seed_is_cleaned(configured_settin
     assert "Vector Memory Field Notes" in text
     assert "https://example.com/reference" in text
     assert "<article>" not in text
+
+
+def test_research_candidate_summary_reflects_linked_source_status(configured_settings: AppSettings) -> None:
+    service = ResearchImportService(
+        settings=configured_settings,
+        database=cast(Any, None),
+        sources=cast(Any, None),
+        openai=cast(Any, None),
+    )
+    now = datetime.now(UTC)
+    source = SourceFile(
+        id="source",
+        library_id="library",
+        uploaded_by_user_id=1,
+        display_title="Attention note",
+        original_filename="attention.txt",
+        media_type="text/plain",
+        source_kind="text",
+        status="failed",
+        byte_size=42,
+        storage_provider="local",
+        storage_key="sources/attention.txt",
+        error_message="Ingest cancelled during shutdown.",
+        created_at=now,
+        updated_at=now,
+    )
+    candidate = ResearchImportCandidate(
+        id="candidate",
+        library_id="library",
+        user_id=1,
+        task_id="task",
+        linked_source_file_id="source",
+        status="ingested",
+        source_type="url",
+        title="Attention note",
+        depth=0,
+        provenance_json={},
+        created_at=now,
+        updated_at=now,
+    )
+    candidate.linked_source_file = source
+
+    summary = service._candidate_summary(candidate)
+
+    assert summary.status == "failed"
+    assert summary.error_message == "Ingest cancelled during shutdown."
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import logging
 import mimetypes
@@ -92,6 +92,40 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         allow_headers=["*"],
         expose_headers=["mcp-session-id"],
     )
+
+    @app.middleware("http")
+    async def log_http_request(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        started_at = perf_counter()
+        method = request.method
+        path = request.url.path
+        client_host = request.client.host if request.client is not None else None
+        try:
+            response = await call_next(request)
+        except Exception:
+            logger.exception(
+                "http_request_failed method=%s path=%s client=%s duration_ms=%.1f",
+                method,
+                path,
+                client_host,
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
+
+        duration_ms = (perf_counter() - started_at) * 1000
+        log_method = logger.info
+        if response.status_code >= 500:
+            log_method = logger.error
+        elif response.status_code >= 400:
+            log_method = logger.warning
+        log_method(
+            "http_request_completed method=%s path=%s status_code=%s client=%s duration_ms=%.1f",
+            method,
+            path,
+            response.status_code,
+            client_host,
+            duration_ms,
+        )
+        return response
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"], include_in_schema=False)
     async def mcp_root_redirect(request: Request) -> RedirectResponse:

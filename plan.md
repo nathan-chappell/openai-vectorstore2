@@ -45,12 +45,21 @@ Implementation tasks:
 - [x] Add an `openai-log-debugger` Codex skill with a script that fetches Responses and Conversations artifacts from logged IDs or platform URLs.
 - [x] Run focused backend verification, update this checkpoint with results, then commit and push.
 - [x] Fix ChatKit progress update icon validation for research-builder progress events and add request-level ChatKit HTTP logging.
+- [x] Keep Alembic startup logging from replacing the app file handler, then add app-owned FastAPI request completion/failure logging so every HTTP hit reaches the configured backend file log.
+- [x] Stabilize the ChatKit client-tool callback so research-builder UI updates do not trigger React nested update loops.
+- [x] Normalize all ChatKit progress icons through the validation-safe wrapper.
 
 Follow-up verification completed:
 
 - `./.venv/bin/ruff check backend/app/chatkit/server.py backend/app/main.py tests/test_chatkit_scope.py`
 - `./.venv/bin/pytest tests/test_chatkit_scope.py tests/test_logging.py -q`
+- `./.venv/bin/pytest tests/test_logging.py tests/test_chatkit_scope.py tests/test_research_importer.py tests/integration/test_app_contracts.py -q`
+- `./.venv/bin/pytest -q`
 - `./.venv/bin/pyright`
+- `npm run typecheck`
+- `npm run build`
+- `npm test`
+- `npm run test:e2e -- --grep "workspace shell|file explorer shortcuts|research library builder directly indexes"`
 - Validated all current research-service progress icons through the ChatKit progress adapter.
 
 Verification completed in this pass:
@@ -153,7 +162,7 @@ Known remaining work:
 - Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
 - Continue refining the direct Research Library Builder panel after the browser/file-explorer direction settles.
 - Continue adding normal file-browser flows for create folder, upload, selected-file grounded QA, reveal/go-to-location, rename/move, and delete.
-- Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
+- Decide whether the already-tracked `tmp/image.png` should remain committed.
 
 ## Checkpoint: 2026-04-26 Wrap-Up
 
@@ -177,7 +186,7 @@ Known remaining work for the next session:
 
 - Run the full live `explorer-selected` Playwright flow with real OpenAI and S3-compatible values.
 - Continue refining the direct Research Library Builder panel after the browser/file-explorer direction settles.
-- Consider whether `.gitignore` should use `tmp/` instead of `./tmp` and whether `tmp/image.png` should remain committed.
+- Decide whether the already-tracked `tmp/image.png` should remain committed.
 
 ## Current Product Shape
 
@@ -284,6 +293,7 @@ Completed in this pass:
 - Added ChatKit progress callbacks for discovery, depth expansion, downloads, duplicate skips, and indexing queue updates.
 - Added a pinned ChatKit composer tool and starter prompt for research builds, making ChatKit the primary start point.
 - Added candidate progress bars in the research panel and file-status progress bars in the file browser for processing/ready/failed states.
+- Synced research candidate status to linked source-file ingest completion/failure so queued candidates no longer appear indexed before source indexing finishes.
 - Updated capability descriptions, ChatKit instructions, MCP Apps copy, TypeScript contracts, and Playwright coverage for the direct-build workflow.
 - Added compact file-browser keyboard shortcuts for rename, navigate-up, and delete, and trimmed those buttons from the explorer command bar.
 - Added a Playwright escape hatch, `PLAYWRIGHT_REUSE_EXISTING_SERVER=true`, so local tests can reuse an already-running dev backend instead of colliding with it.

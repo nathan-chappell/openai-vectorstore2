@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from logging.config import fileConfig
 
 from alembic import context
@@ -10,7 +11,7 @@ from backend.app.models import Base
 
 config = context.config
 
-if config.config_file_name is not None:
+if config.config_file_name is not None and not logging.getLogger().handlers:
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata

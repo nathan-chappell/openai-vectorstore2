@@ -574,7 +574,7 @@ async def test_http_research_library_build_auto_ingests_public_candidates(
                 assert build.status_code == 200
                 payload = build.json()
                 assert len(payload["ingested"]) == 2
-                assert {candidate["status"] for candidate in payload["candidates"]} == {"ingested"}
+                assert {candidate["status"] for candidate in payload["candidates"]} == {"ingesting"}
                 assert all(candidate["linked_source_file_id"] for candidate in payload["candidates"])
 
                 for item in payload["ingested"]:
@@ -590,6 +590,14 @@ async def test_http_research_library_build_auto_ingests_public_candidates(
                     assert metadata["research_import_task_id"] == payload["task"]["id"]
                     assert metadata["research_candidate_id"]
                     assert detail.json()["virtual_path"].startswith("/Research/Deterministic Auto Ingest/")
+
+                candidates = await client.get(
+                    "/api/research/candidates",
+                    headers=auth_headers,
+                    params={"task_id": payload["task"]["id"]},
+                )
+                assert candidates.status_code == 200
+                assert {candidate["status"] for candidate in candidates.json()["candidates"]} == {"ingested"}
 
                 target_folder = await client.get(
                     "/api/filesystem",
@@ -651,7 +659,7 @@ async def test_http_research_library_build_skips_duplicate_downloaded_content(
                 assert len(payload["ingested"]) == 1
                 assert payload["duplicate_count"] == 1
                 statuses = {candidate["status"] for candidate in payload["candidates"]}
-                assert statuses == {"ingested", "duplicate"}
+                assert statuses == {"ingesting", "duplicate"}
                 duplicate = next(candidate for candidate in payload["candidates"] if candidate["status"] == "duplicate")
                 assert duplicate["error_message"] == "Duplicate research candidate content."
 
@@ -662,6 +670,14 @@ async def test_http_research_library_build_skips_duplicate_downloaded_content(
                     task_id=ingested["task"]["id"],
                     expected_status="completed",
                 )
+                candidates = await client.get(
+                    "/api/research/candidates",
+                    headers=auth_headers,
+                    params={"task_id": payload["task"]["id"]},
+                )
+                assert candidates.status_code == 200
+                assert {candidate["status"] for candidate in candidates.json()["candidates"]} == {"ingested", "duplicate"}
+
                 target_folder = await client.get(
                     "/api/filesystem",
                     headers=auth_headers,
@@ -719,7 +735,7 @@ async def test_http_research_candidate_approval_ingests_through_source_service(
             source = ingest_payload["ingested"][0]["source"]
             task = ingest_payload["ingested"][0]["task"]
             assert task["kind"] == "ingest"
-            assert ingest_payload["candidates"][0]["status"] == "ingested"
+            assert ingest_payload["candidates"][0]["status"] == "ingesting"
             assert ingest_payload["candidates"][0]["linked_source_file_id"] == source["id"]
 
             await _wait_for_http_task(
@@ -728,6 +744,14 @@ async def test_http_research_candidate_approval_ingests_through_source_service(
                 task_id=task["id"],
                 expected_status="completed",
             )
+            candidates = await client.get(
+                "/api/research/candidates",
+                headers=auth_headers,
+                params={"task_id": create.json()["task"]["id"]},
+            )
+            assert candidates.status_code == 200
+            assert candidates.json()["candidates"][0]["status"] == "ingested"
+
             detail = await client.get(f"/api/sources/{source['id']}", headers=auth_headers)
             assert detail.status_code == 200
             metadata = detail.json()["metadata"]

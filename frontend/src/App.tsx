@@ -81,7 +81,7 @@ const RESEARCH_STATUS_LABELS: Record<ResearchCandidateStatus, string> = {
   pending: "queued",
   approved: "queued",
   rejected: "skipped",
-  ingesting: "downloading",
+  ingesting: "indexing",
   ingested: "indexed",
   failed: "failed",
   duplicate: "duplicate",
@@ -95,6 +95,22 @@ const RESEARCH_STATUS_PROGRESS: Record<ResearchCandidateStatus, number> = {
   failed: 100,
   duplicate: 100,
 };
+
+function displayResearchCandidateStatus(
+  candidate: ResearchImportCandidateSummary,
+  linkedEntry: FilesystemEntrySummary | undefined,
+): ResearchCandidateStatus {
+  if (!linkedEntry?.status || candidate.status === "duplicate" || candidate.status === "rejected") {
+    return candidate.status;
+  }
+  if (linkedEntry.status === "ready") {
+    return candidate.status === "ingesting" || candidate.status === "ingested" ? "ingested" : candidate.status;
+  }
+  if (linkedEntry.status === "failed") {
+    return candidate.status === "ingesting" || candidate.status === "ingested" ? "failed" : candidate.status;
+  }
+  return candidate.status === "ingested" ? "ingesting" : candidate.status;
+}
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -172,6 +188,7 @@ export function App({ authMode }: AppProps) {
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
+  const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
@@ -188,6 +205,15 @@ export function App({ authMode }: AppProps) {
       }),
     [knownEntries, selectedSourceIds],
   );
+  const sourceEntriesById = useMemo(() => {
+    const entriesBySourceId: Record<string, FilesystemEntrySummary> = {};
+    for (const entry of Object.values(knownEntries)) {
+      if (entry.source_id) {
+        entriesBySourceId[entry.source_id] = entry;
+      }
+    }
+    return entriesBySourceId;
+  }, [knownEntries]);
   const hasActiveTasks = useMemo(() => tasks.some(isActiveTask), [tasks]);
   const selectedSourceId = selectedSource?.id ?? null;
   const selectedSourceTagChanged = selectedSource
@@ -276,6 +302,10 @@ export function App({ authMode }: AppProps) {
       setStatus(error instanceof Error ? error.message : "Could not refresh background activity.");
     }
   }, [refreshExplorer, selectedSourceId]);
+
+  useEffect(() => {
+    knownEntriesRef.current = knownEntries;
+  }, [knownEntries]);
 
   useEffect(() => {
     setChatKitMetadataGetter(() => ({
@@ -562,10 +592,10 @@ export function App({ authMode }: AppProps) {
       } else {
         await refreshExplorer();
       }
-      const ingestedLabel = response.ingested.length
-        ? `, ${response.ingested.length} indexed`
-        : ", no public items indexed";
-      setStatus(`Research library build found ${response.candidates.length} candidate${response.candidates.length === 1 ? "" : "s"}${ingestedLabel}.`);
+      const queuedLabel = response.ingested.length
+        ? `, ${response.ingested.length} queued for indexing`
+        : ", no public items queued";
+      setStatus(`Research library build found ${response.candidates.length} candidate${response.candidates.length === 1 ? "" : "s"}${queuedLabel}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Research library build failed.");
     } finally {
@@ -669,7 +699,7 @@ export function App({ authMode }: AppProps) {
           }
           return sourceIds;
         });
-        const entryIds = Object.values(knownEntries)
+        const entryIds = Object.values(knownEntriesRef.current)
           .filter((entry) => entry.source_id && sourceIds.includes(entry.source_id))
           .map((entry) => entry.id);
         if (entryIds.length) {
@@ -690,9 +720,10 @@ export function App({ authMode }: AppProps) {
       if (toolCall.name === "reveal_file") {
         const sourceId = typeof toolCall.params.source_id === "string" ? toolCall.params.source_id : null;
         const entryId = typeof toolCall.params.entry_id === "string" ? toolCall.params.entry_id : null;
-        let entry = entryId ? knownEntries[entryId] : null;
+        const entriesById = knownEntriesRef.current;
+        let entry = entryId ? entriesById[entryId] : null;
         if (!entry && sourceId) {
-          entry = Object.values(knownEntries).find((item) => item.source_id === sourceId) ?? null;
+          entry = Object.values(entriesById).find((item) => item.source_id === sourceId) ?? null;
         }
         if (!entry && sourceId) {
           const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
@@ -767,7 +798,7 @@ export function App({ authMode }: AppProps) {
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },
-    [cacheEntries, knownEntries, loadFolder, openSource],
+    [cacheEntries, loadFolder, openSource],
   );
 
   const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -832,6 +863,7 @@ export function App({ authMode }: AppProps) {
           selectedSourceIdSet={selectedSourceIdSet}
           selectedSourceTagChanged={selectedSourceTagChanged}
           selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          sourceEntriesById={sourceEntriesById}
           sourceQuery={sourceQuery}
           splitPreview={splitPreview}
           tags={tags}
@@ -1312,6 +1344,7 @@ const FileExplorer = memo(function FileExplorer({
   selectedSourceIdSet,
   selectedSourceTagChanged,
   selectedSourceTagDraftIdSet,
+  sourceEntriesById,
   sourceQuery,
   splitPreview,
   tags,
@@ -1361,6 +1394,7 @@ const FileExplorer = memo(function FileExplorer({
   selectedSourceIdSet: Set<string>;
   selectedSourceTagChanged: boolean;
   selectedSourceTagDraftIdSet: Set<string>;
+  sourceEntriesById: Record<string, FilesystemEntrySummary>;
   sourceQuery: string;
   splitPreview: SplitPreviewResponse | null;
   tags: TagSummary[];
@@ -1558,6 +1592,7 @@ const FileExplorer = memo(function FileExplorer({
             query={researchQuery}
             result={researchResult}
             seedType={researchSeedType}
+            sourceEntriesById={sourceEntriesById}
             onBuild={onResearchBuild}
             onMaxDepthChange={onResearchMaxDepthChange}
             onMaxSourcesChange={onResearchMaxSourcesChange}
@@ -1594,6 +1629,7 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
   query,
   result,
   seedType,
+  sourceEntriesById,
   onBuild,
   onMaxDepthChange,
   onMaxSourcesChange,
@@ -1606,6 +1642,7 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
   query: string;
   result: ResearchLibraryBuildResponse | null;
   seedType: ResearchBuilderSeedKind;
+  sourceEntriesById: Record<string, FilesystemEntrySummary>;
   onBuild: () => void;
   onMaxDepthChange: (value: number) => void;
   onMaxSourcesChange: (value: number) => void;
@@ -1613,16 +1650,20 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
   onSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
 }) {
   const candidates = result?.candidates ?? [];
-  const pendingCount = candidates.filter((candidate) => candidate.status === "pending").length;
-  const activeCount = candidates.filter((candidate) => candidate.status === "ingesting").length;
-  const ingestedCount = Math.max(
-    candidates.filter((candidate) => candidate.status === "ingested").length,
-    result?.ingested.length ?? 0,
-  );
-  const duplicateCount = Math.max(result?.duplicate_count ?? 0, candidates.filter((candidate) => candidate.status === "duplicate").length);
-  const failedCount = candidates.filter((candidate) => candidate.status === "failed").length;
-  const visibleCandidates = candidates.slice(0, 6);
-  const hiddenCandidateCount = Math.max(0, candidates.length - visibleCandidates.length);
+  const displayCandidates = candidates.map((candidate) => {
+    const linkedEntry = candidate.linked_source_file_id ? sourceEntriesById[candidate.linked_source_file_id] : undefined;
+    return {
+      candidate,
+      linkedEntry,
+      status: displayResearchCandidateStatus(candidate, linkedEntry),
+    };
+  });
+  const pendingCount = displayCandidates.filter(({ status }) => status === "pending" || status === "approved").length;
+  const activeCount = displayCandidates.filter(({ status }) => status === "ingesting").length;
+  const ingestedCount = displayCandidates.filter(({ status }) => status === "ingested").length;
+  const duplicateCount = Math.max(result?.duplicate_count ?? 0, displayCandidates.filter(({ status }) => status === "duplicate").length);
+  const failedCount = displayCandidates.filter(({ status }) => status === "failed").length;
+  const hiddenCandidateCount = Math.max(0, candidates.length - 6);
   return (
     <section className="research-builder-strip" aria-label="Research library builder">
       <div className="research-builder-controls">
@@ -1691,29 +1732,30 @@ const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
               {candidates.length} candidate{candidates.length === 1 ? "" : "s"}
             </strong>
             <span>
-              {result.task.status} | {pendingCount} queued | {activeCount} downloading | {ingestedCount} indexed | {duplicateCount} duplicate
+              {result.task.status} | {pendingCount} queued | {activeCount} indexing | {ingestedCount} indexed | {duplicateCount} duplicate
               {duplicateCount === 1 ? "" : "s"} | {failedCount} failed
             </span>
           </div>
           <div className="research-candidate-list" aria-label="Research candidates">
-            {visibleCandidates.map((candidate) => {
-              const progressPercent = RESEARCH_STATUS_PROGRESS[candidate.status];
+            {displayCandidates.slice(0, 6).map(({ candidate, status }) => {
+              const progressPercent = RESEARCH_STATUS_PROGRESS[status];
               const metaParts = [
                 candidate.source_type.toUpperCase(),
                 candidate.published_at?.slice(0, 10),
                 candidate.authors.slice(0, 2).join(", "),
               ].filter(Boolean);
+              const detailText = status === "failed" ? (candidate.error_message ?? "Source ingest failed.") : (candidate.summary ?? candidate.description);
               return (
                 <article key={candidate.id} className="research-candidate-row">
                   <div>
                     <strong>{candidate.title}</strong>
                     <span>{metaParts.join(" | ") || candidate.normalized_url || candidate.url || "Candidate"}</span>
-                    {candidate.summary || candidate.description ? <p>{candidate.summary ?? candidate.description}</p> : null}
+                    {detailText ? <p>{detailText}</p> : null}
                     {candidate.suggested_tags.length ? <small>{candidate.suggested_tags.slice(0, 4).join(", ")}</small> : null}
                   </div>
                   <div className="research-candidate-actions">
-                    <span className={`status-badge status-${candidate.status}`}>{RESEARCH_STATUS_LABELS[candidate.status]}</span>
-                    <span className="research-progress-track" aria-label={`${RESEARCH_STATUS_LABELS[candidate.status]} progress`}>
+                    <span className={`status-badge status-${status}`}>{RESEARCH_STATUS_LABELS[status]}</span>
+                    <span className="research-progress-track" aria-label={`${RESEARCH_STATUS_LABELS[status]} progress`}>
                       <span style={{ width: `${progressPercent}%` }} />
                     </span>
                   </div>

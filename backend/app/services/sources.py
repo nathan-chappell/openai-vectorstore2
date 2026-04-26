@@ -25,6 +25,7 @@ from backend.app.models import (
     AppTask,
     AppUser,
     FilesystemEntry,
+    ResearchImportCandidate,
     SemanticChunk,
     SourceFile,
     SourceTagLink,
@@ -1470,6 +1471,12 @@ class SourceService:
                 source.error_message = None
                 source.updated_at = _utcnow()
                 library.updated_at = _utcnow()
+                research_candidate_count = await self._sync_linked_research_candidates(
+                    session,
+                    source_id=source.id,
+                    status="ingested",
+                    error_message=None,
+                )
                 task.status = "completed"
                 task.state_json = {
                     "stage": "completed",
@@ -1488,12 +1495,13 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
                 logger.info(
-                    "source_ingested clerk_user_id=%s source_id=%s task_id=%s kind=%s indexed_file=%s duration_ms=%.1f",
+                    "source_ingested clerk_user_id=%s source_id=%s task_id=%s kind=%s indexed_file=%s research_candidates=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
                     source.source_kind,
                     source.openai_vector_file_id is not None,
+                    research_candidate_count,
                     (perf_counter() - ingest_started_at) * 1000,
                 )
             except Exception as exc:
@@ -1518,6 +1526,12 @@ class SourceService:
                 source.status = "failed"
                 source.error_message = str(exc)
                 source.updated_at = _utcnow()
+                research_candidate_count = await self._sync_linked_research_candidates(
+                    session,
+                    source_id=source.id,
+                    status="failed",
+                    error_message=str(exc),
+                )
                 task.status = "failed"
                 task.state_json = {
                     "stage": "failed",
@@ -1529,10 +1543,11 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
                 logger.error(
-                    "source_ingest_failed clerk_user_id=%s source_id=%s task_id=%s error=%s duration_ms=%.1f",
+                    "source_ingest_failed clerk_user_id=%s source_id=%s task_id=%s research_candidates=%s error=%s duration_ms=%.1f",
                     clerk_user_id,
                     source.id,
                     task.id,
+                    research_candidate_count,
                     exc,
                     (perf_counter() - ingest_started_at) * 1000,
                 )
@@ -1571,6 +1586,12 @@ class SourceService:
             source.status = "failed"
             source.error_message = "Ingest cancelled during shutdown."
             source.updated_at = _utcnow()
+            research_candidate_count = await self._sync_linked_research_candidates(
+                session,
+                source_id=source.id,
+                status="failed",
+                error_message="Ingest cancelled during shutdown.",
+            )
             task.status = "cancelled"
             task.state_json = {
                 "stage": "cancelled",
@@ -1582,11 +1603,35 @@ class SourceService:
             task.updated_at = _utcnow()
             await session.commit()
             logger.warning(
-                "source_ingest_cancelled clerk_user_id=%s source_id=%s task_id=%s",
+                "source_ingest_cancelled clerk_user_id=%s source_id=%s task_id=%s research_candidates=%s",
                 clerk_user_id,
                 source.id,
                 task.id,
+                research_candidate_count,
             )
+
+    async def _sync_linked_research_candidates(
+        self,
+        session: Any,
+        *,
+        source_id: str,
+        status: Literal["ingested", "failed"],
+        error_message: str | None,
+    ) -> int:
+        status_filter = (
+            ResearchImportCandidate.status.in_(["ingesting", "ingested"])
+            if status == "failed"
+            else ResearchImportCandidate.status == "ingesting"
+        )
+        result = await session.execute(
+            update(ResearchImportCandidate)
+            .where(
+                ResearchImportCandidate.linked_source_file_id == source_id,
+                status_filter,
+            )
+            .values(status=status, error_message=error_message, updated_at=_utcnow())
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def _execute_resplit_job(
         self,

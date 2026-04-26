@@ -16,4 +16,4 @@ output/
 *.db
 coverage/
 *.egg-info/
-./tmp
+tmp/
