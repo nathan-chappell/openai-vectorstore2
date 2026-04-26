@@ -108,6 +108,21 @@ function mergeResearchCandidates(
   ];
 }
 
+function asResearchBuildResponse(value: unknown): ResearchLibraryBuildResponse | null {
+  if (!value || typeof value !== "object") {
+    return null;
+  }
+  const candidate = value as Partial<ResearchLibraryBuildResponse>;
+  if (!candidate.task || !Array.isArray(candidate.candidates) || !Array.isArray(candidate.ingested)) {
+    return null;
+  }
+  return candidate as ResearchLibraryBuildResponse;
+}
+
+function asResearchCandidates(value: unknown): ResearchImportCandidateSummary[] {
+  return Array.isArray(value) ? (value as ResearchImportCandidateSummary[]) : [];
+}
+
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
@@ -731,6 +746,64 @@ export function App({ authMode }: AppProps) {
           await openSource(entry.source_id);
         }
         return { ok: true, entry_id: entry.id, source_id: entry.source_id, path: entry.path };
+      }
+      if (toolCall.name === "show_research_builder") {
+        const query = typeof toolCall.params.query === "string" ? toolCall.params.query : null;
+        const seedType = toolCall.params.seed_type === "paper" ? "paper" : toolCall.params.seed_type === "topic" ? "topic" : null;
+        const maxSources = typeof toolCall.params.max_sources === "number" ? toolCall.params.max_sources : null;
+        const maxDepth = typeof toolCall.params.max_depth === "number" ? toolCall.params.max_depth : null;
+        const autoIngest = typeof toolCall.params.auto_ingest === "boolean" ? toolCall.params.auto_ingest : null;
+        if (query) {
+          setResearchQuery(query);
+        }
+        if (seedType) {
+          setResearchSeedType(seedType);
+        }
+        if (maxSources !== null) {
+          setResearchMaxSources(clamp(Math.round(maxSources), 1, 50));
+        }
+        if (maxDepth !== null) {
+          setResearchMaxDepth(clamp(Math.round(maxDepth), 0, 4));
+        }
+        if (autoIngest !== null) {
+          setResearchAutoIngest(autoIngest);
+        }
+        const result = asResearchBuildResponse(toolCall.params.result);
+        const candidates = asResearchCandidates(toolCall.params.candidates);
+        const ingested = Array.isArray(toolCall.params.ingested) ? toolCall.params.ingested : [];
+        if (result) {
+          setResearchResult(result);
+        } else if (candidates.length || ingested.length) {
+          setResearchResult((current) =>
+            current
+              ? {
+                  ...current,
+                  candidates: mergeResearchCandidates(current.candidates, candidates),
+                  ingested: [...current.ingested, ...((ingested as ResearchLibraryBuildResponse["ingested"]) ?? [])],
+                }
+              : current,
+          );
+        }
+        const targetFolderId =
+          result?.target_folder_id ??
+          (typeof toolCall.params.target_folder_id === "string"
+            ? toolCall.params.target_folder_id
+            : typeof toolCall.params.folder_id === "string"
+              ? toolCall.params.folder_id
+              : null);
+        if (targetFolderId) {
+          setSourceQuery("");
+          setSelectedExplorerTagIds([]);
+          setSelectedEntryIds([]);
+          setSelectedSourceIds([]);
+          setFocusedEntryId(null);
+          setSelectedSource(null);
+          await loadFolder(targetFolderId);
+        }
+        if (candidates.length || result) {
+          setStatus(`Research builder is showing ${(result?.candidates.length ?? candidates.length)} candidate${(result?.candidates.length ?? candidates.length) === 1 ? "" : "s"}.`);
+        }
+        return { ok: true, candidate_count: result?.candidates.length ?? candidates.length, target_folder_id: targetFolderId };
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },

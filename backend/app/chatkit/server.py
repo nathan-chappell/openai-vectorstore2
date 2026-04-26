@@ -763,7 +763,19 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     ),
                 )
             )
-            return response.model_dump(mode="json")
+            payload = response.model_dump(mode="json")
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_research_builder",
+                arguments={
+                    "query": query,
+                    "seed_type": normalized_seed_type,
+                    "max_depth": max(0, min(max_depth, 4)),
+                    "max_sources": max(1, min(max_sources, 50)),
+                    "auto_ingest": auto_ingest,
+                    "result": payload,
+                },
+            )
+            return payload
 
         @function_tool(name_override="list_research_candidates")
         async def list_research_candidates_tool(
@@ -784,7 +796,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 page=1,
                 page_size=max(1, min(page_size, 50)),
             )
-            return response.model_dump(mode="json")
+            payload = response.model_dump(mode="json")
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_research_builder",
+                arguments={"task_id": task_id, "candidates": payload["candidates"]},
+            )
+            return payload
 
         @function_tool(name_override="update_research_candidate_status")
         async def update_research_candidate_status_tool(
@@ -801,7 +818,13 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     candidate_ids=candidate_ids, status=cast(Any, status)
                 ).status,
             )
-            return response.model_dump(mode="json")
+            payload = response.model_dump(mode="json")
+            task_id = response.candidates[0].task_id if response.candidates else None
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_research_builder",
+                arguments={"task_id": task_id, "candidates": payload["candidates"]},
+            )
+            return payload
 
         @function_tool(name_override="ingest_research_candidates")
         async def ingest_research_candidates_tool(
@@ -833,7 +856,20 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     text=f"Queued {len(response.ingested)} approved candidate{'' if len(response.ingested) == 1 else 's'} for ingestion.",
                 )
             )
-            return response.model_dump(mode="json")
+            payload = response.model_dump(mode="json")
+            resolved_task_id = task_id
+            if resolved_task_id is None and response.candidates:
+                resolved_task_id = response.candidates[0].task_id
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_research_builder",
+                arguments={
+                    "task_id": resolved_task_id,
+                    "folder_id": folder_id,
+                    "candidates": payload["candidates"],
+                    "ingested": payload["ingested"],
+                },
+            )
+            return payload
 
         @function_tool(name_override="resplit_source")
         async def resplit_source_tool(
@@ -1142,6 +1178,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "to replace its optional split records, build foldered research libraries from topics or papers, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
+            "Research build, candidate review, and candidate ingest tools update the browser's research builder panel so the user can inspect candidate state. "
             "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
             "If a selected source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
