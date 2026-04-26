@@ -230,7 +230,7 @@ async def test_research_library_progress_reports_search_depth_and_slots(
 
     messages = [text for _, text in events]
     assert len(response.candidates) == 4
-    assert any("Searching web for primary references" in message for message in messages)
-    assert any("Expanding references at depth 2 from 2 parent candidates with 2 slots open." == message for message in messages)
-    assert any("Depth 2: searching references from Example reference 1 (1/2, 2 slots left)." == message for message in messages)
-    assert any("Depth 2: Example reference 1 returned 2 candidates; 0 slots left." == message for message in messages)
+    assert any("Searching the web for strong starting references" in message for message in messages)
+    assert any("Looking for another layer of references from 2 promising sources." == message for message in messages)
+    assert any("Checking related work from Example reference 1 (1/2)." == message for message in messages)
+    assert any("Found 2 related references from Example reference 1." == message for message in messages)

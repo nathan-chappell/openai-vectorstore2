@@ -56,6 +56,7 @@ Implementation tasks:
 - [x] Make routine request logs compact, suppress duplicate uvicorn access noise, and keep OpenAI response/conversation log URLs easy to scan.
 - [x] Route framework loggers through the root file handler so uvicorn/starlette/alembic warnings land in the app log file.
 - [x] Align ChatKit agent state with OpenAI conversations: create and persist `openai_conversation_id`, track `openai_previous_response_id` for logs/future one-off calls, pass only `conversation_id` into the Agents SDK run, and send only pending ChatKit items after a conversation exists.
+- [x] Fix research-answer scoping from ChatKit/MCP: wait for task-linked files to finish indexing instead of falling back to whole-library search, and accept file-explorer entry IDs anywhere source IDs are expected.
 - [x] Rename downloaded research materials with title-based `.pdf`/`.txt` filenames when URL paths use numeric article IDs or unsupported suffixes.
 - [x] Polish the file explorer interaction model: in-app delete confirmation, recursive-folder warning copy, arrow-key focus, Shift+arrow range selection, Alt+Left/Backspace up navigation, `?` shortcut help, and closable/resizable preview.
 
@@ -330,6 +331,7 @@ Status: active intake; implement items as concrete plans arrive.
 - [x] Validate hidden-preview and splitter fixes with Playwright desktop and mobile screenshots before marking complete.
 - [x] Add compact file-browser keyboard shortcuts: `F2` renames the focused item, `Backspace` navigates up one folder, and `Delete` deletes the current selection.
 - [x] Reduce active frontend polling: active-task background refreshes now run on a named 5-second interval while upload, delete, research build, and explicit refresh paths continue to force immediate targeted refreshes.
+- [ ] Split the browser into two first-class views: a familiar explorer view for folder/file navigation and a tag/query-focused library view for filtering files by tags and search, without forcing tag controls into the explorer interaction model.
 - [ ] Add future browser/design plans here first, then move them into implementation tasks as soon as enough detail exists.
 
 ## Near-Term Follow-Ups

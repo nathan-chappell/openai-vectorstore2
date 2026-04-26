@@ -986,6 +986,18 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             assert source_scoped_search.status_code == 200
             assert {hit["source_file_id"] for hit in source_scoped_search.json()["hits"]} == {bravo_source_id}
 
+            entry_scoped_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={
+                    "query": "retrieval",
+                    "selected_source_ids": [bravo_payload["source"]["filesystem_entry_id"]],
+                    "max_results": 8,
+                },
+            )
+            assert entry_scoped_search.status_code == 200
+            assert {hit["source_file_id"] for hit in entry_scoped_search.json()["hits"]} == {bravo_source_id}
+
             kind_scoped_search = await client.post(
                 "/api/search",
                 headers=auth_headers,

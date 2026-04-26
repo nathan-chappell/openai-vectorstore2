@@ -2103,10 +2103,17 @@ class SourceService:
             library = await self._library_for_user(session, app_user=app_user)
             if library.openai_vector_store_id is None:
                 return []
+            selected_source_ids = await _resolve_source_or_filesystem_entry_ids(
+                session,
+                library_id=library.id,
+                source_or_entry_ids=request.selected_source_ids,
+            )
+            if request.selected_source_ids and not selected_source_ids:
+                return []
             tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=request.tag_ids)
             include_created_at_filters = _library_supports_vector_created_at_filter(library)
             filters = build_filter_groups(
-                source_ids=request.selected_source_ids,
+                source_ids=selected_source_ids,
                 source_kinds=request.source_kinds,
                 virtual_paths=request.virtual_paths,
                 tag_slugs=[tag.slug for tag in tags],
@@ -2166,7 +2173,7 @@ class SourceService:
                     continue
                 if not _source_matches_request_filters(
                     source,
-                    selected_source_ids=request.selected_source_ids,
+                    selected_source_ids=selected_source_ids,
                     source_kinds=request.source_kinds,
                     virtual_paths=request.virtual_paths,
                     tag_ids=[tag.id for tag in tags],
@@ -3125,6 +3132,36 @@ def _metadata_search_text(value: object) -> str:
         elif isinstance(item, list):
             parts.extend(child for child in item if isinstance(child, str))
     return " ".join(parts).casefold()
+
+
+async def _resolve_source_or_filesystem_entry_ids(
+    session: Any,
+    *,
+    library_id: str,
+    source_or_entry_ids: Sequence[str],
+) -> list[str]:
+    normalized_ids = list(dict.fromkeys(item.strip() for item in source_or_entry_ids if item.strip()))
+    if not normalized_ids:
+        return []
+    rows = (
+        await session.execute(
+            select(SourceFile.id, FilesystemEntry.id)
+            .outerjoin(FilesystemEntry, FilesystemEntry.source_file_id == SourceFile.id)
+            .where(
+                SourceFile.library_id == library_id,
+                or_(
+                    SourceFile.id.in_(normalized_ids),
+                    FilesystemEntry.id.in_(normalized_ids),
+                ),
+            )
+        )
+    ).all()
+    source_id_by_input: dict[str, str] = {}
+    for source_id, filesystem_entry_id in rows:
+        source_id_by_input[str(source_id)] = str(source_id)
+        if filesystem_entry_id is not None:
+            source_id_by_input[str(filesystem_entry_id)] = str(source_id)
+    return list(dict.fromkeys(source_id_by_input[item] for item in normalized_ids if item in source_id_by_input))
 
 
 def _normalize_chunk_drafts(chunks: list[SemanticChunkDraft], *, fallback_text: str) -> list[SemanticChunkDraft]:

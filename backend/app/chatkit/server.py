@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
 import json
@@ -1059,24 +1060,90 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             """Answer a question against sources ingested by a research library build or explicit source IDs."""
             request_context = ctx.context.request_context
             selected_source_ids = list(dict.fromkeys(source_ids or []))
+            linked_source_total = 0
+            linked_source_pending = 0
+            linked_source_failed = 0
             if task_id:
-                selected_source_ids = list(
-                    dict.fromkeys(
-                        [
-                            *selected_source_ids,
-                            *await self._research.linked_source_ids_for_task(
-                                clerk_user_id=request_context.clerk_user_id,
-                                task_id=task_id,
-                            ),
-                        ]
+                poll_seconds = max(2.0, min(5.0, self._settings.openai_poll_interval_ms / 1000))
+                wait_deadline = perf_counter() + 90.0
+                last_reported_counts: tuple[int, int, int] | None = None
+                while True:
+                    linked_scope = await self._research.linked_source_scope_for_task(
+                        clerk_user_id=request_context.clerk_user_id,
+                        task_id=task_id,
                     )
-                )
-            if not selected_source_ids:
+                    linked_source_total = linked_scope.total_count
+                    linked_source_pending = linked_scope.pending_count
+                    linked_source_failed = linked_scope.failed_count
+                    selected_source_ids = list(dict.fromkeys([*selected_source_ids, *linked_scope.ready_source_ids]))
+                    counts = (linked_scope.ready_count, linked_source_pending, linked_source_failed)
+                    if linked_source_total > 0 and linked_source_pending > 0 and counts != last_reported_counts:
+                        await stream_chatkit_progress(
+                            ctx,
+                            "reload",
+                            (
+                                f"Waiting for research files to finish indexing "
+                                f"({linked_scope.ready_count}/{linked_source_total} ready)."
+                            ),
+                        )
+                        last_reported_counts = counts
+                    if linked_source_total == 0 or linked_source_pending == 0 or perf_counter() >= wait_deadline:
+                        break
+                    await asyncio.sleep(min(poll_seconds, max(0.0, wait_deadline - perf_counter())))
+                if linked_source_total > 0 and not selected_source_ids:
+                    answer = (
+                        "The research library files could not be indexed, so I cannot answer from them yet."
+                        if linked_source_failed == linked_source_total
+                        else "The research library files are still indexing, so I cannot answer from them yet."
+                    )
+                    return {
+                        "kind": "qa",
+                        "answer": answer,
+                        "hits": [],
+                        "source_status": {
+                            "total": linked_source_total,
+                            "ready": len(selected_source_ids),
+                            "pending": linked_source_pending,
+                            "failed": linked_source_failed,
+                        },
+                    }
+                if linked_source_total == 0 and not selected_source_ids:
+                    return {
+                        "kind": "qa",
+                        "answer": "That research task does not have any ingested files to search yet.",
+                        "hits": [],
+                        "source_status": {
+                            "total": 0,
+                            "ready": 0,
+                            "pending": 0,
+                            "failed": 0,
+                        },
+                    }
+                if linked_source_total > 0 and linked_source_pending > 0:
+                    await stream_chatkit_progress(
+                        ctx,
+                        "info",
+                        (
+                            f"Answering with {len(selected_source_ids)} ready research file"
+                            f"{'' if len(selected_source_ids) == 1 else 's'}; "
+                            f"{linked_source_pending} still indexing."
+                        ),
+                    )
+                elif linked_source_total > 0:
+                    await stream_chatkit_progress(
+                        ctx,
+                        "check-circle",
+                        (
+                            f"All {len(selected_source_ids)} searchable research file"
+                            f"{'' if len(selected_source_ids) == 1 else 's'} are ready."
+                        ),
+                    )
+            if not selected_source_ids and task_id is None:
                 selected_source_ids = selected_scope(request_context, None)
             await stream_chatkit_progress(
                 ctx,
                 "search",
-                f"Researching {len(selected_source_ids) or 'all'} indexed source{'' if len(selected_source_ids) == 1 else 's'}.",
+                f"Searching {len(selected_source_ids) or 'all'} ready file{'' if len(selected_source_ids) == 1 else 's'} for an answer.",
             )
             response = await self._actions.qa(
                 clerk_user_id=request_context.clerk_user_id,

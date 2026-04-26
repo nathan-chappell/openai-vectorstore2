@@ -66,6 +66,22 @@ class ResearchMaterial:
     provenance: dict[str, object]
 
 
+@dataclass(frozen=True, slots=True)
+class ResearchLinkedSourceScope:
+    ready_source_ids: list[str]
+    total_count: int
+    processing_count: int
+    failed_count: int
+
+    @property
+    def ready_count(self) -> int:
+        return len(self.ready_source_ids)
+
+    @property
+    def pending_count(self) -> int:
+        return max(0, self.total_count - self.ready_count - self.failed_count)
+
+
 class ResearchImportService:
     """Coordinate research discovery, dedupe, and canonical source ingestion."""
 
@@ -212,7 +228,7 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "search",
-                    f"Expanding references at depth {next_depth} from {len(frontier)} parent candidate{'' if len(frontier) == 1 else 's'} with {remaining_slots} slot{'' if remaining_slots == 1 else 's'} open.",
+                    f"Looking for another layer of references from {len(frontier)} promising source{'' if len(frontier) == 1 else 's'}.",
                 )
                 followup_inputs = await self._candidate_inputs_from_frontier(
                     parents=frontier,
@@ -230,7 +246,7 @@ class ResearchImportService:
                     await _emit_research_progress(
                         progress_callback,
                         "search",
-                        f"Depth {next_depth} produced no new reference candidates.",
+                        "No new references turned up in that layer.",
                     )
                     break
                 persisted, duplicates = await self._persist_candidate_batch(
@@ -242,7 +258,7 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "search",
-                    f"Depth {next_depth} added {len(persisted)} candidate{'' if len(persisted) == 1 else 's'}; skipped {duplicates} duplicate{'' if duplicates == 1 else 's'}.",
+                    f"Added {len(persisted)} new reference{'' if len(persisted) == 1 else 's'} from that layer; skipped {duplicates} duplicate{'' if duplicates == 1 else 's'}.",
                 )
                 logger.info(
                     "research_import_expansion_completed clerk_user_id=%s task_id=%s depth=%s parents=%s candidates=%s duplicates=%s",
@@ -473,26 +489,42 @@ class ResearchImportService:
             )
 
     async def linked_source_ids_for_task(self, *, clerk_user_id: str, task_id: str) -> list[str]:
+        scope = await self.linked_source_scope_for_task(clerk_user_id=clerk_user_id, task_id=task_id)
+        return scope.ready_source_ids
+
+    async def linked_source_scope_for_task(self, *, clerk_user_id: str, task_id: str) -> ResearchLinkedSourceScope:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            source_ids = list(
+            rows = list(
                 (
                     await session.execute(
-                        select(SourceFile.id)
+                        select(SourceFile.id, SourceFile.status)
                         .join(ResearchImportCandidate, ResearchImportCandidate.linked_source_file_id == SourceFile.id)
                         .join(UserLibrary, UserLibrary.id == ResearchImportCandidate.library_id)
                         .where(
                             UserLibrary.user_id == app_user.id,
                             ResearchImportCandidate.task_id == task_id,
                             ResearchImportCandidate.status.in_(["ingesting", "ingested"]),
-                            SourceFile.status == "ready",
                         )
                         .order_by(ResearchImportCandidate.created_at.asc())
                     )
-                ).scalars()
+                ).all()
             )
-        return list(dict.fromkeys(source_ids))
+        source_status_by_id: dict[str, str] = {}
+        for source_id, status in rows:
+            source_status_by_id.setdefault(str(source_id), str(status))
+        ready_source_ids = [
+            source_id for source_id, status in source_status_by_id.items() if status == "ready"
+        ]
+        failed_count = sum(1 for status in source_status_by_id.values() if status == "failed")
+        processing_count = sum(1 for status in source_status_by_id.values() if status not in {"ready", "failed"})
+        return ResearchLinkedSourceScope(
+            ready_source_ids=ready_source_ids,
+            total_count=len(source_status_by_id),
+            processing_count=processing_count,
+            failed_count=failed_count,
+        )
 
     async def update_candidate_status(
         self,
@@ -610,14 +642,14 @@ class ResearchImportService:
         await _emit_research_progress(
             progress_callback,
             "download",
-            f"Preparing to download {len(candidates)} candidate{'' if len(candidates) == 1 else 's'}.",
+            f"Preparing {len(candidates)} source{'' if len(candidates) == 1 else 's'} for the library.",
         )
         for index, candidate in enumerate(candidates, start=1):
             try:
                 await _emit_research_progress(
                     progress_callback,
                     "download",
-                    f"Downloading {index}/{len(candidates)}: {_progress_snippet(candidate.title)}.",
+                    f"Downloading source {index}/{len(candidates)}: {_progress_snippet(candidate.title)}.",
                 )
                 material = await self._material_from_candidate(candidate)
                 normalized_url = material.normalized_url or candidate.normalized_url
@@ -686,7 +718,7 @@ class ResearchImportService:
                 await _emit_research_progress(
                     progress_callback,
                     "document",
-                    f"Queued indexing {index}/{len(candidates)}: {_progress_snippet(material.filename)}.",
+                    f"Adding source {index}/{len(candidates)} to the library: {_progress_snippet(material.filename)}.",
                 )
                 async with self._database.session() as session:
                     current = await self._candidate_for_user(
@@ -755,14 +787,14 @@ class ResearchImportService:
             await _emit_research_progress(
                 progress_callback,
                 "search",
-                f"Seed text contained {len(candidates)} explicit URL candidate{'' if len(candidates) == 1 else 's'}.",
+                f"Found {len(candidates)} link{'' if len(candidates) == 1 else 's'} in the seed text.",
             )
         if request.discover_references and request.max_depth > 0 and request.max_candidates_per_source > 0:
             discovery_query = _discovery_query(seed_material=seed_material, request=request)
             await _emit_research_progress(
                 progress_callback,
                 "search",
-                f"Searching web for primary references: {_progress_snippet(discovery_query, max_length=110)}.",
+                f"Searching the web for strong starting references on {_progress_snippet(seed_material.title, max_length=90)}.",
             )
             discovery = await self._openai.discover_research_candidates(
                 query=discovery_query,
@@ -795,7 +827,7 @@ class ResearchImportService:
             await _emit_research_progress(
                 progress_callback,
                 "search",
-                f"Primary reference search returned {len(discovery.candidates)} candidate{'' if len(discovery.candidates) == 1 else 's'}.",
+                f"Found {len(discovery.candidates)} starting reference{'' if len(discovery.candidates) == 1 else 's'}.",
             )
         return candidates
 
@@ -819,15 +851,14 @@ class ResearchImportService:
             if len(candidates) >= remaining_slots:
                 break
             query = _followup_discovery_query(parent=parent, request=request, depth=depth)
-            slots_before_parent = remaining_slots - len(candidates)
             await _emit_research_progress(
                 progress_callback,
                 "search",
-                f"Depth {depth}: searching references from {_progress_snippet(parent.title, max_length=72)} ({parent_index}/{len(parents)}, {slots_before_parent} slot{'' if slots_before_parent == 1 else 's'} left).",
+                f"Checking related work from {_progress_snippet(parent.title, max_length=72)} ({parent_index}/{len(parents)}).",
             )
             discovery = await self._openai.discover_research_candidates(
                 query=query,
-                max_candidates=min(per_parent_limit, slots_before_parent),
+                max_candidates=min(per_parent_limit, remaining_slots - len(candidates)),
             )
             count_before_parent = len(candidates)
             for item in discovery.candidates:
@@ -861,11 +892,10 @@ class ResearchImportService:
                 if len(candidates) >= remaining_slots:
                     break
             added_count = len(candidates) - count_before_parent
-            slots_after_parent = remaining_slots - len(candidates)
             await _emit_research_progress(
                 progress_callback,
                 "search",
-                f"Depth {depth}: {_progress_snippet(parent.title, max_length=72)} returned {added_count} candidate{'' if added_count == 1 else 's'}; {slots_after_parent} slot{'' if slots_after_parent == 1 else 's'} left.",
+                f"Found {added_count} related reference{'' if added_count == 1 else 's'} from {_progress_snippet(parent.title, max_length=72)}.",
             )
         return candidates
 
