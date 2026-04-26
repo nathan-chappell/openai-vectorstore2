@@ -414,6 +414,24 @@ class ResearchImportService:
                 has_more=end < total_count,
             )
 
+    async def linked_source_ids_for_task(self, *, clerk_user_id: str, task_id: str) -> list[str]:
+        response = await self.list_candidates(
+            clerk_user_id=clerk_user_id,
+            task_id=task_id,
+            status="ingested",
+            page=1,
+            page_size=100,
+        )
+        source_ids: list[str] = []
+        seen: set[str] = set()
+        for candidate in response.candidates:
+            source_id = candidate.linked_source_file_id
+            if source_id is None or source_id in seen:
+                continue
+            seen.add(source_id)
+            source_ids.append(source_id)
+        return source_ids
+
     async def update_candidate_status(
         self,
         *,

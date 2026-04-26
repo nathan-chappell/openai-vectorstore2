@@ -871,6 +871,57 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return payload
 
+        @function_tool(name_override="answer_research_library")
+        async def answer_research_library_tool(
+            ctx: ChatKitToolContext,
+            question: str,
+            task_id: str | None = None,
+            source_ids: list[str] | None = None,
+            tag_ids: list[str] | None = None,
+            max_results: int = 8,
+        ) -> dict[str, object]:
+            """Answer a question against sources ingested by a research library build or explicit source IDs."""
+            request_context = ctx.context.request_context
+            selected_source_ids = list(dict.fromkeys(source_ids or []))
+            if task_id:
+                selected_source_ids = list(
+                    dict.fromkeys(
+                        [
+                            *selected_source_ids,
+                            *await self._research.linked_source_ids_for_task(
+                                clerk_user_id=request_context.clerk_user_id,
+                                task_id=task_id,
+                            ),
+                        ]
+                    )
+                )
+            if not selected_source_ids:
+                selected_source_ids = selected_scope(request_context, None)
+            await ctx.context.stream(
+                ProgressUpdateEvent(
+                    icon="search",
+                    text=f"Researching {len(selected_source_ids) or 'all'} indexed source{'' if len(selected_source_ids) == 1 else 's'}.",
+                )
+            )
+            response = await self._actions.qa(
+                clerk_user_id=request_context.clerk_user_id,
+                payload=QaRequest(
+                    prompt=question,
+                    selected_source_ids=selected_source_ids,
+                    tag_ids=tag_ids or [],
+                    max_results=max(1, min(max_results, 16)),
+                    origin_thread_id=ctx.context.thread.id,
+                ),
+                origin_surface="chatkit",
+            )
+            await ctx.context.stream(
+                ProgressUpdateEvent(
+                    icon="check-circle",
+                    text=f"Research answer ready with {len(response.hits)} cited match{'' if len(response.hits) == 1 else 'es'}.",
+                )
+            )
+            return response.model_dump(mode="json")
+
         @function_tool(name_override="resplit_source")
         async def resplit_source_tool(
             ctx: ChatKitToolContext,
@@ -1152,6 +1203,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             list_research_candidates_tool,
             update_research_candidate_status_tool,
             ingest_research_candidates_tool,
+            answer_research_library_tool,
             resplit_source_tool,
             update_source_tags_tool,
             delete_source_tool,
@@ -1175,7 +1227,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the indexed file-library assistant for an app-first OpenAI vector-store backed file explorer. "
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its optional split records, build foldered research libraries from topics or papers, start research imports, review/import discovered candidates, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "to replace its optional split records, build foldered research libraries from topics or papers, start research imports, review/import discovered candidates, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "The app's file explorer is the primary source of file input and selection; selected files are attached to your turn as OpenAI file inputs when ready. "
             "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
             "Research build, candidate review, and candidate ingest tools update the browser's research builder panel so the user can inspect candidate state. "

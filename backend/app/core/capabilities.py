@@ -24,6 +24,7 @@ AppOperation: TypeAlias = Literal[
     "list_research_candidates",
     "update_research_candidate_status",
     "ingest_research_candidates",
+    "answer_research_library",
     "ingest_source",
     "resplit_source",
     "update_source_tags",
@@ -186,6 +187,13 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("POST /api/research/candidates/ingest",),
         chatkit_tool="ingest_research_candidates",
         mcp_tools=("ingest_research_candidates",),
+    ),
+    AppCapability(
+        operation="answer_research_library",
+        summary="Answer a question using sources linked to a research library build task.",
+        chatkit_tool="answer_research_library",
+        mcp_tools=("answer_research_library",),
+        notes="Uses the canonical QA action after resolving ingested research candidates to source IDs.",
     ),
     AppCapability(
         operation="ingest_source",

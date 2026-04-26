@@ -1221,6 +1221,51 @@ async def test_mcp_file_ingest_tool_runs_against_app_core(
 
 
 @pytest.mark.asyncio
+async def test_mcp_answer_research_library_uses_scoped_sources(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    server = create_mcp_server(configured_settings, services)
+    try:
+        ingest = await server.call_tool(
+            "ingest_file_source",
+            {
+                "filename": "research-answer-note.txt",
+                "payload_base64": b64encode(b"Research answer source mentions Cobalt Maple evidence.").decode("ascii"),
+                "media_type": "text/plain",
+            },
+            run_middleware=False,
+        )
+        ingest_payload = ingest.structured_content
+        assert ingest_payload is not None
+        await _wait_for_service_task(
+            services,
+            task_id=ingest_payload["task"]["id"],
+            expected_status="completed",
+        )
+
+        answer = await server.call_tool(
+            "answer_research_library",
+            {
+                "question": "What evidence is available?",
+                "source_ids": [ingest_payload["source"]["id"]],
+            },
+            run_middleware=False,
+        )
+    finally:
+        await services.close()
+
+    payload = answer.structured_content
+    assert payload is not None
+    assert payload["kind"] == "qa"
+    assert "Fake grounded answer" in payload["answer"]
+    assert payload["hits"]
+    assert {hit["source_file_id"] for hit in payload["hits"]} == {ingest_payload["source"]["id"]}
+
+
+@pytest.mark.asyncio
 async def test_http_chatkit_attachment_upload_creates_source_task_and_metadata(
     configured_settings: AppSettings,
     fake_openai: None,

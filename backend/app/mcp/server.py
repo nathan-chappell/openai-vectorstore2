@@ -164,7 +164,7 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
             "The app owns ingestion, indexing, storage, retrieval, and generation. Use sources for a visual library UI; "
             "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
             "start_research_import, build_research_library, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
-            "search_chunks, branch_search, qa, freeform, generate_image, generate_voice, update_source_tags, "
+            "search_chunks, branch_search, qa, answer_research_library, freeform, generate_image, generate_voice, update_source_tags, "
             "list_tasks, and get_task to operate on the current user's library. "
             "Only delete a source after explicit user confirmation."
         ),
@@ -887,6 +887,46 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             tool_name="qa",
             clerk_user_id=clerk_user_id,
             arguments=payload.model_dump(mode="json"),
+            operation=services.actions.qa(clerk_user_id=clerk_user_id, payload=payload, origin_surface="mcp"),
+        )
+
+    @server.tool(
+        name="answer_research_library",
+        description="Answer a question using sources ingested by a research library build task or explicit source IDs.",
+        annotations=mutating,
+    )
+    async def answer_research_library_tool(
+        question: Annotated[str, Field(min_length=1)],
+        task_id: Annotated[str | None, Field(min_length=1)] = None,
+        source_ids: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        max_results: Annotated[int, Field(ge=1, le=16)] = 8,
+    ) -> ActionResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        selected_source_ids = list(dict.fromkeys(source_ids or []))
+        if task_id:
+            selected_source_ids = list(
+                dict.fromkeys(
+                    [
+                        *selected_source_ids,
+                        *await services.research.linked_source_ids_for_task(
+                            clerk_user_id=clerk_user_id,
+                            task_id=task_id,
+                        ),
+                    ]
+                )
+            )
+        payload = QaRequest(
+            prompt=question,
+            selected_source_ids=selected_source_ids,
+            tag_ids=tag_ids or [],
+            tag_match_mode="all",
+            max_results=max_results,
+        )
+        return await _run_logged_tool(
+            tool_name="answer_research_library",
+            clerk_user_id=clerk_user_id,
+            arguments={"question": question, "task_id": task_id, "source_ids": selected_source_ids, "tag_ids": tag_ids or []},
             operation=services.actions.qa(clerk_user_id=clerk_user_id, payload=payload, origin_surface="mcp"),
         )
 
