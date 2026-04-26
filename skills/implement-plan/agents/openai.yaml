@@ -1,0 +1,4 @@
+interface:
+  display_name: "Implement Plan"
+  short_description: "Iteratively implement plan.md with clean commits."
+  default_prompt: "Work through plan.md, update it as you go, and make clean commits at meaningful checkpoints."
