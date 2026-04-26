@@ -173,7 +173,7 @@ Tests and operations:
 
 ## Next Planned Feature: Research Library Builder
 
-Status: active implementation track.
+Status: implementation pass completed; live browser review-flow coverage remains.
 
 Intent:
 
@@ -216,7 +216,7 @@ Verification plan:
 - [x] UI shell assertion: the browser exposes the research builder input and disabled build action in the explorer surface.
 - [x] Integration test: build mode expands follow-up candidates to depth 2 and records `parent_candidate_id` links.
 - [x] Integration test: build mode auto-ingests approved/fake public candidates into the research folder through `SourceService.ingest_source`.
-- [ ] Contract tests: backend schemas, frontend TypeScript, REST, ChatKit tools, MCP tools, and capability matrix stay aligned.
+- [x] Contract tests: backend schemas, frontend TypeScript, REST, ChatKit tools, MCP tools, and capability matrix stay aligned.
 - [ ] UI/Playwright test: user starts a research library build from the browser, reviews candidates, and sees ingested files in the created folder.
 - [ ] Re-run `./.venv/bin/pyright`, focused backend tests, `npm run typecheck`, `npm run build`, and targeted Playwright checks for each checkpoint.
 
