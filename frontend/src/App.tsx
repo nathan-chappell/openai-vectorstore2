@@ -4,6 +4,7 @@ import type { CSSProperties, MouseEvent as ReactMouseEvent, PointerEvent as Reac
 
 import {
   authenticatedFetch,
+  buildResearchLibrary,
   createFolder,
   createTag,
   deleteSource,
@@ -21,7 +22,9 @@ import {
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
+  updateResearchCandidateStatus,
   updateSourceTags,
+  ingestResearchCandidates,
   uploadSource,
 } from "./lib/api";
 import type {
@@ -30,6 +33,9 @@ import type {
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
   FilesystemListResponse,
+  ResearchImportCandidateSummary,
+  ResearchLibraryBuildResponse,
+  ResearchSeedKind,
   SourceDetail,
   SourceSummary,
   SplitPreviewResponse,
@@ -62,6 +68,11 @@ const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
 const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
 const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source file intact.";
+type ResearchBuilderSeedKind = Extract<ResearchSeedKind, "topic" | "paper">;
+const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
+  { id: "topic", label: "Topic" },
+  { id: "paper", label: "Paper" },
+];
 
 const dateFormatter = new Intl.DateTimeFormat(undefined, {
   month: "short",
@@ -85,6 +96,18 @@ async function loadAllSources(): Promise<{ sources: SourceSummary[]; totalCount:
   }
 }
 
+function mergeResearchCandidates(
+  current: ResearchImportCandidateSummary[],
+  updates: ResearchImportCandidateSummary[],
+): ResearchImportCandidateSummary[] {
+  const updateById = new Map(updates.map((candidate) => [candidate.id, candidate]));
+  const currentIds = new Set(current.map((candidate) => candidate.id));
+  return [
+    ...current.map((candidate) => updateById.get(candidate.id) ?? candidate),
+    ...updates.filter((candidate) => !currentIds.has(candidate.id)),
+  ];
+}
+
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
@@ -104,6 +127,12 @@ export function App({ authMode }: AppProps) {
   const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
   const [pendingFiles, setPendingFiles] = useState<File[]>([]);
   const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
+  const [researchQuery, setResearchQuery] = useState("");
+  const [researchSeedType, setResearchSeedType] = useState<ResearchBuilderSeedKind>("topic");
+  const [researchMaxSources, setResearchMaxSources] = useState(12);
+  const [researchMaxDepth, setResearchMaxDepth] = useState(2);
+  const [researchAutoIngest, setResearchAutoIngest] = useState(false);
+  const [researchResult, setResearchResult] = useState<ResearchLibraryBuildResponse | null>(null);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
@@ -463,6 +492,115 @@ export function App({ authMode }: AppProps) {
     }
   }, [filesystem?.current.id, pendingFiles, refreshExplorer, uploadGuidance]);
 
+  const buildResearchLibraryFromPanel = useCallback(async (): Promise<void> => {
+    const query = researchQuery.trim();
+    if (!query) {
+      setStatus("Enter a topic or paper title first.");
+      return;
+    }
+    const maxSources = clamp(Math.round(researchMaxSources), 1, 50);
+    const maxDepth = clamp(Math.round(researchMaxDepth), 0, 4);
+    setBusy(true);
+    try {
+      const response = await buildResearchLibrary({
+        seed_type: researchSeedType,
+        query,
+        title: query,
+        auto_ingest: researchAutoIngest,
+        discover_references: true,
+        max_depth: maxDepth,
+        max_sources: maxSources,
+        max_candidates_per_source: Math.min(20, Math.max(4, maxSources)),
+        max_pending_candidates: Math.max(50, maxSources * Math.max(1, maxDepth + 1)),
+      });
+      setResearchResult(response);
+      setTasks((await listTasks()).tasks);
+      setSourceQuery("");
+      setSelectedExplorerTagIds([]);
+      setSelectedEntryIds([]);
+      setSelectedSourceIds([]);
+      setFocusedEntryId(null);
+      setSelectedSource(null);
+      if (response.target_folder_id) {
+        await loadFolder(response.target_folder_id);
+      } else {
+        await refreshExplorer();
+      }
+      const ingestedLabel = response.ingested.length
+        ? `, ${response.ingested.length} indexed`
+        : researchAutoIngest
+          ? ", no public items indexed"
+          : "";
+      setStatus(`Research library build found ${response.candidates.length} candidate${response.candidates.length === 1 ? "" : "s"}${ingestedLabel}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Research library build failed.");
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    loadFolder,
+    refreshExplorer,
+    researchAutoIngest,
+    researchMaxDepth,
+    researchMaxSources,
+    researchQuery,
+    researchSeedType,
+  ]);
+
+  const updateResearchCandidateReview = useCallback(
+    async (candidateId: string, nextStatus: "approved" | "rejected" | "pending"): Promise<void> => {
+      setBusy(true);
+      try {
+        const response = await updateResearchCandidateStatus({
+          candidate_ids: [candidateId],
+          status: nextStatus,
+        });
+        setResearchResult((current) =>
+          current ? { ...current, candidates: mergeResearchCandidates(current.candidates, response.candidates) } : current,
+        );
+        setStatus(`Marked research candidate ${nextStatus}.`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Could not update research candidate.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [],
+  );
+
+  const ingestApprovedResearchCandidates = useCallback(async (): Promise<void> => {
+    const approvedIds = researchResult?.candidates
+      .filter((candidate) => candidate.status === "approved")
+      .map((candidate) => candidate.id) ?? [];
+    if (!approvedIds.length) {
+      setStatus("Approve at least one research candidate before ingesting.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const response = await ingestResearchCandidates({
+        candidate_ids: approvedIds,
+        folder_id: researchResult?.target_folder_id ?? null,
+      });
+      setResearchResult((current) =>
+        current
+          ? {
+              ...current,
+              candidates: mergeResearchCandidates(current.candidates, response.candidates),
+              ingested: [...current.ingested, ...response.ingested],
+            }
+          : current,
+      );
+      setTasks((await listTasks()).tasks);
+      await refreshExplorer();
+      setStatus(`Ingested ${response.ingested.length} approved research candidate${response.ingested.length === 1 ? "" : "s"}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Could not ingest approved research candidates.");
+    } finally {
+      setBusy(false);
+    }
+  }, [refreshExplorer, researchResult]);
+
   const toggleExplorerTag = useCallback((tagId: string): void => {
     setSelectedExplorerTagIds((current) =>
       current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
@@ -648,6 +786,12 @@ export function App({ authMode }: AppProps) {
           focusedEntryId={focusedEntryId}
           newTagName={newTagName}
           pendingFiles={pendingFiles}
+          researchAutoIngest={researchAutoIngest}
+          researchMaxDepth={researchMaxDepth}
+          researchMaxSources={researchMaxSources}
+          researchQuery={researchQuery}
+          researchResult={researchResult}
+          researchSeedType={researchSeedType}
           searching={searching}
           selectedEntryIdSet={selectedEntryIdSet}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
@@ -671,6 +815,14 @@ export function App({ authMode }: AppProps) {
           onNewTagNameChange={setNewTagName}
           onOpenEntry={openEntry}
           onPreviewSplit={() => void previewPendingSplit()}
+          onResearchAutoIngestChange={setResearchAutoIngest}
+          onResearchBuild={() => void buildResearchLibraryFromPanel()}
+          onResearchCandidateStatus={(candidateId, nextStatus) => void updateResearchCandidateReview(candidateId, nextStatus)}
+          onResearchIngestApproved={() => void ingestApprovedResearchCandidates()}
+          onResearchMaxDepthChange={setResearchMaxDepth}
+          onResearchMaxSourcesChange={setResearchMaxSources}
+          onResearchQueryChange={setResearchQuery}
+          onResearchSeedTypeChange={setResearchSeedType}
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
           onSaveTags={() => void saveSelectedSourceTags()}
@@ -1118,6 +1270,12 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId,
   newTagName,
   pendingFiles,
+  researchAutoIngest,
+  researchMaxDepth,
+  researchMaxSources,
+  researchQuery,
+  researchResult,
+  researchSeedType,
   searching,
   selectedEntryIdSet,
   selectedExplorerTagIdSet,
@@ -1141,6 +1299,14 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange,
   onOpenEntry,
   onPreviewSplit,
+  onResearchAutoIngestChange,
+  onResearchBuild,
+  onResearchCandidateStatus,
+  onResearchIngestApproved,
+  onResearchMaxDepthChange,
+  onResearchMaxSourcesChange,
+  onResearchQueryChange,
+  onResearchSeedTypeChange,
   onRenameSelected,
   onResplit,
   onSaveTags,
@@ -1157,6 +1323,12 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId: string | null;
   newTagName: string;
   pendingFiles: File[];
+  researchAutoIngest: boolean;
+  researchMaxDepth: number;
+  researchMaxSources: number;
+  researchQuery: string;
+  researchResult: ResearchLibraryBuildResponse | null;
+  researchSeedType: ResearchBuilderSeedKind;
   searching: boolean;
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagIdSet: Set<string>;
@@ -1180,6 +1352,14 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange: (value: string) => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
   onPreviewSplit: () => void;
+  onResearchAutoIngestChange: (value: boolean) => void;
+  onResearchBuild: () => void;
+  onResearchCandidateStatus: (candidateId: string, nextStatus: "approved" | "rejected" | "pending") => void;
+  onResearchIngestApproved: () => void;
+  onResearchMaxDepthChange: (value: number) => void;
+  onResearchMaxSourcesChange: (value: number) => void;
+  onResearchQueryChange: (value: string) => void;
+  onResearchSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
   onRenameSelected: () => void;
   onResplit: () => void;
   onSaveTags: () => void;
@@ -1333,6 +1513,24 @@ const FileExplorer = memo(function FileExplorer({
               </div>
             ) : null}
           </section>
+
+          <ResearchBuilderPanel
+            autoIngest={researchAutoIngest}
+            busy={busy}
+            maxDepth={researchMaxDepth}
+            maxSources={researchMaxSources}
+            query={researchQuery}
+            result={researchResult}
+            seedType={researchSeedType}
+            onAutoIngestChange={onResearchAutoIngestChange}
+            onBuild={onResearchBuild}
+            onCandidateStatus={onResearchCandidateStatus}
+            onIngestApproved={onResearchIngestApproved}
+            onMaxDepthChange={onResearchMaxDepthChange}
+            onMaxSourcesChange={onResearchMaxSourcesChange}
+            onQueryChange={onResearchQueryChange}
+            onSeedTypeChange={onResearchSeedTypeChange}
+          />
         </section>
 
         {selectedSource ? (
@@ -1353,6 +1551,178 @@ const FileExplorer = memo(function FileExplorer({
         ) : null}
       </div>
     </aside>
+  );
+});
+
+const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
+  autoIngest,
+  busy,
+  maxDepth,
+  maxSources,
+  query,
+  result,
+  seedType,
+  onAutoIngestChange,
+  onBuild,
+  onCandidateStatus,
+  onIngestApproved,
+  onMaxDepthChange,
+  onMaxSourcesChange,
+  onQueryChange,
+  onSeedTypeChange,
+}: {
+  autoIngest: boolean;
+  busy: boolean;
+  maxDepth: number;
+  maxSources: number;
+  query: string;
+  result: ResearchLibraryBuildResponse | null;
+  seedType: ResearchBuilderSeedKind;
+  onAutoIngestChange: (value: boolean) => void;
+  onBuild: () => void;
+  onCandidateStatus: (candidateId: string, nextStatus: "approved" | "rejected" | "pending") => void;
+  onIngestApproved: () => void;
+  onMaxDepthChange: (value: number) => void;
+  onMaxSourcesChange: (value: number) => void;
+  onQueryChange: (value: string) => void;
+  onSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
+}) {
+  const candidates = result?.candidates ?? [];
+  const approvedCount = candidates.filter((candidate) => candidate.status === "approved").length;
+  const pendingCount = candidates.filter((candidate) => candidate.status === "pending").length;
+  const ingestedCount = Math.max(
+    candidates.filter((candidate) => candidate.status === "ingested").length,
+    result?.ingested.length ?? 0,
+  );
+  const visibleCandidates = candidates.slice(0, 6);
+  const hiddenCandidateCount = Math.max(0, candidates.length - visibleCandidates.length);
+  return (
+    <section className="research-builder-strip" aria-label="Research library builder">
+      <div className="research-builder-controls">
+        <label className="research-query-field">
+          <span>Research</span>
+          <input
+            value={query}
+            onChange={(event) => onQueryChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && query.trim()) {
+                event.preventDefault();
+                onBuild();
+              }
+            }}
+            placeholder="Topic or paper title"
+          />
+        </label>
+        <label>
+          <span>Seed</span>
+          <select
+            value={seedType}
+            onChange={(event) => onSeedTypeChange(event.currentTarget.value as ResearchBuilderSeedKind)}
+          >
+            {RESEARCH_SEED_CHOICES.map((choice) => (
+              <option key={choice.id} value={choice.id}>
+                {choice.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          <span>Max</span>
+          <input
+            type="number"
+            min={1}
+            max={50}
+            value={maxSources}
+            onChange={(event) => {
+              const nextValue = Number(event.currentTarget.value);
+              onMaxSourcesChange(Number.isFinite(nextValue) ? clamp(nextValue, 1, 50) : 1);
+            }}
+          />
+        </label>
+        <label>
+          <span>Depth</span>
+          <input
+            type="number"
+            min={0}
+            max={4}
+            value={maxDepth}
+            onChange={(event) => {
+              const nextValue = Number(event.currentTarget.value);
+              onMaxDepthChange(Number.isFinite(nextValue) ? clamp(nextValue, 0, 4) : 0);
+            }}
+          />
+        </label>
+        <label className="research-toggle">
+          <input
+            type="checkbox"
+            checked={autoIngest}
+            onChange={(event) => onAutoIngestChange(event.currentTarget.checked)}
+          />
+          <span>Auto ingest</span>
+        </label>
+        <button type="button" onClick={onBuild} disabled={busy || !query.trim()}>
+          Build
+        </button>
+      </div>
+
+      {result ? (
+        <div className="research-builder-results">
+          <div className="research-result-summary">
+            <strong>
+              {candidates.length} candidate{candidates.length === 1 ? "" : "s"}
+            </strong>
+            <span>
+              {result.task.status} | {pendingCount} pending | {approvedCount} approved | {ingestedCount} ingested | {result.duplicate_count} duplicate
+              {result.duplicate_count === 1 ? "" : "s"}
+            </span>
+            <button type="button" className="secondary-button" onClick={onIngestApproved} disabled={busy || approvedCount === 0}>
+              Ingest approved
+            </button>
+          </div>
+          <div className="research-candidate-list" aria-label="Research candidates">
+            {visibleCandidates.map((candidate) => {
+              const locked = ["ingested", "ingesting", "failed"].includes(candidate.status);
+              const metaParts = [
+                candidate.source_type.toUpperCase(),
+                candidate.published_at?.slice(0, 10),
+                candidate.authors.slice(0, 2).join(", "),
+              ].filter(Boolean);
+              return (
+                <article key={candidate.id} className="research-candidate-row">
+                  <div>
+                    <strong>{candidate.title}</strong>
+                    <span>{metaParts.join(" | ") || candidate.normalized_url || candidate.url || "Candidate"}</span>
+                    {candidate.summary || candidate.description ? <p>{candidate.summary ?? candidate.description}</p> : null}
+                    {candidate.suggested_tags.length ? <small>{candidate.suggested_tags.slice(0, 4).join(", ")}</small> : null}
+                  </div>
+                  <div className="research-candidate-actions">
+                    <span className={`status-badge status-${candidate.status}`}>{candidate.status}</span>
+                    <button
+                      type="button"
+                      className="secondary-button"
+                      onClick={() => onCandidateStatus(candidate.id, "approved")}
+                      disabled={busy || locked || candidate.status === "approved"}
+                    >
+                      Approve
+                    </button>
+                    <button
+                      type="button"
+                      className="secondary-button danger-button"
+                      onClick={() => onCandidateStatus(candidate.id, "rejected")}
+                      disabled={busy || locked || candidate.status === "rejected"}
+                    >
+                      Reject
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
+            {hiddenCandidateCount ? <p className="research-candidate-more">+{hiddenCandidateCount} more candidates</p> : null}
+            {!candidates.length ? <p className="research-candidate-more">No candidates returned.</p> : null}
+          </div>
+        </div>
+      ) : null}
+    </section>
   );
 });
 

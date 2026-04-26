@@ -50,6 +50,9 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.getByText("0 indexed files selected")).toBeVisible();
   await expect(page.getByRole("button", { name: "New Folder" })).toBeEnabled();
   await expect(page.getByText("Add files")).toBeVisible();
+  await expect(page.locator(".research-builder-strip")).toBeVisible();
+  await expect(page.getByPlaceholder("Topic or paper title")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Build" })).toBeDisabled();
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
   if (testInfo.project.name === "chromium-desktop") {
     await dragWorkspaceSplitter(page, 52);
