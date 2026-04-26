@@ -3,6 +3,7 @@ import { resolve } from "node:path";
 
 const BACKEND_URL = "http://127.0.0.1:8000";
 const AUTH_HEADERS = { Authorization: "Bearer local-dev" };
+const FIXTURE_NOW = "2026-04-26T19:55:00.000Z";
 
 type TaskSummary = {
   id: string;
@@ -30,6 +31,112 @@ type SourceDetail = {
 type SourceListResponse = {
   sources: SourceDetail[];
 };
+
+type FixtureRecord = Record<string, unknown>;
+
+function filesystemEntry(overrides: FixtureRecord = {}): FixtureRecord {
+  return {
+    id: "entry",
+    kind: "folder",
+    name: "Files",
+    path: "/",
+    parent_id: null,
+    source_id: null,
+    source_kind: null,
+    media_type: null,
+    status: null,
+    byte_size: null,
+    chunk_count: null,
+    description: null,
+    summary: null,
+    suggested_tags: [],
+    tags: [],
+    openai_original_file_id: null,
+    openai_vector_file_id: null,
+    created_at: FIXTURE_NOW,
+    updated_at: FIXTURE_NOW,
+    ...overrides,
+  };
+}
+
+function sourceSummary(overrides: FixtureRecord = {}): FixtureRecord {
+  return {
+    id: "source",
+    filesystem_entry_id: null,
+    virtual_name: null,
+    virtual_path: null,
+    display_title: "Source",
+    original_filename: "source.txt",
+    media_type: "text/plain",
+    source_kind: "text",
+    status: "ready",
+    byte_size: 1024,
+    chunk_count: 0,
+    description: null,
+    summary: null,
+    suggested_tags: [],
+    error_message: null,
+    created_at: FIXTURE_NOW,
+    updated_at: FIXTURE_NOW,
+    tags: [],
+    openai_original_file_id: "file_original_fixture",
+    openai_original_file_purpose: "user_data",
+    openai_vector_file_id: "vs_file_fixture",
+    vector_attributes: null,
+    ...overrides,
+  };
+}
+
+function taskSummary(overrides: FixtureRecord = {}): FixtureRecord {
+  return {
+    id: "task",
+    kind: "research_import",
+    status: "completed",
+    title: "Task",
+    origin_surface: "web",
+    origin_thread_id: null,
+    source_file_id: null,
+    input_json: {},
+    result_json: {},
+    error_message: null,
+    started_at: FIXTURE_NOW,
+    completed_at: FIXTURE_NOW,
+    created_at: FIXTURE_NOW,
+    updated_at: FIXTURE_NOW,
+    ...overrides,
+  };
+}
+
+function researchCandidate(overrides: FixtureRecord = {}): FixtureRecord {
+  return {
+    id: "candidate",
+    task_id: "task",
+    status: "pending",
+    source_type: "url",
+    url: "https://example.com/reference.txt",
+    normalized_url: "https://example.com/reference.txt",
+    title: "Reference",
+    description: "Candidate description.",
+    summary: "Candidate summary.",
+    suggested_tags: ["research"],
+    authors: ["Ada Lovelace"],
+    published_at: "2024",
+    doi: null,
+    arxiv_id: null,
+    rationale: "Relevant public source.",
+    score: 0.86,
+    depth: 1,
+    parent_candidate_id: null,
+    parent_source_file_id: null,
+    linked_source_file_id: null,
+    provenance: {},
+    content_hash: null,
+    error_message: null,
+    created_at: FIXTURE_NOW,
+    updated_at: FIXTURE_NOW,
+    ...overrides,
+  };
+}
 
 test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => {
   await page.addInitScript(() => {
@@ -65,6 +172,161 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   }
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
+});
+
+test("research library builder reviews and ingests a candidate", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop", "Dense review flow is covered on desktop.");
+
+  let ingested = false;
+  const rootEntry = filesystemEntry({
+    id: "root",
+    kind: "folder",
+    name: "Files",
+    path: "/",
+  });
+  const researchParent = filesystemEntry({
+    id: "folder-research",
+    kind: "folder",
+    name: "Research",
+    path: "/Research",
+    parent_id: "root",
+  });
+  const targetFolder = filesystemEntry({
+    id: "folder-attention",
+    kind: "folder",
+    name: "Attention Is All You Need",
+    path: "/Research/Attention Is All You Need",
+    parent_id: "folder-research",
+  });
+  const ingestedFile = filesystemEntry({
+    id: "entry-transformer-pdf",
+    kind: "file",
+    name: "attention-reference.txt",
+    path: "/Research/Attention Is All You Need/attention-reference.txt",
+    parent_id: "folder-attention",
+    source_id: "source-transformer-reference",
+    source_kind: "text",
+    media_type: "text/plain",
+    status: "ready",
+    byte_size: 4096,
+    summary: "A public reference about transformer attention.",
+    suggested_tags: ["attention", "transformers"],
+  });
+  const task = taskSummary({
+    id: "task-research-build",
+    kind: "research_import",
+    status: "completed",
+    title: "Research import: Attention Is All You Need",
+    result_json: { candidate_count: 1, target_folder_id: targetFolder.id },
+  });
+  const pendingCandidate = researchCandidate({
+    id: "candidate-attention-reference",
+    task_id: task.id,
+    status: "pending",
+    title: "Attention reference",
+    summary: "A candidate public reference for the Transformer paper.",
+  });
+  const approvedCandidate = { ...pendingCandidate, status: "approved" };
+  const ingestedCandidate = {
+    ...approvedCandidate,
+    status: "ingested",
+    linked_source_file_id: "source-transformer-reference",
+  };
+  const source = sourceSummary({
+    id: "source-transformer-reference",
+    filesystem_entry_id: ingestedFile.id,
+    virtual_name: ingestedFile.name,
+    virtual_path: ingestedFile.path,
+    display_title: "Attention reference",
+    original_filename: "attention-reference.txt",
+  });
+  const ingestTask = taskSummary({
+    id: "task-ingest-reference",
+    kind: "ingest",
+    status: "completed",
+    title: "Ingest: attention-reference.txt",
+    source_file_id: source.id,
+  });
+
+  await page.route("**/api/filesystem**", async (route) => {
+    const url = new URL(route.request().url());
+    const folderId = url.searchParams.get("folder_id");
+    if (folderId === targetFolder.id) {
+      await route.fulfill({
+        json: {
+          current: targetFolder,
+          breadcrumbs: [
+            { id: rootEntry.id, name: "Files", path: "/" },
+            { id: researchParent.id, name: "Research", path: "/Research" },
+            { id: targetFolder.id, name: targetFolder.name, path: targetFolder.path },
+          ],
+          entries: ingested ? [ingestedFile] : [],
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        current: rootEntry,
+        breadcrumbs: [{ id: rootEntry.id, name: "Files", path: "/" }],
+        entries: [researchParent],
+      },
+    });
+  });
+  await page.route("**/api/research/library-builds", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    const payload = route.request().postDataJSON() as { query: string; seed_type: string; auto_ingest: boolean };
+    expect(payload.query).toBe("Attention Is All You Need");
+    expect(payload.seed_type).toBe("paper");
+    expect(payload.auto_ingest).toBe(false);
+    await route.fulfill({
+      json: {
+        task,
+        target_folder_id: targetFolder.id,
+        seed_source: null,
+        candidates: [pendingCandidate],
+        ingested: [],
+        duplicate_count: 0,
+      },
+    });
+  });
+  await page.route("**/api/research/candidates/status", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    await route.fulfill({ json: { candidates: [approvedCandidate] } });
+  });
+  await page.route("**/api/research/candidates/ingest", async (route) => {
+    expect(route.request().method()).toBe("POST");
+    ingested = true;
+    await route.fulfill({
+      json: {
+        ingested: [{ source, task: ingestTask }],
+        candidates: [ingestedCandidate],
+      },
+    });
+  });
+  await page.route("**/api/tasks**", async (route) => {
+    await route.fulfill({ json: { tasks: ingested ? [ingestTask, task] : [task] } });
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("Local dev auth")).toBeVisible();
+  await page.getByPlaceholder("Topic or paper title").fill("Attention Is All You Need");
+  await page.locator(".research-builder-controls select").selectOption("paper");
+  await page.locator(".research-builder-controls input[type='number']").first().fill("1");
+  await page.locator(".research-builder-controls input[type='number']").nth(1).fill("1");
+  await page.locator(".research-builder-strip").getByRole("button", { name: "Build" }).click();
+
+  await expect(page.locator(".breadcrumb-row")).toContainText("Attention Is All You Need");
+  await expect(page.locator(".research-candidate-list")).toContainText("Attention reference");
+  await expect(page.locator(".research-candidate-list")).toContainText("pending");
+
+  await page.locator(".research-candidate-row").getByRole("button", { name: "Approve" }).click();
+  await expect(page.locator(".research-result-summary")).toContainText("1 approved");
+  await page.getByRole("button", { name: "Ingest approved" }).click();
+
+  await expect(page.locator(".research-result-summary")).toContainText("1 ingested");
+  await expect(page.locator(".file-rows")).toContainText("attention-reference.txt");
+  await page.screenshot({ path: testInfo.outputPath("research-builder-review-flow.png"), fullPage: true });
 });
 
 test("explorer-selected file answers through chatkit and deletes cleanly", async ({ page, request }, testInfo) => {
