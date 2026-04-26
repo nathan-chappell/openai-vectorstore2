@@ -14,6 +14,7 @@ from openai.types.shared_params.comparison_filter import ComparisonFilter
 from openai.types.shared_params.compound_filter import CompoundFilter
 
 from backend.app.core.config import AppSettings
+from backend.app.core.openai_observability import openai_platform_log_url
 from backend.app.schemas import ChunkHit, ResearchDiscoveryResult, SemanticSplitResult
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,44 @@ class OpenAIGateway:
 
     async def close(self) -> None:
         await self._client.close()
+
+    async def _create_response(self, *, operation: str, **kwargs: Any) -> Any:
+        started_at = perf_counter()
+        try:
+            response = await cast(Any, self._client.responses.create)(**kwargs)
+        except Exception:
+            logger.error(
+                "openai_response_failed operation=%s model=%s duration_ms=%.1f",
+                operation,
+                kwargs.get("model"),
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
+        log_openai_response(
+            operation=operation,
+            response=response,
+            duration_ms=(perf_counter() - started_at) * 1000,
+        )
+        return response
+
+    async def _parse_response(self, *, operation: str, **kwargs: Any) -> Any:
+        started_at = perf_counter()
+        try:
+            response = await cast(Any, self._client.responses.parse)(**kwargs)
+        except Exception:
+            logger.error(
+                "openai_response_failed operation=%s model=%s duration_ms=%.1f",
+                operation,
+                kwargs.get("model"),
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
+        log_openai_response(
+            operation=operation,
+            response=response,
+            duration_ms=(perf_counter() - started_at) * 1000,
+        )
+        return response
 
     async def create_vector_store(self, *, name: str, metadata: dict[str, str]) -> str:
         started_at = perf_counter()
@@ -128,7 +167,8 @@ class OpenAIGateway:
         text: str,
         user_guidance: str | None,
     ) -> SemanticSplitResult:
-        response = await self._client.responses.parse(
+        response = await self._parse_response(
+            operation="split_semantically",
             model=self._settings.openai_agent_model,
             text_format=SemanticSplitResult,
             input=[
@@ -163,7 +203,8 @@ class OpenAIGateway:
         query: str,
         max_candidates: int,
     ) -> ResearchDiscoveryResult:
-        response = await self._client.responses.parse(
+        response = await self._parse_response(
+            operation="discover_research_candidates",
             model=self._settings.openai_fast_model,
             text_format=ResearchDiscoveryResult,
             tools=[cast(Any, {"type": "web_search_preview", "search_context_size": "medium"})],
@@ -317,7 +358,8 @@ class OpenAIGateway:
         evidence = _render_hit_evidence(hits)
         if not evidence:
             return "I could not find relevant indexed file matches in the current library."
-        response = await self._client.responses.create(
+        response = await self._create_response(
+            operation="answer_with_chunks",
             model=self._settings.openai_agent_model,
             input=[
                 {
@@ -353,7 +395,8 @@ class OpenAIGateway:
             if mode == "grounded"
             else "Use the chunks as inspiration, but clearly separate grounded details from creative extrapolation."
         )
-        response = await self._client.responses.create(
+        response = await self._create_response(
+            operation="freeform_with_chunks",
             model=self._settings.openai_agent_model,
             input=[
                 {
@@ -430,3 +473,40 @@ def _render_hit_evidence(hits: list[ChunkHit]) -> str:
         f"Text:\n{hit.text}"
         for index, hit in enumerate(hits, start=1)
     ).strip()
+
+
+def log_openai_response(*, operation: str, response: object, duration_ms: float) -> None:
+    response_id = _string_attr(response, "id")
+    conversation_id = _conversation_id_from_response(response)
+    usage = getattr(response, "usage", None)
+    logger.info(
+        "openai_response_completed operation=%s response_id=%s openai_log_url=%s conversation_id=%s "
+        "conversation_log_url=%s model=%s status=%s request_id=%s total_tokens=%s duration_ms=%.1f",
+        operation,
+        response_id,
+        openai_platform_log_url(response_id),
+        conversation_id,
+        openai_platform_log_url(conversation_id),
+        _string_attr(response, "model"),
+        _string_attr(response, "status"),
+        _string_attr(response, "_request_id") or _string_attr(response, "request_id"),
+        getattr(usage, "total_tokens", None),
+        duration_ms,
+    )
+
+
+def _conversation_id_from_response(response: object) -> str | None:
+    direct_id = _string_attr(response, "conversation_id")
+    if direct_id is not None:
+        return direct_id
+    conversation = getattr(response, "conversation", None)
+    if isinstance(conversation, str):
+        return conversation
+    return _string_attr(conversation, "id")
+
+
+def _string_attr(value: object, attr_name: str) -> str | None:
+    raw_value = getattr(value, attr_name, None)
+    if isinstance(raw_value, str) and raw_value.strip():
+        return raw_value
+    return None

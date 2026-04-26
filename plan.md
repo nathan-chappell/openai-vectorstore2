@@ -23,7 +23,35 @@ The capabilities to preserve and expose are OpenAI vector-store backed indexing/
 - [x] Apply the first browser/design fixes: hide empty preview, widen preview-on-selection, and add a persisted draggable explorer/chat splitter.
 - [x] Add importer parser/normalizer coverage and refreshed Playwright shell assertions for hidden preview and splitter behavior.
 - [x] Convert ingestion/search from semantic chunk publication to source-file vector-store indexing.
+- [x] Improve backend OpenAI observability so Responses/ChatKit turns log clickable platform log URLs and local artifact debugging has a Codex skill.
 - [ ] Continue tightening explorer UX, ChatKit coordination, and Playwright coverage around real file-browser workflows.
+
+## Current Direction Change: OpenAI Observability And Debugging
+
+Status: implementation pass completed.
+
+Decision:
+
+- Backend OpenAI calls should log response IDs and clickable platform URLs in the local file log so failures can be traced directly to `https://platform.openai.com/logs/...`.
+- ChatKit agent turns should report every observed raw OpenAI response ID, not only the final app thread item, because tool-using turns may produce multiple Responses API calls.
+- Local troubleshooting should be repeatable: a Codex skill should discover `resp_`/`conv_` IDs from logs or user-provided URLs, fetch the matching API artifacts, inspect nearby app logs/code, and attempt a fix when the failure points to local behavior.
+- Logs should continue to avoid prompts, secrets, and bulky response bodies. Raw OpenAI artifacts belong under ignored `.local/openai-debug/`.
+
+Implementation tasks:
+
+- [x] Add shared platform log URL helpers for OpenAI response and conversation IDs.
+- [x] Wrap direct Responses API gateway calls so semantic split, research discovery, grounded answers, and freeform generation log response IDs, request IDs, model/status, token totals, and duration.
+- [x] Expand ChatKit turn logging to include every raw response ID with clickable platform URLs plus partial IDs on failures.
+- [x] Add an `openai-log-debugger` Codex skill with a script that fetches Responses and Conversations artifacts from logged IDs or platform URLs.
+- [x] Run focused backend verification, update this checkpoint with results, then commit and push.
+
+Verification completed in this pass:
+
+- `./.venv/bin/ruff check backend tests skills/openai-log-debugger/scripts/fetch_openai_artifact.py`
+- `./.venv/bin/pytest tests/test_logging.py -q`
+- `./.venv/bin/pyright`
+- `python skills/openai-log-debugger/scripts/fetch_openai_artifact.py --help`
+- `./.venv/bin/pytest -q`
 
 ## Current Direction Change: Direct Research Library Builds
 

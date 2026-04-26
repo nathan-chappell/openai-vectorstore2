@@ -25,8 +25,10 @@ def configure_logging(
     file_max_bytes: int = 5_000_000,
     file_backup_count: int = 3,
 ) -> None:
+    logging.disable(logging.NOTSET)
     level = getattr(logging, level_name.upper(), logging.INFO)
     root = logging.getLogger()
+    root.disabled = False
     for existing_handler in root.handlers[:]:
         root.removeHandler(existing_handler)
         existing_handler.close()
@@ -63,6 +65,14 @@ def configure_logging(
 
     for logger_name in ["httpx", "openai", "sqlalchemy.engine"]:
         logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
+
+    for logger_name, logger_value in list(root.manager.loggerDict.items()):
+        if not isinstance(logger_value, logging.Logger):
+            continue
+        if logger_name == "backend" or logger_name.startswith("backend.") or logger_name.startswith("chatkit."):
+            logger_value.disabled = False
+            logger_value.propagate = True
+            logger_value.setLevel(logging.NOTSET)
 
     logging.getLogger(__name__).info(
         "logging_configured level=%s file_path=%s",

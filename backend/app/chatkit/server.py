@@ -28,6 +28,7 @@ from pydantic import TypeAdapter
 
 from backend.app.chatkit.store import VectorstoreChatContext, VectorstoreChatStore, thread_metadata_with_scope
 from backend.app.core.config import AppSettings
+from backend.app.core.openai_observability import openai_platform_log_url, openai_platform_log_urls
 from backend.app.schemas import (
     BranchSearchRequest,
     FreeformRequest,
@@ -209,14 +210,51 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             context=agent_context,
             max_turns=MAX_AGENT_TURNS,
         )
-        async for event in stream_agent_response(agent_context, result):
-            yield event
+        try:
+            async for event in stream_agent_response(agent_context, result):
+                yield event
+        except Exception:
+            partial_response_ids = [response.response_id for response in result.raw_responses if response.response_id]
+            logger.error(
+                "chat_turn_failed thread_id=%s model=%s response_id=%s response_ids=%s openai_log_url=%s "
+                "openai_log_urls=%s duration_ms=%.1f",
+                thread.id,
+                requested_model,
+                result.last_response_id,
+                ",".join(partial_response_ids) or None,
+                openai_platform_log_url(result.last_response_id),
+                ",".join(openai_platform_log_urls(partial_response_ids)) or None,
+                (perf_counter() - started_at) * 1000,
+            )
+            raise
 
+        response_ids = [response.response_id for response in result.raw_responses if response.response_id]
+        for response_index, raw_response in enumerate(result.raw_responses, start=1):
+            if raw_response.response_id is None:
+                continue
+            logger.info(
+                "chat_openai_response_observed thread_id=%s model=%s response_index=%s response_id=%s "
+                "openai_log_url=%s request_id=%s",
+                thread.id,
+                requested_model,
+                response_index,
+                raw_response.response_id,
+                openai_platform_log_url(raw_response.response_id),
+                raw_response.request_id,
+            )
+
+        conversation_id = cast(str | None, getattr(result, "_conversation_id", None))
         logger.info(
-            "chat_turn_completed thread_id=%s model=%s response_id=%s duration_ms=%.1f",
+            "chat_turn_completed thread_id=%s model=%s response_id=%s response_ids=%s openai_log_url=%s "
+            "openai_log_urls=%s conversation_id=%s conversation_log_url=%s duration_ms=%.1f",
             thread.id,
             requested_model,
             result.last_response_id,
+            ",".join(response_ids) or None,
+            openai_platform_log_url(result.last_response_id),
+            ",".join(openai_platform_log_urls(response_ids)) or None,
+            conversation_id,
+            openai_platform_log_url(conversation_id),
             (perf_counter() - started_at) * 1000,
         )
 
