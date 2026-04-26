@@ -255,6 +255,73 @@ async def test_http_ingest_search_and_qa_contracts(
 
 
 @pytest.mark.asyncio
+async def test_http_filesystem_recursive_folder_delete_removes_nested_sources(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            parent = await client.post(
+                "/api/filesystem/folders",
+                headers=auth_headers,
+                json={"name": "Delete Me"},
+            )
+            assert parent.status_code == 200
+            parent_entry = parent.json()
+            child = await client.post(
+                "/api/filesystem/folders",
+                headers=auth_headers,
+                json={"name": "Nested", "parent_id": parent_entry["id"]},
+            )
+            assert child.status_code == 200
+            child_entry = child.json()
+
+            upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("nested-note.txt", b"Nested source for recursive delete.", "text/plain")},
+                data={"folder_id": child_entry["id"]},
+            )
+            assert upload.status_code == 200
+            upload_payload = upload.json()
+            source_id = upload_payload["source"]["id"]
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=upload_payload["task"]["id"],
+                expected_status="completed",
+            )
+
+            child_listing = await client.get(
+                "/api/filesystem",
+                headers=auth_headers,
+                params={"folder_id": child_entry["id"]},
+            )
+            assert child_listing.status_code == 200
+            assert [entry["source_id"] for entry in child_listing.json()["entries"]] == [source_id]
+
+            delete = await client.post(
+                "/api/filesystem/delete",
+                headers=auth_headers,
+                json={"entry_ids": [parent_entry["id"]], "confirm": True},
+            )
+            assert delete.status_code == 200
+            delete_payload = delete.json()
+            assert set(delete_payload["deleted_entry_ids"]) == {parent_entry["id"], child_entry["id"]}
+            assert delete_payload["deleted_source_ids"] == [source_id]
+
+            deleted_source = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
+            assert deleted_source.status_code == 404
+            root_listing = await client.get("/api/filesystem", headers=auth_headers)
+            assert root_listing.status_code == 200
+            assert "Delete Me" not in {entry["name"] for entry in root_listing.json()["entries"]}
+
+
+@pytest.mark.asyncio
 async def test_http_split_preview_is_inspect_only(
     configured_settings: AppSettings,
     fake_openai: None,

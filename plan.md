@@ -280,7 +280,7 @@ Status: active intake; implement items as concrete plans arrive.
 - Implement Research Library Builder as the next substantial feature track, starting with topic/paper seeds, richer metadata, automatic folder placement, and agent-facing build mode.
 - Work through the Browser And Design Fix Queue as new instructions arrive.
 - Add focused Playwright flows for normal file-browser behavior: create folder, upload text/json, select files, ask ChatKit a grounded question, reveal/go-to-location, rename/move, and delete.
-- Add backend integration coverage for recursive folder delete, move/rename reindexing, selected-file preparation, and ChatKit client-tool effects.
+- Add backend integration coverage for recursive folder delete, move/rename reindexing, selected-file preparation, and ChatKit client-tool effects. Recursive folder delete is now covered.
 - Decide whether ChatKit should eventually expose richer structured widgets for source detail, search hits, task progress, and import candidates.
 - Remove unused legacy frontend components and any stale CSS once the new explorer has fully replaced the old workbench paths.
 - Revisit vector-store publishing retry/backoff if real concurrent ingestion load increases beyond the current single-runner default.
