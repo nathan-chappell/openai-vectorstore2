@@ -151,6 +151,18 @@ function mergeResearchCandidates(
   ];
 }
 
+function mergeResearchIngested(
+  current: ResearchLibraryBuildResponse["ingested"],
+  updates: ResearchLibraryBuildResponse["ingested"],
+): ResearchLibraryBuildResponse["ingested"] {
+  const updateBySourceId = new Map(updates.map((item) => [item.source.id, item]));
+  const currentSourceIds = new Set(current.map((item) => item.source.id));
+  return [
+    ...current.map((item) => updateBySourceId.get(item.source.id) ?? item),
+    ...updates.filter((item) => !currentSourceIds.has(item.source.id)),
+  ];
+}
+
 function asResearchBuildResponse(value: unknown): ResearchLibraryBuildResponse | null {
   if (!value || typeof value !== "object") {
     return null;
@@ -164,6 +176,10 @@ function asResearchBuildResponse(value: unknown): ResearchLibraryBuildResponse |
 
 function asResearchCandidates(value: unknown): ResearchImportCandidateSummary[] {
   return Array.isArray(value) ? (value as ResearchImportCandidateSummary[]) : [];
+}
+
+function asResearchIngested(value: unknown): ResearchLibraryBuildResponse["ingested"] {
+  return Array.isArray(value) ? (value as ResearchLibraryBuildResponse["ingested"]) : [];
 }
 
 export function App({ authMode }: AppProps) {
@@ -198,6 +214,8 @@ export function App({ authMode }: AppProps) {
   const workspaceGridRef = useRef<HTMLElement | null>(null);
   const previewGridRef = useRef<HTMLDivElement | null>(null);
   const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
+  const clientToolUiQueueRef = useRef<Array<() => void | Promise<void>>>([]);
+  const clientToolUiFlushRef = useRef<number | null>(null);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
   const [previewSplitPercent, setPreviewSplitPercent] = useState(() => readStoredPreviewSplit());
 
@@ -243,6 +261,26 @@ export function App({ authMode }: AppProps) {
       }) as CSSProperties & Record<"--preview-list-width", string>,
     [previewSplitPercent],
   );
+
+  const scheduleClientToolUiUpdate = useCallback((run: () => void | Promise<void>): void => {
+    clientToolUiQueueRef.current.push(run);
+    if (clientToolUiFlushRef.current !== null) {
+      return;
+    }
+    clientToolUiFlushRef.current = window.setTimeout(() => {
+      clientToolUiFlushRef.current = null;
+      const queuedRuns = clientToolUiQueueRef.current.splice(0);
+      void (async () => {
+        for (const queuedRun of queuedRuns) {
+          try {
+            await queuedRun();
+          } catch (error) {
+            setStatus(error instanceof Error ? error.message : "Could not apply the ChatKit UI update.");
+          }
+        }
+      })();
+    }, 0);
+  }, []);
 
   const cacheEntries = useCallback((entries: FilesystemEntrySummary[]): void => {
     setKnownEntries((current) => {
@@ -323,6 +361,16 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     knownEntriesRef.current = knownEntries;
   }, [knownEntries]);
+
+  useEffect(
+    () => () => {
+      if (clientToolUiFlushRef.current !== null) {
+        window.clearTimeout(clientToolUiFlushRef.current);
+      }
+      clientToolUiQueueRef.current = [];
+    },
+    [],
+  );
 
   useEffect(() => {
     setChatKitMetadataGetter(() => ({
@@ -745,23 +793,25 @@ export function App({ authMode }: AppProps) {
         const rawIds = Array.isArray(toolCall.params.source_ids) ? toolCall.params.source_ids : [];
         const sourceIds = rawIds.filter((id): id is string => typeof id === "string").slice(0, SELECTED_FILE_LIMIT);
         const mode = typeof toolCall.params.mode === "string" ? toolCall.params.mode : "replace";
-        setSelectedSourceIds((current) => {
-          if (mode === "add") {
-            return Array.from(new Set([...current, ...sourceIds])).slice(0, SELECTED_FILE_LIMIT);
-          }
-          if (mode === "remove") {
-            return current.filter((id) => !sourceIds.includes(id));
-          }
-          return sourceIds;
-        });
         const entryIds = Object.values(knownEntriesRef.current)
           .filter((entry) => entry.source_id && sourceIds.includes(entry.source_id))
           .map((entry) => entry.id);
-        if (entryIds.length) {
-          setSelectedEntryIds(entryIds);
-          setFocusedEntryId(entryIds[0]);
-          setSelectionAnchorEntryId(entryIds[0]);
-        }
+        scheduleClientToolUiUpdate(() => {
+          setSelectedSourceIds((current) => {
+            const next =
+              mode === "add"
+                ? Array.from(new Set([...current, ...sourceIds])).slice(0, SELECTED_FILE_LIMIT)
+                : mode === "remove"
+                  ? current.filter((id) => !sourceIds.includes(id))
+                  : sourceIds;
+            return sameStringArray(current, next) ? current : next;
+          });
+          if (entryIds.length) {
+            setSelectedEntryIds((current) => (sameStringArray(current, entryIds) ? current : entryIds));
+            setFocusedEntryId((current) => current === entryIds[0] ? current : entryIds[0]);
+            setSelectionAnchorEntryId((current) => current === entryIds[0] ? current : entryIds[0]);
+          }
+        });
         return { ok: true, selected_source_ids: sourceIds };
       }
       if (toolCall.name === "set_file_search") {
@@ -769,34 +819,43 @@ export function App({ authMode }: AppProps) {
         const tagIds = Array.isArray(toolCall.params.tag_ids)
           ? toolCall.params.tag_ids.filter((id): id is string => typeof id === "string")
           : [];
-        setSourceQuery(query);
-        setSelectedExplorerTagIds(tagIds);
+        scheduleClientToolUiUpdate(() => {
+          setSourceQuery((current) => current === query ? current : query);
+          setSelectedExplorerTagIds((current) => (sameStringArray(current, tagIds) ? current : tagIds));
+        });
         return { ok: true, query, tag_ids: tagIds };
       }
       if (toolCall.name === "reveal_file") {
         const sourceId = typeof toolCall.params.source_id === "string" ? toolCall.params.source_id : null;
         const entryId = typeof toolCall.params.entry_id === "string" ? toolCall.params.entry_id : null;
         const entriesById = knownEntriesRef.current;
+        let searchedEntries: FilesystemEntrySummary[] = [];
         let entry = entryId ? entriesById[entryId] : null;
         if (!entry && sourceId) {
           entry = Object.values(entriesById).find((item) => item.source_id === sourceId) ?? null;
         }
         if (!entry && sourceId) {
           const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
+          searchedEntries = search.entries;
           entry = search.entries[0] ?? null;
-          cacheEntries(search.entries);
         }
         if (!entry) {
           return { ok: false, message: "File was not found in the explorer." };
         }
-        await loadFolder(entry.parent_id);
-        setSelectedEntryIds([entry.id]);
-        setFocusedEntryId(entry.id);
-        setSelectionAnchorEntryId(entry.id);
-        if (entry.source_id) {
-          setSelectedSourceIds([entry.source_id]);
-          await openSource(entry.source_id);
-        }
+        const revealedEntry = entry;
+        scheduleClientToolUiUpdate(async () => {
+          if (searchedEntries.length) {
+            cacheEntries(searchedEntries);
+          }
+          await loadFolder(revealedEntry.parent_id);
+          setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
+          setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
+          setSelectionAnchorEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
+          if (revealedEntry.source_id) {
+            setSelectedSourceIds((current) => (sameStringArray(current, [revealedEntry.source_id as string]) ? current : [revealedEntry.source_id as string]));
+            await openSource(revealedEntry.source_id);
+          }
+        });
         return { ok: true, entry_id: entry.id, source_id: entry.source_id, path: entry.path };
       }
       if (toolCall.name === "show_research_builder") {
@@ -804,34 +863,9 @@ export function App({ authMode }: AppProps) {
         const seedType = toolCall.params.seed_type === "paper" ? "paper" : toolCall.params.seed_type === "topic" ? "topic" : null;
         const maxSources = typeof toolCall.params.max_sources === "number" ? toolCall.params.max_sources : null;
         const maxDepth = typeof toolCall.params.max_depth === "number" ? toolCall.params.max_depth : null;
-        if (query) {
-          setResearchQuery(query);
-        }
-        if (seedType) {
-          setResearchSeedType(seedType);
-        }
-        if (maxSources !== null) {
-          setResearchMaxSources(clamp(Math.round(maxSources), 1, 50));
-        }
-        if (maxDepth !== null) {
-          setResearchMaxDepth(clamp(Math.round(maxDepth), 0, 4));
-        }
         const result = asResearchBuildResponse(toolCall.params.result);
         const candidates = asResearchCandidates(toolCall.params.candidates);
-        const ingested = Array.isArray(toolCall.params.ingested) ? toolCall.params.ingested : [];
-        if (result) {
-          setResearchResult(result);
-        } else if (candidates.length || ingested.length) {
-          setResearchResult((current) =>
-            current
-              ? {
-                  ...current,
-                  candidates: mergeResearchCandidates(current.candidates, candidates),
-                  ingested: [...current.ingested, ...((ingested as ResearchLibraryBuildResponse["ingested"]) ?? [])],
-                }
-              : current,
-          );
-        }
+        const ingested = asResearchIngested(toolCall.params.ingested);
         const targetFolderId =
           result?.target_folder_id ??
           (typeof toolCall.params.target_folder_id === "string"
@@ -839,24 +873,58 @@ export function App({ authMode }: AppProps) {
             : typeof toolCall.params.folder_id === "string"
               ? toolCall.params.folder_id
               : null);
-        if (targetFolderId) {
-          setSourceQuery("");
-          setSelectedExplorerTagIds([]);
-          setSelectedEntryIds([]);
-          setSelectedSourceIds([]);
-          setFocusedEntryId(null);
-          setSelectionAnchorEntryId(null);
-          setSelectedSource(null);
-          await loadFolder(targetFolderId);
-        }
-        if (candidates.length || result) {
-          setStatus(`Research builder is showing ${(result?.candidates.length ?? candidates.length)} candidate${(result?.candidates.length ?? candidates.length) === 1 ? "" : "s"}.`);
-        }
+        scheduleClientToolUiUpdate(async () => {
+          if (query) {
+            setResearchQuery((current) => current === query ? current : query);
+          }
+          if (seedType) {
+            setResearchSeedType(seedType);
+          }
+          if (maxSources !== null) {
+            setResearchMaxSources((current) => {
+              const next = clamp(Math.round(maxSources), 1, 50);
+              return current === next ? current : next;
+            });
+          }
+          if (maxDepth !== null) {
+            setResearchMaxDepth((current) => {
+              const next = clamp(Math.round(maxDepth), 0, 4);
+              return current === next ? current : next;
+            });
+          }
+          if (result) {
+            setResearchResult(result);
+          } else if (candidates.length || ingested.length) {
+            setResearchResult((current) =>
+              current
+                ? {
+                    ...current,
+                    candidates: mergeResearchCandidates(current.candidates, candidates),
+                    ingested: mergeResearchIngested(current.ingested, ingested),
+                  }
+                : current,
+            );
+          }
+          if (targetFolderId) {
+            setSourceQuery((current) => current === "" ? current : "");
+            setSelectedExplorerTagIds((current) => current.length ? [] : current);
+            setSelectedEntryIds((current) => current.length ? [] : current);
+            setSelectedSourceIds((current) => current.length ? [] : current);
+            setFocusedEntryId(null);
+            setSelectionAnchorEntryId(null);
+            setSelectedSource(null);
+            await loadFolder(targetFolderId);
+          }
+          if (candidates.length || result) {
+            const candidateCount = result?.candidates.length ?? candidates.length;
+            setStatus(`Research builder is showing ${candidateCount} candidate${candidateCount === 1 ? "" : "s"}.`);
+          }
+        });
         return { ok: true, candidate_count: result?.candidates.length ?? candidates.length, target_folder_id: targetFolderId };
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },
-    [cacheEntries, loadFolder, openSource],
+    [cacheEntries, loadFolder, openSource, scheduleClientToolUiUpdate],
   );
 
   const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -1003,7 +1071,7 @@ export function App({ authMode }: AppProps) {
         />
 
         <aside className="chat-panel" aria-label="AI file assistant">
-          <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={handleClientTool} />
+          <ChatPane onClientTool={handleClientTool} />
         </aside>
       </section>
       {deleteDialog ? (
@@ -1421,7 +1489,7 @@ function LegacyApp({ authMode }: AppProps) {
         />
 
         <aside className="chat-panel" aria-label="AI file assistant">
-          <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={async () => ({ ok: false })} />
+          <ChatPane onClientTool={async () => ({ ok: false })} />
         </aside>
       </section>
     </main>
@@ -2867,6 +2935,10 @@ function sameStringSet(left: string[], right: string[]): boolean {
   return left.every((item) => rightSet.has(item));
 }
 
+function sameStringArray(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
+}
+
 function isActiveTask(task: TaskSummary): boolean {
   return task.status === "queued" || task.status === "running";
 }
@@ -2965,14 +3037,10 @@ function isEditableShortcutTarget(target: EventTarget | null): boolean {
 
 const ChatPane = memo(function ChatPane({
   onClientTool,
-  selectedSourceIds,
 }: {
   onClientTool: (toolCall: { name: string; params: Record<string, unknown> }) => Promise<Record<string, unknown>>;
-  selectedSourceIds: string[];
 }) {
   const chatKitConfig = getChatKitConfig();
-  const selectedFileScopeLabel =
-    selectedSourceIds.length === 1 ? "One file is in scope. Ask, search, or generate from it." : `${selectedSourceIds.length} files are in scope. Ask, search, or generate from them.`;
   const options = useMemo<UseChatKitOptions>(
     () => ({
       api: {
@@ -2995,9 +3063,7 @@ const ChatPane = memo(function ChatPane({
         title: { enabled: true, text: "Chat" },
       },
       startScreen: {
-        greeting: selectedSourceIds.length
-          ? selectedFileScopeLabel
-          : "Select indexed files, then ask me to search, answer, synthesize, image, or narrate from them.",
+        greeting: "Select indexed files, then ask me to search, answer, synthesize, image, or narrate from them.",
         prompts: [
           { label: "Answer from files", prompt: "Answer my question using indexed file matches and cite the source titles.", icon: "check-circle" },
           { label: "Build research library", prompt: "Build a research library for this topic or paper title, dedupe sources, and show progress in the file browser.", icon: "book-open" },
@@ -3028,7 +3094,7 @@ const ChatPane = memo(function ChatPane({
       },
       onClientTool,
     }),
-    [chatKitConfig.domainKey, chatKitConfig.url, onClientTool, selectedFileScopeLabel, selectedSourceIds.length],
+    [chatKitConfig.domainKey, chatKitConfig.url, onClientTool],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;
