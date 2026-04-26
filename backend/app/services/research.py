@@ -12,7 +12,7 @@ from pathlib import Path
 import re
 from time import perf_counter
 from typing import Any, cast
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, unquote, urlencode, urlparse, urlunparse
 
 import httpx
 from sqlalchemy import func, select
@@ -50,6 +50,7 @@ SCRIPT_STYLE_RE = re.compile(r"(?is)<(script|style).*?>.*?</\1>")
 TAG_RE = re.compile(r"(?s)<[^>]+>")
 WHITESPACE_RE = re.compile(r"[ \t\r\f\v\u00a0]+")
 ARXIV_ID_RE = re.compile(r"(?i)(?:arxiv\.org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)")
+NUMERIC_ARTICLE_ID_RE = re.compile(r"(?i)^\d{4}\.\d{4,5}(?:v\d+)?$")
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid"}
 
 
@@ -1325,15 +1326,31 @@ def _title_from_url(url: str) -> str:
 
 def _filename_from_url(url: str, *, title: str | None, extension: str) -> str:
     parsed = urlparse(url)
-    name = Path(parsed.path.rstrip("/")).name
-    if not name or "." not in name:
-        name = f"{_safe_filename(title or parsed.netloc or 'research-source')}{extension}"
-    return _safe_filename(name)
+    normalized_extension = extension if extension.startswith(".") else f".{extension}"
+    raw_name = Path(unquote(parsed.path.rstrip("/"))).name
+    raw_stem = Path(raw_name).stem if raw_name else ""
+    title_stem = title.strip() if title else ""
+    use_title = bool(title_stem) and (
+        not raw_stem
+        or NUMERIC_ARTICLE_ID_RE.fullmatch(raw_stem) is not None
+        or NUMERIC_ARTICLE_ID_RE.fullmatch(raw_name) is not None
+    )
+    stem = title_stem if use_title else raw_stem or title_stem or parsed.netloc or "research-source"
+    return _filename_with_extension(stem, normalized_extension)
 
 
 def _safe_filename(value: str) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9._ -]+", "-", value).strip(" .-")
     return (cleaned or "research-source")[:180]
+
+
+def _filename_with_extension(stem: str, extension: str) -> str:
+    cleaned_stem = _safe_filename(stem)
+    if cleaned_stem.casefold().endswith(extension.casefold()):
+        return cleaned_stem
+    max_stem_length = max(1, 180 - len(extension))
+    cleaned_stem = cleaned_stem[:max_stem_length].rstrip(" .-") or "research-source"
+    return f"{cleaned_stem}{extension}"
 
 
 def _safe_folder_name(value: str) -> str:

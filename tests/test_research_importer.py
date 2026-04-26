@@ -36,6 +36,27 @@ def test_research_import_arxiv_and_pdf_detection() -> None:
     assert research_module._source_type_from_url("https://example.com/article", default="url") == "url"
 
 
+def test_research_import_download_filenames_keep_supported_extensions_and_titles() -> None:
+    assert (
+        research_module._filename_from_url(
+            "https://arxiv.org/abs/1809.04281",
+            title="Universal Language Model Fine-tuning for Text Classification",
+            extension=".txt",
+        )
+        == "Universal Language Model Fine-tuning for Text Classification.txt"
+    )
+    assert (
+        research_module._filename_from_url(
+            "https://arxiv.org/pdf/1706.03762.pdf",
+            title="Attention Is All You Need",
+            extension=".pdf",
+        )
+        == "Attention Is All You Need.pdf"
+    )
+    assert research_module._filename_from_url("https://example.com/reports/model.PDF?download=1", title=None, extension=".pdf") == "model.pdf"
+    assert research_module._filename_from_url("https://example.com/articles/alignment.html", title="Alignment", extension=".txt") == "alignment.txt"
+
+
 def test_research_import_html_cleanup_removes_boilerplate_and_preserves_public_links() -> None:
     cleaned = research_module._html_to_text(
         """

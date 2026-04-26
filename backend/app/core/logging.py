@@ -63,8 +63,27 @@ def configure_logging(
         file_handler.setFormatter(AnsiStrippingFormatter("%(asctime)s %(levelname)-8s %(name)s %(message)s"))
         root.addHandler(file_handler)
 
-    for logger_name in ["httpx", "openai", "sqlalchemy.engine", "uvicorn.access"]:
-        logging.getLogger(logger_name).setLevel(max(level, logging.WARNING))
+    noisy_logger_names = {"httpx", "openai", "sqlalchemy", "sqlalchemy.engine", "uvicorn.access"}
+    framework_logger_names = {
+        "alembic",
+        "fastapi",
+        "httpx",
+        "openai",
+        "sqlalchemy",
+        "sqlalchemy.engine",
+        "starlette",
+        "uvicorn",
+        "uvicorn.error",
+        "uvicorn.access",
+    }
+    for logger_name in framework_logger_names:
+        logger_value = logging.getLogger(logger_name)
+        for existing_handler in logger_value.handlers[:]:
+            logger_value.removeHandler(existing_handler)
+            existing_handler.close()
+        logger_value.disabled = False
+        logger_value.propagate = True
+        logger_value.setLevel(max(level, logging.WARNING) if logger_name in noisy_logger_names else logging.NOTSET)
 
     for logger_name, logger_value in list(root.manager.loggerDict.items()):
         if not isinstance(logger_value, logging.Logger):

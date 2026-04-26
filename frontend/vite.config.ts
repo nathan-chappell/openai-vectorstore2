@@ -1,6 +1,9 @@
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";
 
+const devServerPort = Number(process.env.VITE_PORT ?? 5173);
+const backendUrl = process.env.VITE_BACKEND_URL ?? "http://localhost:8000";
+
 export default defineConfig({
   root: "frontend",
   plugins: [react()],
@@ -11,10 +14,11 @@ export default defineConfig({
     sourcemap: true,
   },
   server: {
-    port: 5173,
+    port: devServerPort,
+    strictPort: true,
     proxy: {
-      "/api": "http://localhost:8000",
-      "/mcp": "http://localhost:8000",
+      "/api": backendUrl,
+      "/mcp": backendUrl,
     },
   },
   test: {

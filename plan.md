@@ -49,6 +49,9 @@ Implementation tasks:
 - [x] Stabilize the ChatKit client-tool callback so research-builder UI updates do not trigger React nested update loops.
 - [x] Normalize all ChatKit progress icons through the validation-safe wrapper.
 - [x] Make routine request logs compact, suppress duplicate uvicorn access noise, and keep OpenAI response/conversation log URLs easy to scan.
+- [x] Route framework loggers through the root file handler so uvicorn/starlette/alembic warnings land in the app log file.
+- [x] Rename downloaded research materials with title-based `.pdf`/`.txt` filenames when URL paths use numeric article IDs or unsupported suffixes.
+- [x] Polish the file explorer interaction model: in-app delete confirmation, recursive-folder warning copy, arrow-key focus, Shift+arrow range selection, Alt+Left/Backspace up navigation, `?` shortcut help, and closable/resizable preview.
 
 Follow-up verification completed:
 

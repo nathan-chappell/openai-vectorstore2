@@ -5,6 +5,7 @@ import type {
   KeyboardEvent as ReactKeyboardEvent,
   MouseEvent as ReactMouseEvent,
   PointerEvent as ReactPointerEvent,
+  RefObject,
 } from "react";
 
 import {
@@ -71,8 +72,12 @@ const SELECTED_FILE_LIMIT = 10;
 const SOURCE_PAGE_SIZE = 100;
 const EXPLORER_RENDER_LIMIT = 250;
 const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
+const PREVIEW_SPLIT_STORAGE_KEY = "openai-vectorstore2.previewSplitPercent";
 const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source file intact.";
 type ResearchBuilderSeedKind = Extract<ResearchSeedKind, "topic" | "paper">;
+type DeleteDialogState = {
+  entries: FilesystemEntrySummary[];
+};
 const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
   { id: "topic", label: "Topic" },
   { id: "paper", label: "Paper" },
@@ -174,6 +179,7 @@ export function App({ authMode }: AppProps) {
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
+  const [selectionAnchorEntryId, setSelectionAnchorEntryId] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
   const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
   const [newTagName, setNewTagName] = useState("");
@@ -185,11 +191,15 @@ export function App({ authMode }: AppProps) {
   const [researchMaxSources, setResearchMaxSources] = useState(12);
   const [researchMaxDepth, setResearchMaxDepth] = useState(2);
   const [researchResult, setResearchResult] = useState<ResearchLibraryBuildResponse | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
+  const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
+  const previewGridRef = useRef<HTMLDivElement | null>(null);
   const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
+  const [previewSplitPercent, setPreviewSplitPercent] = useState(() => readStoredPreviewSplit());
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
@@ -225,6 +235,13 @@ export function App({ authMode }: AppProps) {
         "--workspace-explorer-width": `${workspaceSplitPercent}%`,
       }) as CSSProperties & Record<"--workspace-explorer-width", string>,
     [workspaceSplitPercent],
+  );
+  const previewLayoutStyle = useMemo(
+    () =>
+      ({
+        "--preview-list-width": `${previewSplitPercent}%`,
+      }) as CSSProperties & Record<"--preview-list-width", string>,
+    [previewSplitPercent],
   );
 
   const cacheEntries = useCallback((entries: FilesystemEntrySummary[]): void => {
@@ -366,34 +383,50 @@ export function App({ authMode }: AppProps) {
     [knownEntries],
   );
 
+  const applyExplorerSelection = useCallback(
+    (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null): void => {
+      const nextEntryIds = Array.from(new Set(entryIds));
+      setSelectedEntryIds(nextEntryIds);
+      setFocusedEntryId(focusedEntryId);
+      setSelectionAnchorEntryId(anchorEntryId ?? focusedEntryId);
+      syncChatSelection(nextEntryIds);
+      const focusedEntry = knownEntries[focusedEntryId] ?? visibleEntries.find((entry) => entry.id === focusedEntryId);
+      if (focusedEntry?.source_id) {
+        void openSource(focusedEntry.source_id);
+        return;
+      }
+      setSelectedSource(null);
+    },
+    [knownEntries, openSource, syncChatSelection, visibleEntries],
+  );
+
   const chooseEntries = useCallback(
     (entry: FilesystemEntrySummary, event: ReactMouseEvent): void => {
-      setFocusedEntryId(entry.id);
-      setSelectedEntryIds((current) => {
-        const currentVisibleIds = visibleEntries.map((item) => item.id);
-        let next: string[];
-        if (event.shiftKey && focusedEntryId) {
-          const anchorIndex = currentVisibleIds.indexOf(focusedEntryId);
-          const targetIndex = currentVisibleIds.indexOf(entry.id);
-          if (anchorIndex >= 0 && targetIndex >= 0) {
-            const [start, end] = [anchorIndex, targetIndex].sort((left, right) => left - right);
-            next = currentVisibleIds.slice(start, end + 1);
-          } else {
-            next = [entry.id];
-          }
-        } else if (event.metaKey || event.ctrlKey) {
-          next = current.includes(entry.id) ? current.filter((id) => id !== entry.id) : [...current, entry.id];
+      const currentVisibleIds = visibleEntries.map((item) => item.id);
+      let nextEntryIds: string[];
+      let nextAnchorEntryId = entry.id;
+      if (event.shiftKey) {
+        const anchorEntryId = selectionAnchorEntryId ?? focusedEntryId ?? selectedEntryIds[0] ?? entry.id;
+        const anchorIndex = currentVisibleIds.indexOf(anchorEntryId);
+        const targetIndex = currentVisibleIds.indexOf(entry.id);
+        nextAnchorEntryId = anchorEntryId;
+        if (anchorIndex >= 0 && targetIndex >= 0) {
+          const [start, end] = [anchorIndex, targetIndex].sort((left, right) => left - right);
+          nextEntryIds = currentVisibleIds.slice(start, end + 1);
         } else {
-          next = [entry.id];
+          nextEntryIds = [entry.id];
+          nextAnchorEntryId = entry.id;
         }
-        syncChatSelection(next);
-        return next;
-      });
-      if (entry.source_id) {
-        void openSource(entry.source_id);
+      } else if (event.metaKey || event.ctrlKey) {
+        nextEntryIds = selectedEntryIds.includes(entry.id)
+          ? selectedEntryIds.filter((id) => id !== entry.id)
+          : [...selectedEntryIds, entry.id];
+      } else {
+        nextEntryIds = [entry.id];
       }
+      applyExplorerSelection(nextEntryIds, entry.id, nextAnchorEntryId);
     },
-    [focusedEntryId, openSource, syncChatSelection, visibleEntries],
+    [applyExplorerSelection, focusedEntryId, selectedEntryIds, selectionAnchorEntryId, visibleEntries],
   );
 
   const openEntry = useCallback(
@@ -404,6 +437,7 @@ export function App({ authMode }: AppProps) {
         setSelectedEntryIds([]);
         setSelectedSourceIds([]);
         setFocusedEntryId(null);
+        setSelectionAnchorEntryId(null);
         setSelectedSource(null);
         void loadFolder(entry.id);
         return;
@@ -422,6 +456,7 @@ export function App({ authMode }: AppProps) {
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
+      setSelectionAnchorEntryId(null);
       setSelectedSource(null);
       void loadFolder(folderId);
     },
@@ -466,29 +501,46 @@ export function App({ authMode }: AppProps) {
     }
   }, [knownEntries, refreshExplorer, selectedEntryIds]);
 
-  const deleteSelectedEntries = useCallback(async (): Promise<void> => {
+  const requestDeleteSelectedEntries = useCallback((): void => {
     if (!selectedEntryIds.length) {
       return;
     }
-    const confirmed = window.confirm(`Permanently delete ${selectedEntryIds.length} selected item${selectedEntryIds.length === 1 ? "" : "s"}?`);
-    if (!confirmed) {
+    const entries = selectedEntryIds.flatMap((entryId) => {
+      const entry = knownEntries[entryId];
+      return entry ? [entry] : [];
+    });
+    if (!entries.length) {
       return;
     }
+    setDeleteDialog({ entries });
+  }, [knownEntries, selectedEntryIds]);
+
+  const confirmDeleteSelectedEntries = useCallback(async (): Promise<void> => {
+    if (!deleteDialog) {
+      return;
+    }
+    const entryIds = deleteDialog.entries.map((entry) => entry.id);
     setBusy(true);
     try {
-      await deleteFilesystemEntries({ entry_ids: selectedEntryIds, confirm: true });
+      const result = await deleteFilesystemEntries({ entry_ids: entryIds, confirm: true });
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
+      setSelectionAnchorEntryId(null);
       setSelectedSource(null);
+      setDeleteDialog(null);
       await refreshExplorer();
-      setStatus("Deleted selected items.");
+      setStatus(
+        `Deleted ${result.deleted_entry_ids.length} item${result.deleted_entry_ids.length === 1 ? "" : "s"}${
+          result.deleted_source_ids.length ? ` and ${result.deleted_source_ids.length} indexed file${result.deleted_source_ids.length === 1 ? "" : "s"}` : ""
+        }.`,
+      );
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Delete failed.");
     } finally {
       setBusy(false);
     }
-  }, [refreshExplorer, selectedEntryIds]);
+  }, [deleteDialog, refreshExplorer]);
 
   const moveEntriesToFolder = useCallback(
     async (entryIds: string[], folderId: string): Promise<void> => {
@@ -501,6 +553,8 @@ export function App({ authMode }: AppProps) {
         await Promise.all(movingIds.map((entryId) => updateFilesystemEntry(entryId, { parent_id: folderId })));
         setSelectedEntryIds([]);
         setSelectedSourceIds([]);
+        setFocusedEntryId(null);
+        setSelectionAnchorEntryId(null);
         await refreshExplorer();
         setStatus(`Moved ${movingIds.length} item${movingIds.length === 1 ? "" : "s"}.`);
       } catch (error) {
@@ -586,6 +640,7 @@ export function App({ authMode }: AppProps) {
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
+      setSelectionAnchorEntryId(null);
       setSelectedSource(null);
       if (response.target_folder_id) {
         await loadFolder(response.target_folder_id);
@@ -705,6 +760,7 @@ export function App({ authMode }: AppProps) {
         if (entryIds.length) {
           setSelectedEntryIds(entryIds);
           setFocusedEntryId(entryIds[0]);
+          setSelectionAnchorEntryId(entryIds[0]);
         }
         return { ok: true, selected_source_ids: sourceIds };
       }
@@ -736,6 +792,7 @@ export function App({ authMode }: AppProps) {
         await loadFolder(entry.parent_id);
         setSelectedEntryIds([entry.id]);
         setFocusedEntryId(entry.id);
+        setSelectionAnchorEntryId(entry.id);
         if (entry.source_id) {
           setSelectedSourceIds([entry.source_id]);
           await openSource(entry.source_id);
@@ -788,6 +845,7 @@ export function App({ authMode }: AppProps) {
           setSelectedEntryIds([]);
           setSelectedSourceIds([]);
           setFocusedEntryId(null);
+          setSelectionAnchorEntryId(null);
           setSelectedSource(null);
           await loadFolder(targetFolderId);
         }
@@ -830,6 +888,35 @@ export function App({ authMode }: AppProps) {
     window.addEventListener("pointercancel", stopResize, { once: true });
   }, []);
 
+  const beginPreviewResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
+    const grid = previewGridRef.current;
+    if (!grid) {
+      return;
+    }
+    event.preventDefault();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    document.body.classList.add("resizing-preview");
+    const updateFromPointer = (clientX: number): void => {
+      const rect = grid.getBoundingClientRect();
+      const nextPercent = clamp(((clientX - rect.left) / rect.width) * 100, 34, 70);
+      setPreviewSplitPercent(nextPercent);
+      window.localStorage.setItem(PREVIEW_SPLIT_STORAGE_KEY, String(Math.round(nextPercent)));
+    };
+    updateFromPointer(event.clientX);
+    const handlePointerMove = (moveEvent: PointerEvent): void => {
+      updateFromPointer(moveEvent.clientX);
+    };
+    const stopResize = (): void => {
+      document.body.classList.remove("resizing-preview");
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", stopResize);
+      window.removeEventListener("pointercancel", stopResize);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", stopResize, { once: true });
+    window.addEventListener("pointercancel", stopResize, { once: true });
+  }, []);
+
   return (
     <main className="app-shell">
       <WorkspaceHeader
@@ -850,12 +937,16 @@ export function App({ authMode }: AppProps) {
           focusedEntryId={focusedEntryId}
           newTagName={newTagName}
           pendingFiles={pendingFiles}
+          previewGridRef={previewGridRef}
+          previewLayoutStyle={previewLayoutStyle}
+          previewSplitPercent={previewSplitPercent}
           researchMaxDepth={researchMaxDepth}
           researchMaxSources={researchMaxSources}
           researchQuery={researchQuery}
           researchResult={researchResult}
           researchSeedType={researchSeedType}
           searching={searching}
+          selectedEntryIds={selectedEntryIds}
           selectedEntryIdSet={selectedEntryIdSet}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
           selectedFileEntries={selectedFileEntries}
@@ -863,6 +954,7 @@ export function App({ authMode }: AppProps) {
           selectedSourceIdSet={selectedSourceIdSet}
           selectedSourceTagChanged={selectedSourceTagChanged}
           selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          selectionAnchorEntryId={selectionAnchorEntryId}
           sourceEntriesById={sourceEntriesById}
           sourceQuery={sourceQuery}
           splitPreview={splitPreview}
@@ -873,12 +965,14 @@ export function App({ authMode }: AppProps) {
           onClearFilters={clearExplorerFilters}
           onCreateFolder={() => void createFolderInCurrentFolder()}
           onCreateTag={() => void createExplorerTag()}
-          onDeleteSelected={() => void deleteSelectedEntries()}
+          onDeleteSelected={requestDeleteSelectedEntries}
           onDropEntries={(entryIds, folderId) => void moveEntriesToFolder(entryIds, folderId)}
           onGoToFolder={goToFolder}
           onNewTagNameChange={setNewTagName}
+          onClosePreview={() => setSelectedSource(null)}
           onOpenEntry={openEntry}
           onPreviewSplit={() => void previewPendingSplit()}
+          onPreviewResize={beginPreviewResize}
           onResearchBuild={() => void buildResearchLibraryFromPanel()}
           onResearchMaxDepthChange={setResearchMaxDepth}
           onResearchMaxSourcesChange={setResearchMaxSources}
@@ -887,6 +981,8 @@ export function App({ authMode }: AppProps) {
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
           onSaveTags={() => void saveSelectedSourceTags()}
+          onSelectEntries={applyExplorerSelection}
+          onShowShortcuts={() => setShortcutDialogOpen(true)}
           onSourceQueryChange={setSourceQuery}
           onTagToggle={toggleSelectedSourceTagDraft}
           onToggleExplorerTag={toggleExplorerTag}
@@ -910,6 +1006,15 @@ export function App({ authMode }: AppProps) {
           <ChatPane selectedSourceIds={selectedSourceIds} onClientTool={handleClientTool} />
         </aside>
       </section>
+      {deleteDialog ? (
+        <DeleteEntriesDialog
+          busy={busy}
+          entries={deleteDialog.entries}
+          onCancel={() => setDeleteDialog(null)}
+          onConfirm={() => void confirmDeleteSelectedEntries()}
+        />
+      ) : null}
+      {shortcutDialogOpen ? <ExplorerShortcutDialog onClose={() => setShortcutDialogOpen(false)} /> : null}
     </main>
   );
 }
@@ -1331,12 +1436,16 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId,
   newTagName,
   pendingFiles,
+  previewGridRef,
+  previewLayoutStyle,
+  previewSplitPercent,
   researchMaxDepth,
   researchMaxSources,
   researchQuery,
   researchResult,
   researchSeedType,
   searching,
+  selectedEntryIds,
   selectedEntryIdSet,
   selectedExplorerTagIdSet,
   selectedFileEntries,
@@ -1344,6 +1453,7 @@ const FileExplorer = memo(function FileExplorer({
   selectedSourceIdSet,
   selectedSourceTagChanged,
   selectedSourceTagDraftIdSet,
+  selectionAnchorEntryId,
   sourceEntriesById,
   sourceQuery,
   splitPreview,
@@ -1358,8 +1468,10 @@ const FileExplorer = memo(function FileExplorer({
   onDropEntries,
   onGoToFolder,
   onNewTagNameChange,
+  onClosePreview,
   onOpenEntry,
   onPreviewSplit,
+  onPreviewResize,
   onResearchBuild,
   onResearchMaxDepthChange,
   onResearchMaxSourcesChange,
@@ -1368,6 +1480,8 @@ const FileExplorer = memo(function FileExplorer({
   onRenameSelected,
   onResplit,
   onSaveTags,
+  onSelectEntries,
+  onShowShortcuts,
   onSourceQueryChange,
   onTagToggle,
   onToggleExplorerTag,
@@ -1381,12 +1495,16 @@ const FileExplorer = memo(function FileExplorer({
   focusedEntryId: string | null;
   newTagName: string;
   pendingFiles: File[];
+  previewGridRef: RefObject<HTMLDivElement | null>;
+  previewLayoutStyle: CSSProperties & Record<"--preview-list-width", string>;
+  previewSplitPercent: number;
   researchMaxDepth: number;
   researchMaxSources: number;
   researchQuery: string;
   researchResult: ResearchLibraryBuildResponse | null;
   researchSeedType: ResearchBuilderSeedKind;
   searching: boolean;
+  selectedEntryIds: string[];
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagIdSet: Set<string>;
   selectedFileEntries: FilesystemEntrySummary[];
@@ -1394,6 +1512,7 @@ const FileExplorer = memo(function FileExplorer({
   selectedSourceIdSet: Set<string>;
   selectedSourceTagChanged: boolean;
   selectedSourceTagDraftIdSet: Set<string>;
+  selectionAnchorEntryId: string | null;
   sourceEntriesById: Record<string, FilesystemEntrySummary>;
   sourceQuery: string;
   splitPreview: SplitPreviewResponse | null;
@@ -1408,8 +1527,10 @@ const FileExplorer = memo(function FileExplorer({
   onDropEntries: (entryIds: string[], folderId: string) => void;
   onGoToFolder: (folderId: string | null) => void;
   onNewTagNameChange: (value: string) => void;
+  onClosePreview: () => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
   onPreviewSplit: () => void;
+  onPreviewResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResearchBuild: () => void;
   onResearchMaxDepthChange: (value: number) => void;
   onResearchMaxSourcesChange: (value: number) => void;
@@ -1418,6 +1539,8 @@ const FileExplorer = memo(function FileExplorer({
   onRenameSelected: () => void;
   onResplit: () => void;
   onSaveTags: () => void;
+  onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
+  onShowShortcuts: () => void;
   onSourceQueryChange: (value: string) => void;
   onTagToggle: (tagId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;
@@ -1428,27 +1551,109 @@ const FileExplorer = memo(function FileExplorer({
   const selectedFileLabel =
     selectedFileEntries.length === 1 ? "1 indexed file selected" : `${selectedFileEntries.length} indexed files selected`;
   const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
+  const entryIds = useMemo(() => entries.map((entry) => entry.id), [entries]);
   const handleExplorerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>): void => {
       if (busy || isEditableShortcutTarget(event.target)) {
         return;
       }
+      const focusRow = (entryId: string): void => {
+        window.requestAnimationFrame(() => {
+          document.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`)?.focus();
+        });
+      };
+      const moveFocus = (targetIndex: number, extendSelection: boolean): void => {
+        if (!entryIds.length) {
+          return;
+        }
+        const boundedIndex = clamp(targetIndex, 0, entryIds.length - 1);
+        const targetEntryId = entryIds[boundedIndex];
+        if (extendSelection) {
+          const anchorEntryId = selectionAnchorEntryId ?? focusedEntryId ?? selectedEntryIds[0] ?? targetEntryId;
+          const anchorIndex = entryIds.indexOf(anchorEntryId);
+          if (anchorIndex >= 0) {
+            const [start, end] = [anchorIndex, boundedIndex].sort((left, right) => left - right);
+            onSelectEntries(entryIds.slice(start, end + 1), targetEntryId, anchorEntryId);
+          } else {
+            onSelectEntries([targetEntryId], targetEntryId, targetEntryId);
+          }
+        } else {
+          onSelectEntries([targetEntryId], targetEntryId, targetEntryId);
+        }
+        focusRow(targetEntryId);
+      };
+      const currentIndex = focusedEntryId ? entryIds.indexOf(focusedEntryId) : -1;
       if (event.key === "F2" && selectedCount === 1) {
         event.preventDefault();
         onRenameSelected();
         return;
       }
-      if (event.key === "Backspace" && currentFolder?.parent_id) {
+      if ((event.key === "Backspace" || (event.altKey && event.key === "ArrowLeft")) && currentFolder?.parent_id) {
         event.preventDefault();
         onGoToFolder(currentFolder.parent_id);
         return;
+      }
+      if (event.key === "?" || (event.shiftKey && event.key === "/")) {
+        event.preventDefault();
+        onShowShortcuts();
+        return;
+      }
+      if (event.key === "Escape" && selectedSource) {
+        event.preventDefault();
+        onClosePreview();
+        return;
+      }
+      if (event.key === "ArrowDown") {
+        event.preventDefault();
+        moveFocus(currentIndex < 0 ? 0 : currentIndex + 1, event.shiftKey);
+        return;
+      }
+      if (event.key === "ArrowUp") {
+        event.preventDefault();
+        moveFocus(currentIndex < 0 ? entryIds.length - 1 : currentIndex - 1, event.shiftKey);
+        return;
+      }
+      if (event.key === "Home") {
+        event.preventDefault();
+        moveFocus(0, event.shiftKey);
+        return;
+      }
+      if (event.key === "End") {
+        event.preventDefault();
+        moveFocus(entryIds.length - 1, event.shiftKey);
+        return;
+      }
+      if (event.key === "Enter" && focusedEntryId) {
+        const focusedEntry = entries.find((entry) => entry.id === focusedEntryId);
+        if (focusedEntry) {
+          event.preventDefault();
+          onOpenEntry(focusedEntry);
+          return;
+        }
       }
       if (event.key === "Delete" && selectedCount > 0) {
         event.preventDefault();
         onDeleteSelected();
       }
     },
-    [busy, currentFolder?.parent_id, onDeleteSelected, onGoToFolder, onRenameSelected, selectedCount],
+    [
+      busy,
+      currentFolder?.parent_id,
+      entries,
+      entryIds,
+      focusedEntryId,
+      onClosePreview,
+      onDeleteSelected,
+      onGoToFolder,
+      onOpenEntry,
+      onRenameSelected,
+      onSelectEntries,
+      onShowShortcuts,
+      selectedCount,
+      selectedEntryIds,
+      selectedSource,
+      selectionAnchorEntryId,
+    ],
   );
   return (
     <aside className="explorer-pane filesystem-pane" aria-label="Files" onKeyDown={handleExplorerKeyDown}>
@@ -1458,11 +1663,14 @@ const FileExplorer = memo(function FileExplorer({
         </button>
         <div
           className="explorer-selection-summary"
-          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "F2 rename, Backspace up, Delete remove selected"}
+          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "Arrow keys move, Shift extends, F2 renames, Alt+Left goes up, Delete removes"}
         >
           <strong>{selectedFileLabel}</strong>
           <span>{selectedFileEntries.slice(0, 3).map((entry) => entry.name).join(", ") || "No ready files"}</span>
         </div>
+        <button type="button" className="icon-button" onClick={onShowShortcuts} aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
+          ?
+        </button>
       </div>
 
       <div className="explorer-filterbar">
@@ -1531,7 +1739,11 @@ const FileExplorer = memo(function FileExplorer({
         })}
       </nav>
 
-      <div className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}>
+      <div
+        ref={previewGridRef}
+        className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}
+        style={selectedSource ? previewLayoutStyle : undefined}
+      >
         <section className="file-browser" aria-label="File list">
           <div className="file-list-header">
             <span>Name</span>
@@ -1602,7 +1814,25 @@ const FileExplorer = memo(function FileExplorer({
         </section>
 
         {selectedSource ? (
+          <>
+            <button
+              type="button"
+              className="preview-splitter"
+              role="separator"
+              aria-label="Resize preview"
+              aria-orientation="vertical"
+              aria-valuemin={34}
+              aria-valuemax={70}
+              aria-valuenow={Math.round(previewSplitPercent)}
+              onPointerDown={onPreviewResize}
+            />
           <div className="explorer-detail" aria-label="File detail">
+            <div className="explorer-detail-header">
+              <strong>{selectedSource.display_title}</strong>
+              <button type="button" className="icon-button" onClick={onClosePreview} aria-label="Close preview" title="Close preview">
+                X
+              </button>
+            </div>
             <SourcePreview
               busy={busy}
               selectedSource={selectedSource}
@@ -1616,11 +1846,125 @@ const FileExplorer = memo(function FileExplorer({
               onResplit={onResplit}
             />
           </div>
+          </>
         ) : null}
       </div>
     </aside>
   );
 });
+
+function DeleteEntriesDialog({
+  busy,
+  entries,
+  onCancel,
+  onConfirm,
+}: {
+  busy: boolean;
+  entries: FilesystemEntrySummary[];
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const folderCount = entries.filter((entry) => entry.kind === "folder").length;
+  const fileCount = entries.length - folderCount;
+  const sampleNames = entries.slice(0, 5).map((entry) => entry.name || entry.path);
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onCancel}>
+      <section
+        className="confirmation-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="delete-dialog-title"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onCancel();
+          }
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-heading">
+          <div>
+            <h2 id="delete-dialog-title">Delete selected items?</h2>
+            <p>
+              {entries.length} selected: {fileCount} file{fileCount === 1 ? "" : "s"} and {folderCount} folder
+              {folderCount === 1 ? "" : "s"}.
+            </p>
+          </div>
+        </div>
+        <p className="danger-note">Folders are deleted recursively, including every nested indexed file and subfolder.</p>
+        <ul className="delete-entry-list">
+          {sampleNames.map((name) => (
+            <li key={name}>{name}</li>
+          ))}
+          {entries.length > sampleNames.length ? <li>{entries.length - sampleNames.length} more...</li> : null}
+        </ul>
+        <div className="dialog-actions">
+          <button type="button" className="secondary-button" onClick={onCancel} disabled={busy} autoFocus>
+            Cancel
+          </button>
+          <button type="button" className="danger-solid-button" onClick={onConfirm} disabled={busy}>
+            Delete
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function ExplorerShortcutDialog({ onClose }: { onClose: () => void }) {
+  const shortcuts = [
+    ["Up / Down", "Move focus"],
+    ["Shift + Up / Down", "Extend selection"],
+    ["Home / End", "Jump to first or last item"],
+    ["Shift + Home / End", "Extend to first or last item"],
+    ["Enter", "Open the focused file or folder"],
+    ["F2", "Rename the selected item"],
+    ["Alt + Left", "Go to the parent folder"],
+    ["Backspace", "Go to the parent folder"],
+    ["Delete", "Delete selected items"],
+    ["Esc", "Close preview"],
+    ["?", "Show this sheet"],
+  ];
+  return (
+    <div className="modal-backdrop" role="presentation" onMouseDown={onClose}>
+      <section
+        className="shortcut-dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="shortcut-dialog-title"
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+        onMouseDown={(event) => event.stopPropagation()}
+      >
+        <div className="dialog-heading">
+          <h2 id="shortcut-dialog-title">Keyboard Shortcuts</h2>
+          <button type="button" className="icon-button" onClick={onClose} aria-label="Close shortcuts" autoFocus>
+            X
+          </button>
+        </div>
+        <dl className="shortcut-list">
+          {shortcuts.map(([keys, action]) => (
+            <div key={keys}>
+              <dt>
+                {keys.split(" / ").map((key, index) => (
+                  <span key={key}>
+                    {index > 0 ? " / " : ""}
+                    <kbd>{key}</kbd>
+                  </span>
+                ))}
+              </dt>
+              <dd>{action}</dd>
+            </div>
+          ))}
+        </dl>
+      </section>
+    </div>
+  );
+}
 
 const ResearchBuilderPanel = memo(function ResearchBuilderPanel({
   busy,
@@ -1800,7 +2144,9 @@ const FileEntryRow = memo(function FileEntryRow({
     <div
       role="row"
       tabIndex={0}
+      aria-selected={selected}
       className={rowClassName || undefined}
+      data-entry-id={entry.id}
       draggable
       onClick={(event) => {
         event.currentTarget.focus();
@@ -2595,6 +2941,14 @@ function readStoredWorkspaceSplit(): number {
   }
   const stored = Number(window.localStorage.getItem(WORKSPACE_SPLIT_STORAGE_KEY));
   return Number.isFinite(stored) ? clamp(stored, 46, 76) : 64;
+}
+
+function readStoredPreviewSplit(): number {
+  if (typeof window === "undefined") {
+    return 46;
+  }
+  const stored = Number(window.localStorage.getItem(PREVIEW_SPLIT_STORAGE_KEY));
+  return Number.isFinite(stored) ? clamp(stored, 34, 70) : 46;
 }
 
 function clamp(value: number, min: number, max: number): number {

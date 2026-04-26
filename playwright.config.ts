@@ -31,6 +31,11 @@ for (const name of requiredEnvNames) {
   }
 }
 
+const backendPort = process.env.PLAYWRIGHT_BACKEND_PORT ?? "8000";
+const frontendPort = process.env.PLAYWRIGHT_FRONTEND_PORT ?? "5173";
+const backendUrl = `http://127.0.0.1:${backendPort}`;
+const frontendUrl = `http://127.0.0.1:${frontendPort}`;
+
 const backendEnv: Record<string, string> = {
   ...baseEnv,
   DATABASE_URL: `sqlite+aiosqlite:///./.local/playwright/app-${Date.now()}.db`,
@@ -42,6 +47,8 @@ const backendEnv: Record<string, string> = {
 
 const frontendEnv: Record<string, string> = {
   ...baseEnv,
+  VITE_BACKEND_URL: backendUrl,
+  VITE_PORT: frontendPort,
   ...clerkDisabledEnv,
 };
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
@@ -57,22 +64,22 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "./.venv/bin/uvicorn backend.app.main:create_fastapi_app --factory --host 127.0.0.1 --port 8000",
-      url: "http://127.0.0.1:8000/health",
+      command: `./.venv/bin/uvicorn backend.app.main:create_fastapi_app --factory --host 127.0.0.1 --port ${backendPort}`,
+      url: `${backendUrl}/health`,
       timeout: 60_000,
       reuseExistingServer,
       env: backendEnv,
     },
     {
-      command: "npm run dev -- --host 127.0.0.1",
-      url: "http://127.0.0.1:5173",
+      command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort}`,
+      url: frontendUrl,
       timeout: 60_000,
       reuseExistingServer,
       env: frontendEnv,
     },
   ],
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: frontendUrl,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },

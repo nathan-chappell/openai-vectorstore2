@@ -32,7 +32,13 @@ def test_configure_logging_writes_plain_file(tmp_path: Path) -> None:
         assert "INFO" in contents
         assert "tests.logging file logging smoke" in contents
         assert "\x1b[" not in contents
+        logging.getLogger("uvicorn.error").warning("framework warning smoke")
+        for handler in logging.getLogger().handlers:
+            handler.flush()
+        contents = log_path.read_text(encoding="utf-8")
+        assert "uvicorn.error framework warning smoke" in contents
         assert logging.getLogger("uvicorn.access").level >= logging.WARNING
+        assert logging.getLogger("uvicorn.error").propagate is True
     finally:
         for handler in logging.getLogger().handlers[:]:
             logging.getLogger().removeHandler(handler)

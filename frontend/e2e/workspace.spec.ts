@@ -1,7 +1,7 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 import { resolve } from "node:path";
 
-const BACKEND_URL = "http://127.0.0.1:8000";
+const BACKEND_URL = `http://127.0.0.1:${process.env.PLAYWRIGHT_BACKEND_PORT ?? "8000"}`;
 const AUTH_HEADERS = { Authorization: "Bearer local-dev" };
 const FIXTURE_NOW = "2026-04-26T19:55:00.000Z";
 
@@ -208,6 +208,19 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
       status: "ready",
       byte_size: 128,
     });
+  const secondShortcutFile = (): FixtureRecord =>
+    filesystemEntry({
+      id: "entry-second-shortcut-note",
+      kind: "file",
+      name: "second-shortcut-note.txt",
+      path: "/Shortcuts/second-shortcut-note.txt",
+      parent_id: shortcutFolder.id,
+      source_id: null,
+      source_kind: "text",
+      media_type: "text/plain",
+      status: "ready",
+      byte_size: 256,
+    });
 
   await page.route("**/api/filesystem/entries/**", async (route) => {
     expect(route.request().method()).toBe("PATCH");
@@ -219,9 +232,9 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   await page.route("**/api/filesystem/delete", async (route) => {
     expect(route.request().method()).toBe("POST");
     const payload = route.request().postDataJSON() as { entry_ids: string[]; confirm: boolean };
-    expect(payload).toEqual({ entry_ids: ["entry-shortcut-note"], confirm: true });
+    expect(payload).toEqual({ entry_ids: ["entry-shortcut-note", "entry-second-shortcut-note"], confirm: true });
     deleted = true;
-    await route.fulfill({ json: { deleted_entry_ids: ["entry-shortcut-note"], deleted_source_ids: [] } });
+    await route.fulfill({ json: { deleted_entry_ids: ["entry-shortcut-note", "entry-second-shortcut-note"], deleted_source_ids: [] } });
   });
   await page.route("**/api/filesystem**", async (route) => {
     const url = new URL(route.request().url());
@@ -242,7 +255,7 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
             { id: rootEntry.id, name: "Files", path: "/" },
             { id: shortcutFolder.id, name: shortcutFolder.name, path: shortcutFolder.path },
           ],
-          entries: deleted ? [] : [shortcutFile()],
+          entries: deleted ? [] : [shortcutFile(), secondShortcutFile()],
         },
       });
       return;
@@ -257,10 +270,12 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   });
 
   await page.goto("/");
-  await page.locator(".file-rows [role='row']").filter({ hasText: "Shortcuts" }).dblclick();
+  const shortcutFolderRow = page.locator('[data-entry-id="folder-shortcuts"]');
+  const shortcutFileRow = page.locator('[data-entry-id="entry-shortcut-note"]');
+  await shortcutFolderRow.dblclick();
   await expect(page.locator(".breadcrumb-row")).toContainText("Shortcuts");
 
-  await page.locator(".file-rows [role='row']").filter({ hasText: fileName }).click();
+  await shortcutFileRow.click();
   page.once("dialog", async (dialog) => {
     expect(dialog.type()).toBe("prompt");
     await dialog.accept("renamed-shortcut-note.txt");
@@ -268,17 +283,25 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   await page.keyboard.press("F2");
   await expect(page.locator(".file-rows")).toContainText("renamed-shortcut-note.txt");
 
-  await page.locator(".file-rows [role='row']").filter({ hasText: "renamed-shortcut-note.txt" }).click();
-  await page.keyboard.press("Backspace");
+  await shortcutFileRow.click();
+  await page.keyboard.press("Alt+ArrowLeft");
   await expect(page.locator(".breadcrumb-row")).not.toContainText("Shortcuts");
 
-  await page.locator(".file-rows [role='row']").filter({ hasText: "Shortcuts" }).dblclick();
-  await page.locator(".file-rows [role='row']").filter({ hasText: "renamed-shortcut-note.txt" }).click();
-  page.once("dialog", async (dialog) => {
-    expect(dialog.type()).toBe("confirm");
-    await dialog.accept();
-  });
+  await shortcutFolderRow.dblclick();
+  await shortcutFileRow.click();
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.locator(".file-rows [role='row'].selected-file-row")).toHaveCount(2);
+  await page.keyboard.press("?");
+  await expect(page.getByRole("dialog", { name: "Keyboard Shortcuts" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Keyboard Shortcuts" })).toHaveCount(0);
+  await shortcutFileRow.click();
+  await page.keyboard.press("Shift+ArrowDown");
+  await expect(page.locator(".file-rows [role='row'].selected-file-row")).toHaveCount(2);
   await page.keyboard.press("Delete");
+  await expect(page.getByRole("dialog", { name: "Delete selected items?" })).toBeVisible();
+  await expect(page.getByText("Folders are deleted recursively")).toBeVisible();
+  await page.getByRole("button", { name: "Delete" }).click();
   await expect(page.locator(".file-rows")).toContainText("Folder is empty.");
   await page.screenshot({ path: testInfo.outputPath("workspace-shortcuts.png"), fullPage: true });
 });
