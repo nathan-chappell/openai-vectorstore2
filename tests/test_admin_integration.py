@@ -31,7 +31,7 @@ def test_shared_admin_integration_missing_module_errors(configured_settings: App
     settings = configured_settings.model_copy(
         update={
             "admin_integration_provider": "ai_portfolio_admin",
-            "admin_shared_module": "missing_ai_portfolio_admin.openai_vectorstore2",
+            "admin_shared_module": "missing_ai_portfolio_admin.shared_adapter",
         }
     )
 
@@ -49,7 +49,7 @@ async def test_shared_admin_integration_can_load_private_package_adapter(
     settings = configured_settings.model_copy(
         update={
             "admin_integration_provider": "ai_portfolio_admin",
-            "admin_shared_module": "ai_portfolio_admin.openai_vectorstore2",
+            "admin_shared_module": "backend.app.admin.shared_adapter",
         }
     )
 

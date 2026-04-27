@@ -26,7 +26,7 @@ Private shared mode is selected with:
 
 ```bash
 ADMIN_INTEGRATION_PROVIDER=ai_portfolio_admin
-ADMIN_SHARED_MODULE=ai_portfolio_admin.openai_vectorstore2
+ADMIN_SHARED_MODULE=backend.app.admin.shared_adapter
 ```
 
 The private source of truth is expected to be:
@@ -37,9 +37,11 @@ git@github.com:nathan-chappell/ai-portfolio-admin.git
 
 The host app should mount or install that package outside the public app-domain modules. A likely setup is a git submodule such as `vendor/ai-portfolio-admin` plus an editable install in the app environment. The public app imports private implementation details only through `backend.app.admin`.
 
-The shared package should expose app-owned factories from `ADMIN_SHARED_MODULE`, starting with:
+The host app should expose app-owned factories from `ADMIN_SHARED_MODULE`, starting with:
 
 - `build_auth_service(settings)` for an auth service compatible with this app's `AuthService` boundary;
 - `payment_integration_status(settings)` for checkout availability and provider status.
+
+Keep imports one-way: host apps import shared contracts/helpers from `vendor/ai-portfolio-admin`, while the shared submodule must not import host modules such as `backend.app`.
 
 Future payment work should stay provider-neutral at the app boundary: create checkout requests, verify provider callbacks or webhooks, idempotently grant credits, store provider references, and expose updated balances. PayPal-specific order creation, approval, capture, webhook verification, refund, and chargeback logic belongs in the private shared package plan before it is wired into this app.
