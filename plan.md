@@ -100,6 +100,7 @@ Implementation plan:
 - Completed ChatKit component split: moved ChatKit rendering/configuration into a focused typed component while keeping app-owned callbacks in `App.tsx`.
 - Completed header component split: moved workspace header presentation into a focused typed component.
 - Completed Library view component split: moved tag/semantic search controls and result-row rendering into a focused typed component.
+- Completed Explorer widget split: moved file rows and explorer/delete shortcut dialogs into focused typed components.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
 - Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
