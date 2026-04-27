@@ -24,7 +24,7 @@ class ClerkUserPayload(TypedDict, total=False):
     id: str
     primary_email_address_id: str
     email_addresses: list[ClerkEmailPayload]
-    private_metadata: dict[str, object]
+    public_metadata: dict[str, object]
     first_name: str
     last_name: str
     username: str
@@ -172,18 +172,18 @@ class AuthService:
         current = await self._http_client.get(f"/v1/users/{clerk_user_id}")
         current.raise_for_status()
         payload = _clerk_user_payload(current.json())
-        private_metadata = _private_metadata_from_payload(payload)
-        private_metadata[self._settings.clerk_active_metadata_key] = active
+        public_metadata = _public_metadata_from_payload(payload)
+        public_metadata[self._settings.clerk_active_metadata_key] = active
         if (
             active
-            and self._coerce_credit_floor(private_metadata.get(self._settings.clerk_credit_floor_metadata_key)) is None
+            and self._coerce_credit_floor(public_metadata.get(self._settings.clerk_credit_floor_metadata_key)) is None
         ):
-            private_metadata[self._settings.clerk_credit_floor_metadata_key] = (
+            public_metadata[self._settings.clerk_credit_floor_metadata_key] = (
                 self._settings.billing_default_credit_floor_usd
             )
         updated = await self._http_client.patch(
             f"/v1/users/{clerk_user_id}",
-            json={"private_metadata": private_metadata},
+            json={"public_metadata": public_metadata},
         )
         updated.raise_for_status()
         return self._user_record_from_payload(_clerk_user_payload(updated.json()), clerk_user_id=clerk_user_id)
@@ -225,28 +225,28 @@ class AuthService:
 
     def _admin_user_record_from_payload(self, payload: ClerkUserPayload) -> AdminUserRecord:
         clerk_user_id = str(payload.get("id") or "").strip()
-        private_metadata = _private_metadata_from_payload(payload)
+        public_metadata = _public_metadata_from_payload(payload)
         return AdminUserRecord(
             clerk_user_id=clerk_user_id,
             primary_email=_extract_primary_email(payload),
             display_name=_extract_display_name(payload, clerk_user_id),
             image_url=payload.get("image_url"),
-            active=_metadata_bool(private_metadata, self._settings.clerk_active_metadata_key),
-            role=_metadata_str(private_metadata, self._settings.clerk_role_metadata_key),
-            credit_floor_usd=self._resolve_credit_floor(private_metadata),
+            active=_metadata_bool(public_metadata, self._settings.clerk_active_metadata_key),
+            role=_metadata_str(public_metadata, self._settings.clerk_role_metadata_key),
+            credit_floor_usd=self._resolve_credit_floor(public_metadata),
             created_at_ms=_int_or_none(payload.get("created_at")),
             last_sign_in_at_ms=_int_or_none(payload.get("last_sign_in_at")),
         )
 
     def _user_record_from_payload(self, payload: ClerkUserPayload, *, clerk_user_id: str) -> UserRecord:
-        private_metadata = _private_metadata_from_payload(payload)
+        public_metadata = _public_metadata_from_payload(payload)
         return UserRecord(
             clerk_user_id=clerk_user_id,
             primary_email=_extract_primary_email(payload),
             display_name=_extract_display_name(payload, clerk_user_id),
-            active=_metadata_bool(private_metadata, self._settings.clerk_active_metadata_key),
-            role=_metadata_str(private_metadata, self._settings.clerk_role_metadata_key),
-            credit_floor_usd=self._resolve_credit_floor(private_metadata),
+            active=_metadata_bool(public_metadata, self._settings.clerk_active_metadata_key),
+            role=_metadata_str(public_metadata, self._settings.clerk_role_metadata_key),
+            credit_floor_usd=self._resolve_credit_floor(public_metadata),
         )
 
     def _resolve_credit_floor(self, metadata: Mapping[str, object]) -> float:
@@ -296,9 +296,9 @@ def _clerk_user_payload(raw_payload: object) -> ClerkUserPayload:
         if raw_value is not None:
             payload[key] = raw_value
 
-    raw_metadata = raw_payload.get("private_metadata")
+    raw_metadata = raw_payload.get("public_metadata")
     if isinstance(raw_metadata, dict):
-        payload["private_metadata"] = {key: value for key, value in raw_metadata.items() if isinstance(key, str)}
+        payload["public_metadata"] = {key: value for key, value in raw_metadata.items() if isinstance(key, str)}
 
     raw_email_addresses = raw_payload.get("email_addresses")
     if isinstance(raw_email_addresses, list):
@@ -327,8 +327,8 @@ def _clerk_user_payloads(raw_payload: object) -> list[ClerkUserPayload]:
     return [_clerk_user_payload(item) for item in raw_items]
 
 
-def _private_metadata_from_payload(payload: ClerkUserPayload) -> dict[str, object]:
-    return dict(payload.get("private_metadata", {}))
+def _public_metadata_from_payload(payload: ClerkUserPayload) -> dict[str, object]:
+    return dict(payload.get("public_metadata", {}))
 
 
 def _metadata_str(metadata: Mapping[str, object], key: str) -> str | None:

@@ -19,7 +19,7 @@ When `VITE_CLERK_PUBLISHABLE_KEY` is set, the frontend wraps the app with `Clerk
 - `frontend/src/main.tsx` obtains Clerk tokens with `useAuth().getToken()`.
 - REST and ChatKit requests send the token as `Authorization: Bearer ...`.
 - `backend/app/services/auth.py` validates Clerk session or OAuth tokens and then loads user profile metadata from Clerk.
-- Account activation is currently driven by Clerk private metadata. The default keys are `active` and `role`.
+- Account activation and admin role checks are driven by Clerk public metadata. The default keys are `active`, `role`, and `credit_floor_usd`.
 
 Relevant env vars:
 
