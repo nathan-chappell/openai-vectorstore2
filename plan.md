@@ -103,6 +103,7 @@ Implementation plan:
 - Completed Explorer widget split: moved file rows and explorer/delete shortcut dialogs into focused typed components.
 - Completed research-builder component split: moved research candidate controls/status rendering into a focused typed component.
 - Completed Explorer shell split: moved the remaining Explorer/Library pane shell and keyboard handling into a focused typed component, leaving `App.tsx` primarily as state orchestration.
+- Completed API contract pass: named repeated frontend request parameter shapes and reused filter/query serializers at the API boundary.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
 - Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.

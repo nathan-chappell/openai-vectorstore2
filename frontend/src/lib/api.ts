@@ -1,19 +1,26 @@
 import type {
   ActionResponse,
   AuthUser,
+  BranchSearchRequest,
   BranchSearchResponse,
+  FilesystemListParams,
   FilesystemCreateFolderRequest,
   FilesystemDeleteRequest,
   FilesystemDeleteResponse,
   FilesystemEntrySummary,
   FilesystemListResponse,
+  FilesystemSearchParams,
   FilesystemSearchResponse,
+  FreeformActionRequest,
+  ImageActionRequest,
   FilesystemUpdateEntryRequest,
   IngestFinalizeResponse,
+  PaginationParams,
+  QaActionRequest,
   ResearchCandidateIngestRequest,
   ResearchCandidateIngestResponse,
   ResearchCandidateListResponse,
-  ResearchCandidateStatus,
+  ResearchCandidateListParams,
   ResearchCandidateStatusUpdateRequest,
   ResearchCandidateStatusUpdateResponse,
   ResearchImportCreateRequest,
@@ -21,18 +28,21 @@ import type {
   ResearchLibraryBuildRequest,
   ResearchLibraryBuildResponse,
   ResplitSourceRequest,
+  SearchChunksRequest,
   SearchFilterPayload,
   SearchResponse,
   SplitPreviewResponse,
   SourceDetail,
+  SourceListParams,
   SourceListResponse,
   SourceTagsUpdateRequest,
   TagCreateRequest,
-  TagMatchMode,
+  TaggedSearchParams,
   TagMutationResponse,
   TagSummary,
   TagUpdateRequest,
   TaskListResponse,
+  VoiceActionRequest,
 } from "./types";
 
 const API_BASE_URL = normalizeBase(import.meta.env.VITE_API_BASE_URL ?? "/api");
@@ -40,6 +50,16 @@ const CHATKIT_DOMAIN_KEY = import.meta.env.VITE_CHATKIT_DOMAIN_KEY ?? "domain_pk
 
 let bearerTokenGetter: (() => Promise<string | null>) | null = null;
 let chatKitMetadataGetter: (() => Record<string, unknown> | null) | null = null;
+
+type SearchFilterRequestBody = {
+  selected_source_ids: string[];
+  source_kinds: NonNullable<SearchFilterPayload["sourceKinds"]>;
+  tag_ids: string[];
+  tag_match_mode: "all" | "any";
+  virtual_paths: string[];
+  created_after: string | null;
+  created_before: string | null;
+};
 
 export class ApiError extends Error {
   status: number;
@@ -78,29 +98,10 @@ export async function getAuthenticatedUser(): Promise<AuthUser> {
   return apiRequest<AuthUser>("/auth/me");
 }
 
-export async function listSources(params: {
-  query?: string;
-  tagIds?: string[];
-  tagMatchMode?: TagMatchMode;
-  page?: number;
-  pageSize?: number;
-}): Promise<SourceListResponse> {
+export async function listSources(params: SourceListParams): Promise<SourceListResponse> {
   const searchParams = new URLSearchParams();
-  if (params.query) {
-    searchParams.set("query", params.query);
-  }
-  for (const tagId of params.tagIds ?? []) {
-    searchParams.append("tag_ids", tagId);
-  }
-  if (params.tagMatchMode) {
-    searchParams.set("tag_match_mode", params.tagMatchMode);
-  }
-  if (params.page) {
-    searchParams.set("page", String(params.page));
-  }
-  if (params.pageSize) {
-    searchParams.set("page_size", String(params.pageSize));
-  }
+  appendTaggedSearchParams(searchParams, params);
+  appendPaginationParams(searchParams, params);
   const suffix = searchParams.toString();
   return apiRequest<SourceListResponse>(suffix ? `/sources?${suffix}` : "/sources");
 }
@@ -109,7 +110,7 @@ export async function getSource(sourceId: string): Promise<SourceDetail> {
   return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}`);
 }
 
-export async function listFilesystem(params: { folderId?: string | null } = {}): Promise<FilesystemListResponse> {
+export async function listFilesystem(params: FilesystemListParams = {}): Promise<FilesystemListResponse> {
   const searchParams = new URLSearchParams();
   if (params.folderId) {
     searchParams.set("folder_id", params.folderId);
@@ -118,29 +119,10 @@ export async function listFilesystem(params: { folderId?: string | null } = {}):
   return apiRequest<FilesystemListResponse>(suffix ? `/filesystem?${suffix}` : "/filesystem");
 }
 
-export async function searchFilesystem(params: {
-  query?: string | null;
-  tagIds?: string[];
-  tagMatchMode?: TagMatchMode;
-  page?: number;
-  pageSize?: number;
-}): Promise<FilesystemSearchResponse> {
+export async function searchFilesystem(params: FilesystemSearchParams): Promise<FilesystemSearchResponse> {
   const searchParams = new URLSearchParams();
-  if (params.query?.trim()) {
-    searchParams.set("query", params.query.trim());
-  }
-  for (const tagId of params.tagIds ?? []) {
-    searchParams.append("tag_ids", tagId);
-  }
-  if (params.tagMatchMode) {
-    searchParams.set("tag_match_mode", params.tagMatchMode);
-  }
-  if (params.page) {
-    searchParams.set("page", String(params.page));
-  }
-  if (params.pageSize) {
-    searchParams.set("page_size", String(params.pageSize));
-  }
+  appendTaggedSearchParams(searchParams, params);
+  appendPaginationParams(searchParams, params);
   const suffix = searchParams.toString();
   return apiRequest<FilesystemSearchResponse>(suffix ? `/filesystem/search?${suffix}` : "/filesystem/search");
 }
@@ -270,12 +252,7 @@ export async function buildResearchLibrary(payload: ResearchLibraryBuildRequest)
   });
 }
 
-export async function listResearchCandidates(params: {
-  taskId?: string | null;
-  status?: ResearchCandidateStatus | null;
-  page?: number;
-  pageSize?: number;
-} = {}): Promise<ResearchCandidateListResponse> {
+export async function listResearchCandidates(params: ResearchCandidateListParams = {}): Promise<ResearchCandidateListResponse> {
   const searchParams = new URLSearchParams();
   if (params.taskId) {
     searchParams.set("task_id", params.taskId);
@@ -283,12 +260,7 @@ export async function listResearchCandidates(params: {
   if (params.status) {
     searchParams.set("status", params.status);
   }
-  if (params.page) {
-    searchParams.set("page", String(params.page));
-  }
-  if (params.pageSize) {
-    searchParams.set("page_size", String(params.pageSize));
-  }
+  appendPaginationParams(searchParams, params);
   const suffix = searchParams.toString();
   return apiRequest<ResearchCandidateListResponse>(suffix ? `/research/candidates?${suffix}` : "/research/candidates");
 }
@@ -309,54 +281,30 @@ export async function ingestResearchCandidates(payload: ResearchCandidateIngestR
   });
 }
 
-export async function searchChunks(payload: {
-  query: string;
-  maxResults?: number;
-} & SearchFilterPayload): Promise<SearchResponse> {
+export async function searchChunks(payload: SearchChunksRequest): Promise<SearchResponse> {
   return apiRequest<SearchResponse>("/search", {
     method: "POST",
     body: JSON.stringify({
       query: payload.query,
-      selected_source_ids: payload.selectedSourceIds ?? [],
-      source_kinds: payload.sourceKinds ?? [],
-      tag_ids: payload.tagIds ?? [],
-      tag_match_mode: payload.tagMatchMode ?? "all",
-      virtual_paths: payload.virtualPaths ?? [],
-      created_after: payload.createdAfter ?? null,
-      created_before: payload.createdBefore ?? null,
+      ...searchFilterRequestBody(payload),
       max_results: payload.maxResults ?? 8,
     }),
   });
 }
 
-export async function branchSearch(payload: {
-  query: string;
-  descend?: number;
-  maxWidth?: number;
-} & SearchFilterPayload): Promise<BranchSearchResponse> {
+export async function branchSearch(payload: BranchSearchRequest): Promise<BranchSearchResponse> {
   return apiRequest<BranchSearchResponse>("/search/branch", {
     method: "POST",
     body: JSON.stringify({
       query: payload.query,
-      selected_source_ids: payload.selectedSourceIds ?? [],
-      source_kinds: payload.sourceKinds ?? [],
-      tag_ids: payload.tagIds ?? [],
-      tag_match_mode: payload.tagMatchMode ?? "all",
-      virtual_paths: payload.virtualPaths ?? [],
-      created_after: payload.createdAfter ?? null,
-      created_before: payload.createdBefore ?? null,
+      ...searchFilterRequestBody(payload),
       descend: payload.descend ?? 2,
       max_width: payload.maxWidth ?? 3,
     }),
   });
 }
 
-export async function qaAction(payload: {
-  prompt: string;
-  selectedSourceIds?: string[];
-  tagIds?: string[];
-  tagMatchMode?: TagMatchMode;
-}): Promise<ActionResponse> {
+export async function qaAction(payload: QaActionRequest): Promise<ActionResponse> {
   return apiRequest<ActionResponse>("/actions/qa", {
     method: "POST",
     body: JSON.stringify({
@@ -368,11 +316,7 @@ export async function qaAction(payload: {
   });
 }
 
-export async function freeformAction(payload: {
-  prompt: string;
-  mode: "grounded" | "creative";
-  selectedSourceIds?: string[];
-}): Promise<ActionResponse> {
+export async function freeformAction(payload: FreeformActionRequest): Promise<ActionResponse> {
   return apiRequest<ActionResponse>("/actions/freeform", {
     method: "POST",
     body: JSON.stringify({
@@ -383,7 +327,7 @@ export async function freeformAction(payload: {
   });
 }
 
-export async function imageAction(payload: { prompt: string; selectedSourceIds?: string[] }): Promise<ActionResponse> {
+export async function imageAction(payload: ImageActionRequest): Promise<ActionResponse> {
   return apiRequest<ActionResponse>("/actions/image", {
     method: "POST",
     body: JSON.stringify({
@@ -393,7 +337,7 @@ export async function imageAction(payload: { prompt: string; selectedSourceIds?:
   });
 }
 
-export async function voiceAction(payload: { prompt: string; sourceText?: string; selectedSourceIds?: string[] }): Promise<ActionResponse> {
+export async function voiceAction(payload: VoiceActionRequest): Promise<ActionResponse> {
   return apiRequest<ActionResponse>("/actions/voice", {
     method: "POST",
     body: JSON.stringify({
@@ -406,6 +350,42 @@ export async function voiceAction(payload: { prompt: string; sourceText?: string
 
 export async function listTasks(): Promise<TaskListResponse> {
   return apiRequest<TaskListResponse>("/tasks");
+}
+
+function appendTaggedSearchParams(
+  searchParams: URLSearchParams,
+  params: TaggedSearchParams,
+): void {
+  if (params.query?.trim()) {
+    searchParams.set("query", params.query.trim());
+  }
+  for (const tagId of params.tagIds ?? []) {
+    searchParams.append("tag_ids", tagId);
+  }
+  if (params.tagMatchMode) {
+    searchParams.set("tag_match_mode", params.tagMatchMode);
+  }
+}
+
+function appendPaginationParams(searchParams: URLSearchParams, params: PaginationParams): void {
+  if (params.page) {
+    searchParams.set("page", String(params.page));
+  }
+  if (params.pageSize) {
+    searchParams.set("page_size", String(params.pageSize));
+  }
+}
+
+function searchFilterRequestBody(payload: SearchFilterPayload): SearchFilterRequestBody {
+  return {
+    selected_source_ids: payload.selectedSourceIds ?? [],
+    source_kinds: payload.sourceKinds ?? [],
+    tag_ids: payload.tagIds ?? [],
+    tag_match_mode: payload.tagMatchMode ?? "all",
+    virtual_paths: payload.virtualPaths ?? [],
+    created_after: payload.createdAfter ?? null,
+    created_before: payload.createdBefore ?? null,
+  };
 }
 
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {

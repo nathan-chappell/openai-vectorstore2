@@ -14,6 +14,65 @@ export type SearchFilterPayload = {
   createdBefore?: string | null;
 };
 
+export type PaginationParams = {
+  page?: number;
+  pageSize?: number;
+};
+
+export type TaggedSearchParams = {
+  query?: string | null;
+  tagIds?: string[];
+  tagMatchMode?: TagMatchMode;
+};
+
+export type SourceListParams = TaggedSearchParams & PaginationParams;
+
+export type FilesystemListParams = {
+  folderId?: string | null;
+};
+
+export type FilesystemSearchParams = TaggedSearchParams & PaginationParams;
+
+export type ResearchCandidateListParams = PaginationParams & {
+  taskId?: string | null;
+  status?: ResearchCandidateStatus | null;
+};
+
+export type SearchChunksRequest = SearchFilterPayload & {
+  query: string;
+  maxResults?: number;
+};
+
+export type BranchSearchRequest = SearchFilterPayload & {
+  query: string;
+  descend?: number;
+  maxWidth?: number;
+};
+
+export type QaActionRequest = {
+  prompt: string;
+  selectedSourceIds?: string[];
+  tagIds?: string[];
+  tagMatchMode?: TagMatchMode;
+};
+
+export type FreeformActionRequest = {
+  prompt: string;
+  mode: "grounded" | "creative";
+  selectedSourceIds?: string[];
+};
+
+export type ImageActionRequest = {
+  prompt: string;
+  selectedSourceIds?: string[];
+};
+
+export type VoiceActionRequest = {
+  prompt: string;
+  sourceText?: string;
+  selectedSourceIds?: string[];
+};
+
 export type AuthUser = {
   clerk_user_id: string;
   display_name: string;
