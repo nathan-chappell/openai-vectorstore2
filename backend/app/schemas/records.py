@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, NotRequired, TypeAlias, TypedDict
+from typing import Literal, NotRequired, TypeAlias, TypedDict
 
 from pydantic import BaseModel, Field
 
@@ -40,6 +40,14 @@ class ResearchProvenance(SourceMetadata, total=False):
     parent_source_file_id: str
     target_folder_id: str
     discovery_depth: int
+
+
+def _empty_source_metadata() -> SourceMetadata:
+    return {}
+
+
+def _empty_research_provenance() -> ResearchProvenance:
+    return {}
 
 
 class OpenAIUsageDetails(TypedDict, total=False):
@@ -353,7 +361,7 @@ class LibrarySourceDetail(LibrarySourceSummary):
     storage_provider: str
     storage_key: str
     ingest_strategy: str | None = None
-    metadata: dict[str, Any] = Field(default_factory=dict)
+    metadata: SourceMetadata = Field(default_factory=_empty_source_metadata)
     chunks: list[ChunkSummary] = Field(default_factory=list)
 
 
@@ -471,7 +479,7 @@ class ResearchImportCandidateSummary(BaseModel):
     parent_candidate_id: str | None = None
     parent_source_file_id: str | None = None
     linked_source_file_id: str | None = None
-    provenance: dict[str, Any] = Field(default_factory=dict)
+    provenance: ResearchProvenance = Field(default_factory=_empty_research_provenance)
     content_hash: str | None = None
     error_message: str | None = None
     created_at: datetime

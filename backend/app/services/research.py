@@ -1297,7 +1297,7 @@ class ResearchImportService:
             parent_candidate_id=candidate.parent_candidate_id,
             parent_source_file_id=candidate.parent_source_file_id,
             linked_source_file_id=candidate.linked_source_file_id,
-            provenance=dict(candidate.provenance),
+            provenance=candidate.provenance,
             content_hash=candidate.content_hash,
             error_message=error_message,
             created_at=candidate.created_at,

@@ -2828,7 +2828,7 @@ class SourceService:
             storage_provider=source.storage_provider,
             storage_key=source.storage_key,
             ingest_strategy=source.ingest_strategy,
-            metadata=dict(source.source_metadata),
+            metadata=source.source_metadata,
             chunks=[self._chunk_summary(chunk) for chunk in sorted(source.chunks, key=lambda item: item.sequence)],
         )
 
