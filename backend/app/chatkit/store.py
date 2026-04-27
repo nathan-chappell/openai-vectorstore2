@@ -102,8 +102,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
                     query = query.where(
                         AppChatEntry.sequence < cursor.sequence
                         if order == "desc"
-                        else AppChatEntry.sequence > cursor.sequence
+                            else AppChatEntry.sequence > cursor.sequence
                     )
+            query = query.where(AppChatEntry.visibility == "active")
             query = query.order_by(
                 AppChatEntry.sequence.desc() if order == "desc" else AppChatEntry.sequence.asc()
             ).limit(limit + 1)
@@ -131,6 +132,83 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
             if record is None or record.thread_id != thread_id:
                 raise NotFoundError(f"Thread item {item_id} was not found")
             return THREAD_ITEM_ADAPTER.validate_python(record.payload)
+
+    async def compact_thread_items(
+        self,
+        *,
+        thread_id: str,
+        item_ids: list[str],
+        summary_item: ThreadItem,
+        compaction_group_id: str,
+        context: VectorstoreChatContext,
+    ) -> int:
+        unique_item_ids = list(dict.fromkeys(item_id for item_id in item_ids if item_id != summary_item.id))
+        if not unique_item_ids:
+            await self.save_item(thread_id, summary_item, context=context)
+            return 0
+
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
+            await self._require_thread(session, thread_id=thread_id, user_id=app_user.id)
+            compacted_at = datetime.now(UTC)
+            records = list(
+                (
+                    await session.execute(
+                        select(AppChatEntry).where(
+                            AppChatEntry.thread_id == thread_id,
+                            AppChatEntry.id.in_(unique_item_ids),
+                            AppChatEntry.visibility == "active",
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for record in records:
+                record.visibility = "compacted"
+                record.compaction_group_id = compaction_group_id
+                record.compacted_at = compacted_at
+            summary_sequence = max(record.sequence for record in records) + 1
+            later_records = list(
+                (
+                    await session.execute(
+                        select(AppChatEntry)
+                        .where(
+                            AppChatEntry.thread_id == thread_id,
+                            AppChatEntry.sequence >= summary_sequence,
+                            AppChatEntry.id != summary_item.id,
+                        )
+                        .order_by(AppChatEntry.sequence.desc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            for record in later_records:
+                record.sequence += 1
+                await session.flush()
+            existing_summary = await session.get(AppChatEntry, summary_item.id)
+            if existing_summary is None:
+                session.add(
+                    AppChatEntry(
+                        id=summary_item.id,
+                        thread_id=thread_id,
+                        sequence=summary_sequence,
+                        item_type=summary_item.type,
+                        visibility="active",
+                        payload=summary_item.model_dump(mode="json"),
+                        compaction_group_id=compaction_group_id,
+                    )
+                )
+            elif existing_summary.thread_id == thread_id:
+                existing_summary.item_type = summary_item.type
+                existing_summary.visibility = "active"
+                existing_summary.payload = summary_item.model_dump(mode="json")
+                existing_summary.compaction_group_id = compaction_group_id
+                existing_summary.compacted_at = None
+            await session.commit()
+            return len(records)
 
     async def delete_thread(self, thread_id: str, context: VectorstoreChatContext) -> None:
         await self._database.ensure_ready()
@@ -315,12 +393,14 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
                         thread_id=thread_id,
                         sequence=await self._next_item_sequence(session, thread_id=thread_id),
                         item_type=item.type,
+                        visibility="active",
                         payload=item.model_dump(mode="json"),
                     )
                 )
             else:
                 existing.payload = item.model_dump(mode="json")
                 existing.item_type = item.type
+                existing.visibility = "active"
             await session.commit()
 
     @staticmethod

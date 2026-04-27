@@ -23,6 +23,8 @@ class SourceMetadata(TypedDict, total=False):
     fetched_url: str
     content_hash: str
     fetched_at: str
+    research_import_task_id: str
+    research_candidate_id: str
     artifact_kind: str
     report_title: str
     report_format: str

@@ -475,13 +475,17 @@ class AppChatEntry(Base):
     __table_args__ = (
         UniqueConstraint("thread_id", "sequence", name="uq_app_chat_entry_thread_sequence"),
         Index("ix_app_chat_entry_thread_sequence", "thread_id", "sequence"),
+        Index("ix_app_chat_entry_thread_visibility_sequence", "thread_id", "visibility", "sequence"),
     )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     thread_id: Mapped[str] = mapped_column(ForeignKey("app_chat_thread.id"), nullable=False, index=True)
     sequence: Mapped[int] = mapped_column(nullable=False)
     item_type: Mapped[str] = mapped_column(String(80), nullable=False)
+    visibility: Mapped[str] = mapped_column(String(24), nullable=False, default="active")
     payload: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False)
+    compaction_group_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    compacted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
     thread: Mapped[AppChatThread] = relationship(back_populates="entries")

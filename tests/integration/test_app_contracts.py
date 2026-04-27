@@ -11,16 +11,26 @@ import sys
 from time import monotonic
 from typing import cast
 
-from chatkit.types import FileAttachment, ThreadMetadata
+from chatkit.types import (
+    AssistantMessageContent,
+    AssistantMessageItem,
+    FileAttachment,
+    InferenceOptions,
+    ThreadMetadata,
+    UserMessageItem,
+    UserMessageTextContent,
+)
 import httpx
 import pytest
+from sqlalchemy import select
 
 from backend import create_fastapi_app
 from backend.app.bootstrap import AppServices, create_services
+from backend.app.chatkit.store import VectorstoreChatStore
 from backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, rest_route_names
 from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
-from backend.app.models import AppChatAttachment
+from backend.app.models import AppChatAttachment, AppChatEntry
 from backend.app.schemas import TaskDetail
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1789,6 +1799,102 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
         assert isinstance(loaded.metadata["scope_updated_at"], str)
         assert loaded.metadata["openai_conversation_id"] == "conv_scope_test"
         assert loaded.metadata["openai_previous_response_id"] == "resp_scope_test"
+    finally:
+        await services.close()
+
+
+@pytest.mark.asyncio
+async def test_chatkit_store_compacts_thread_items_without_deleting_originals(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    try:
+        context = services.chatkit_server.build_user_context(
+            clerk_user_id="local-dev",
+            user_email=None,
+            display_name="Local Dev",
+            role="admin",
+            credit_floor_usd=-1.0,
+            bearer_token="local-dev",
+        )
+        thread = ThreadMetadata(id="chat_compaction_test", created_at=datetime.now(UTC), metadata={})
+        await services.chatkit_server.store.save_thread(thread, context=context)
+        user_1 = UserMessageItem(
+            id="chat_compact_user_1",
+            thread_id=thread.id,
+            created_at=datetime.now(UTC),
+            content=[UserMessageTextContent(text="First long user turn")],
+            inference_options=InferenceOptions(),
+        )
+        assistant_1 = AssistantMessageItem(
+            id="chat_compact_assistant_1",
+            thread_id=thread.id,
+            created_at=datetime.now(UTC),
+            content=[AssistantMessageContent(text="First long assistant answer")],
+        )
+        user_2 = UserMessageItem(
+            id="chat_compact_user_2",
+            thread_id=thread.id,
+            created_at=datetime.now(UTC),
+            content=[UserMessageTextContent(text="Current active question")],
+            inference_options=InferenceOptions(),
+        )
+        summary = AssistantMessageItem(
+            id="chat_compact_summary_1",
+            thread_id=thread.id,
+            created_at=datetime.now(UTC),
+            content=[AssistantMessageContent(text="## Data\n- source_a remains relevant")],
+        )
+        await services.chatkit_server.store.save_item(thread.id, user_1, context=context)
+        await services.chatkit_server.store.save_item(thread.id, assistant_1, context=context)
+        await services.chatkit_server.store.save_item(thread.id, user_2, context=context)
+
+        chat_store = cast(VectorstoreChatStore, services.chatkit_server.store)
+        compacted_count = await chat_store.compact_thread_items(
+            thread_id=thread.id,
+            item_ids=[user_1.id, assistant_1.id],
+            summary_item=summary,
+            compaction_group_id="compact_group_1",
+            context=context,
+        )
+        active_page = await services.chatkit_server.store.load_thread_items(
+            thread.id,
+            after=None,
+            limit=10,
+            order="asc",
+            context=context,
+        )
+
+        assert compacted_count == 2
+        assert [item.id for item in active_page.data] == [summary.id, user_2.id]
+        async with services.database.session() as session:
+            compacted_entries = list(
+                (
+                    await session.execute(
+                        select(AppChatEntry)
+                        .where(AppChatEntry.thread_id == thread.id)
+                        .order_by(AppChatEntry.sequence.asc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert [entry.id for entry in compacted_entries] == [
+                user_1.id,
+                assistant_1.id,
+                summary.id,
+                user_2.id,
+            ]
+            assert [entry.visibility for entry in compacted_entries] == [
+                "compacted",
+                "compacted",
+                "active",
+                "active",
+            ]
+            assert compacted_entries[0].compaction_group_id == "compact_group_1"
+            assert compacted_entries[0].compacted_at is not None
     finally:
         await services.close()
 

@@ -37,6 +37,20 @@ DATABASE_SCHEMA_MODE=migrations
 VITE_CHATKIT_DOMAIN_KEY=
 ```
 
+`openai_responses` is still the default agent provider. The first compatibility-mode configuration surface is available for OpenAI-compatible `/v1/chat/completions` endpoints:
+
+```bash
+AGENT_MODEL_PROVIDER=openai_responses
+CHAT_COMPLETIONS_MODEL=gpt-5.4-mini
+CHAT_COMPLETIONS_BASE_URL=
+CHAT_COMPLETIONS_API_KEY=
+CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS=
+CHAT_COMPLETIONS_WEB_SEARCH_URL=
+CHAT_COMPLETIONS_ON_PREM_PRICE_PER_MILLION_TOKENS=1.0
+```
+
+Leave `CHAT_COMPLETIONS_BASE_URL` and `CHAT_COMPLETIONS_API_KEY` empty to use the normal OpenAI client defaults and `OPENAI_API_KEY`. Set `CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS` for private or OSS models whose context size is not in the app's known model table. On-prem billing uses the placeholder per-million-token rate until real infrastructure costs are modeled.
+
 Set Clerk values when browser auth is enabled:
 
 ```bash

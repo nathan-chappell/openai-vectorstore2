@@ -272,7 +272,7 @@ Add Playwright coverage for normal file-library work:
 
 ### 7. On-Prem OSS Model Support
 
-Status: planned; private companion repo initialized as `vendor/openai-vectorstore2-on-prem`.
+Status: first compatibility foundation implemented; private companion repo initialized as `vendor/openai-vectorstore2-on-prem`.
 
 Goal:
 
@@ -297,18 +297,51 @@ Submodule structure:
 
 Provider/agent architecture:
 
-- Add an app-level model-provider abstraction for agent turns with at least two implementations: `openai_responses` and `openai_compatible_completions_v1`.
+- Completed first pass: added `chat_completions_v1` runtime settings, a typed OpenAI-compatible chat-completions gateway boundary, known model context-window resolution, 75/25-style context-compaction budget helpers, a simple POST web-search gateway contract, and tests for model context/summary behavior.
+- Add an app-level model-provider abstraction for agent turns with at least two implementations: `openai_responses` and `chat_completions_v1`.
 - Preserve the current OpenAI Responses/Conversations ChatKit implementation for best capability, tracing, server-side state, and advanced tool use.
-- Add a "completions-v1 compatibility mode" for OpenAI-compatible chat/completions providers such as SGLang. This mode should support messages, streaming when available, tool definitions, tool call parsing, structured output where practical, and explicit conversation-state storage in the app.
+- Add a `chat_completions_v1` compatibility mode for the widely supported `/v1/chat/completions` message/tool API surface. This mode must work with OpenAI chat-completions models and with `oss-small`/`gpt-oss-20b` served through SGLang or the smallest/easiest compatible serving option if SGLang is not viable.
+- Use known context sizes only. Compatibility mode may assume either an OpenAI model with known limits or the configured OSS model served by SGLang; unknown model/context combinations should be blocked or require explicit config rather than guessed.
+- Compatibility mode should support messages, streaming when available, tool definitions, tool call parsing, structured output where practical, and explicit conversation-state storage in the app.
 - ChatKit should be able to route through either provider while preserving app-owned progress events, tool execution boundaries, selected-file scope, citation/link behavior, and cost/log metadata where applicable.
 - Tool calling should be normalized at the app boundary: the model provider proposes tool calls; app services execute them; results are serialized back in a provider-compatible shape.
-- Add clear capability flags so on-prem mode can expose unsupported features honestly, such as no managed vector stores, weaker structured-output enforcement, different reasoning traces, or missing image/voice features.
+- Add clear capability flags so on-prem mode can expose unsupported features honestly, such as pgvector local retrieval instead of managed vector stores, weaker structured-output enforcement, different reasoning traces, and deferred image/voice/transcription features.
+- Add a smoke harness that can route ChatKit agent turns through `chat_completions_v1` using OpenAI chat-completions first, then the configured OSS/SGLang endpoint.
+
+Conversation-state and context compaction:
+
+- Completed first pass: added ChatKit entry visibility/compaction metadata and a store method that marks compacted items without deleting original payloads, inserts a summary item before the remaining active segment, and keeps active history queries from replaying compacted entries.
+- `chat_completions_v1` owns conversation state in the app database because the API surface is stateless relative to Responses/Conversations.
+- Configure context windows per supported model. Start with enough OpenAI chat-completions models plus `oss-small`/`gpt-oss-20b` to cover at least 10 models, preferably around 20 when the model table is available.
+- Keep the compaction policy simple and relative to known context size. Default to a rough `75/25` policy: preserve the newest conversational/tool context until about 25% of the model context remains, then compress roughly the oldest half of the retained history into a compact summary and continue from that new segment.
+- Reserve a reasonable output budget before calculating history capacity. The exact formula is less important than keeping enough room for model output and avoiding context-limit failures.
+- Before writing the final summary, optionally ask the active model for compaction notes: what facts, source IDs, tool outputs, user preferences, unresolved tasks, and constraints are still meaningful. Then produce a concise summary from those notes.
+- The summary shape should be explicit enough for later training and debugging. Start with sections such as `Data`, `Conversation`, and `Remarks`, and include source/tool IDs as compact markdown lists where those IDs remain useful.
+- Tool calls and raw tool results do not need to be perfectly preserved after compaction, but relevant structured data should be smartly rendered into compact human/model-readable summaries, such as id/name/description/source-status bullets.
+- On-prem mode should perform its own compaction with the active on-prem provider. Include representative compaction examples in the dataset-builder path if the task proves difficult enough to benefit from fine-tuning.
+- ChatKit storage should support hiding or soft-deleting compacted thread items and inserting a completion summary at the beginning of the new visible history segment. Preserve originals according to the app's retention needs so debugging and dataset generation remain possible.
+
+Compatibility-mode retrieval and web search:
+
+- Completed first pass: documented and configured the web-search POST URL and added a typed response parser that accepts query/results/summary payloads.
+- Managed OpenAI vector-store search must become a provider implementation rather than a hard dependency for agent turns.
+- Add a local retrieval provider over pgvector for on-prem/compatibility mode. Investigate whether `oss-small`/`gpt-oss-20b` can be used effectively as an embedder; if not, document the blocker and choose a separate local embedding path before treating on-prem RAG as viable.
+- Add a web-search tool implementation for `chat_completions_v1`. It should call a configured URL with `POST` and a simple typed payload containing natural-language input and any small search options we need. The response should return web-search-compatible results that can be summarized by the agent and saved into the library.
+- Keep search results saveable as normal library sources/artifacts so later retrieval, citation, and report flows work the same way as uploaded/generated sources.
+
+On-prem feature boundary:
+
+- For the first compatibility pass, leave image generation, voice generation, transcription, and PDF vision inspection out of on-prem mode, but mark TODOs where provider implementations should attach later.
+- Transcription should be feasible later through Whisper or an equivalent local service.
+- Image/multimodal features may become feasible through OSS model capabilities, but should wait until `oss-small`/`gpt-oss-20b` runtime quality is actually tested.
+- Cost/billing for on-prem model calls should be configurable by environment. Until real costing exists, default to a placeholder rate of `$1.00` per million tokens so billing and usage paths continue to exercise normally.
 
 Fine-tuning and dataset builder:
 
 - Add a local skill or script workflow for building SFT examples from existing OpenAI platform logs, response logs, and stored conversation artifacts.
 - The dataset builder should convert multi-turn conversations into one or more supervised examples, controlled by parameters such as window size, target assistant turns, include/exclude tool calls, include system/developer messages, and redact/scrub sensitive fields.
 - Examples should preserve the production shape as much as possible: developer instructions, user request, selected context, tool calls/results, final assistant answer, and metadata about source workflow.
+- Include `chat_completions_v1` examples, web-search examples, local retrieval examples, and context-compaction examples when those workflows become representative enough to train from.
 - Build a small subjective eval set first: roughly 20 interesting examples, with about 5 "showcase" examples that demonstrate known-good behavior and about 15 held-out/generalization examples that are not used for training feedback.
 - The eval should be intentionally subjective and product-centered: quality of agent behavior, tool-use choices, evidence/citation behavior, refusal/defer behavior, report/search usefulness, and whether the answer feels like this app's agent.
 - Keep eval examples and rubrics versioned. Use model-graded critique only as a helper; final acceptability should be based on human review for the initial small set.
@@ -328,8 +361,12 @@ RunPod workflow conventions:
 Acceptance criteria:
 
 - The on-prem submodule is registered at `vendor/openai-vectorstore2-on-prem` and has a README explaining that it assumes the parent app checkout.
-- The base app has a documented provider boundary between OpenAI Responses/Conversations and OpenAI-compatible completions/chat mode.
-- ChatKit can run a smoke agent flow through the OpenAI-compatible provider without losing app-owned tool execution, progress, or selected-file behavior.
+- The base app has a documented provider boundary between OpenAI Responses/Conversations and `chat_completions_v1`.
+- ChatKit can run a smoke agent flow through `chat_completions_v1` using OpenAI chat completions without losing app-owned tool execution, progress, selected-file behavior, citation links, or context compaction.
+- `chat_completions_v1` can compact long app-owned history according to the configured model context size, soft-hide or otherwise retire old ChatKit items, and inject a `Data` / `Conversation` / `Remarks` summary into the new active segment.
+- The compatibility provider can use a configured web-search POST endpoint and save useful search results back into the library.
+- On-prem/compatibility retrieval has a pgvector implementation plan or implementation, including a decision on whether `oss-small`/`gpt-oss-20b` can serve as an embedder.
+- On-prem usage accounting works with env-configurable placeholder token pricing, defaulting to `$1.00` per million tokens.
 - The submodule contains a RunPod plan/script scaffold for SGLang serving of `gpt-oss-20b` and a dataset/eval workflow inspired by `../runpod-nlsh`.
 - A dataset-builder skill/script can produce reviewable SFT examples from logged OpenAI conversations with redaction and multi-turn example splitting.
 - A 20-example subjective eval set exists before fine-tuning work is considered successful.

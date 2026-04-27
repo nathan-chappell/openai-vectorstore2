@@ -61,6 +61,17 @@ class AppSettings(BaseSettings):
     openai_default_voice: str = "alloy"
     openai_context_compact_threshold: int | None = 80_000
 
+    agent_model_provider: Literal["openai_responses", "chat_completions_v1"] = "openai_responses"
+    chat_completions_base_url: AnyHttpUrl | None = None
+    chat_completions_api_key: SecretStr | None = None
+    chat_completions_model: str = "gpt-5.4-mini"
+    chat_completions_context_window_tokens: int | None = None
+    chat_completions_output_token_reserve: int = 4_096
+    chat_completions_compaction_remaining_ratio: float = 0.25
+    chat_completions_compaction_compress_ratio: float = 0.50
+    chat_completions_on_prem_price_per_million_tokens: float = 1.0
+    chat_completions_web_search_url: AnyHttpUrl | None = None
+
     billing_enabled: bool = True
     billing_default_credit_floor_usd: float = -1.0
     billing_platform_markup_multiplier: float = 1.3
@@ -112,6 +123,10 @@ class AppSettings(BaseSettings):
         "s3_secret_access_key",
         "log_file_path",
         "openai_context_compact_threshold",
+        "chat_completions_base_url",
+        "chat_completions_api_key",
+        "chat_completions_context_window_tokens",
+        "chat_completions_web_search_url",
         mode="before",
     )
     @classmethod
