@@ -12,7 +12,6 @@ import { DeleteEntriesDialog, ExplorerShortcutDialog } from "./components/Explor
 import { FileExplorer } from "./components/FileExplorer";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import {
-  buildResearchLibrary,
   createFolder,
   createTag,
   deleteFilesystemEntries,
@@ -21,14 +20,12 @@ import {
   listFilesystem,
   listTags,
   listTasks,
-  previewSemanticSplit,
   resplitSource,
   searchChunks,
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
   updateSourceTags,
-  uploadSource,
 } from "./lib/api";
 import {
   ACTIVE_TASK_REFRESH_INTERVAL_MS,
@@ -45,7 +42,6 @@ import type {
   ChatKitClientToolResult,
   DeleteDialogState,
   LibrarySearchResult,
-  ResearchBuilderSeedKind,
   RevealTarget,
   WorkspaceFileView,
 } from "./lib/appTypes";
@@ -53,18 +49,14 @@ import {
   asResearchBuildResponse,
   asResearchCandidates,
   asResearchIngested,
-  mergeResearchCandidates,
-  mergeResearchIngested,
 } from "./lib/researchUi";
-import { filterFilesystemEntries, fuzzyRankFilesystemEntries } from "./lib/search";
+import { fuzzyRankFilesystemEntries } from "./lib/search";
 import type {
   AuthUser,
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
   FilesystemListResponse,
-  ResearchLibraryBuildResponse,
   SourceDetail,
-  SplitPreviewResponse,
   TagMatchMode,
   TagSummary,
   TaskSummary,
@@ -87,7 +79,6 @@ export function App({ authMode }: AppProps) {
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
   const [activeFileView, setActiveFileView] = useState<WorkspaceFileView>("explorer");
-  const [sourceQuery, setSourceQuery] = useState("");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
   const [libraryQuery, setLibraryQuery] = useState("");
   const [libraryTagMatchMode, setLibraryTagMatchMode] = useState<TagMatchMode>("all");
@@ -102,13 +93,6 @@ export function App({ authMode }: AppProps) {
   const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
   const [newTagName, setNewTagName] = useState("");
   const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
-  const [pendingFiles, setPendingFiles] = useState<File[]>([]);
-  const [splitPreview, setSplitPreview] = useState<SplitPreviewResponse | null>(null);
-  const [researchQuery, setResearchQuery] = useState("");
-  const [researchSeedType, setResearchSeedType] = useState<ResearchBuilderSeedKind>("topic");
-  const [researchMaxSources, setResearchMaxSources] = useState(12);
-  const [researchMaxDepth, setResearchMaxDepth] = useState(2);
-  const [researchResult, setResearchResult] = useState<ResearchLibraryBuildResponse | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
   const [adminOpen, setAdminOpen] = useState(false);
@@ -127,12 +111,8 @@ export function App({ authMode }: AppProps) {
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
   const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
   const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
-  const searching = Boolean(sourceQuery.trim());
   const folderEntries = filesystem?.entries ?? [];
-  const visibleEntries = useMemo(
-    () => filterFilesystemEntries(folderEntries, sourceQuery),
-    [folderEntries, sourceQuery],
-  );
+  const visibleEntries = folderEntries;
   const selectedFileEntries = useMemo(
     () =>
       selectedSourceIds.flatMap((sourceId) => {
@@ -379,7 +359,6 @@ export function App({ authMode }: AppProps) {
   const openEntry = useCallback(
     (entry: FilesystemEntrySummary): void => {
       if (entry.kind === "folder") {
-        setSourceQuery("");
         setSelectedEntryIds([]);
         setSelectedSourceIds([]);
         setFocusedEntryId(null);
@@ -397,7 +376,6 @@ export function App({ authMode }: AppProps) {
 
   const goToFolder = useCallback(
     (folderId: string | null): void => {
-      setSourceQuery("");
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
@@ -518,112 +496,10 @@ export function App({ authMode }: AppProps) {
     [refreshExplorer],
   );
 
-  const chooseFiles = useCallback((files: FileList | null): void => {
-    const nextFiles = Array.from(files ?? []);
-    setPendingFiles(nextFiles);
-    setSplitPreview(null);
-    if (nextFiles.length) {
-      setStatus(`Selected ${nextFiles.length} file${nextFiles.length === 1 ? "" : "s"} for upload.`);
-    }
-  }, []);
-
-  const previewPendingSplit = useCallback(async (): Promise<void> => {
-    const [file] = pendingFiles;
-    if (!file) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const response = await previewSemanticSplit(file, uploadGuidance);
-      setSplitPreview(response);
-      setStatus(`Previewed ${response.split.chunks.length} proposed chunk${response.split.chunks.length === 1 ? "" : "s"}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Split preview failed.");
-    } finally {
-      setBusy(false);
-    }
-  }, [pendingFiles, uploadGuidance]);
-
-  const handleUpload = useCallback(async (): Promise<void> => {
-    if (!pendingFiles.length) {
-      return;
-    }
-    setBusy(true);
-    try {
-      for (const file of pendingFiles) {
-        await uploadSource(file, uploadGuidance, [], filesystem?.current.id ?? null);
-      }
-      setPendingFiles([]);
-      setSplitPreview(null);
-      await refreshExplorer();
-      setStatus("Indexing queued. Files will appear searchable when ready.");
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Upload failed.");
-    } finally {
-      setBusy(false);
-    }
-  }, [filesystem?.current.id, pendingFiles, refreshExplorer, uploadGuidance]);
-
-  const buildResearchLibraryFromPanel = useCallback(async (): Promise<void> => {
-    const query = researchQuery.trim();
-    if (!query) {
-      setStatus("Enter a topic or paper title first.");
-      return;
-    }
-    const maxSources = clamp(Math.round(researchMaxSources), 1, 50);
-    const maxDepth = clamp(Math.round(researchMaxDepth), 0, 4);
-    setBusy(true);
-    try {
-      const response = await buildResearchLibrary({
-        seed_type: researchSeedType,
-        query,
-        title: query,
-        auto_ingest: true,
-        discover_references: true,
-        max_depth: maxDepth,
-        max_sources: maxSources,
-        max_candidates_per_source: Math.min(20, Math.max(4, maxSources)),
-        max_pending_candidates: Math.max(50, maxSources * Math.max(1, maxDepth + 1)),
-      });
-      setResearchResult(response);
-      setTasks((await listTasks()).tasks);
-      setSourceQuery("");
-      setSelectedEntryIds([]);
-      setSelectedSourceIds([]);
-      setFocusedEntryId(null);
-      setSelectionAnchorEntryId(null);
-      setSelectedSource(null);
-      if (response.target_folder_id) {
-        await loadFolder(response.target_folder_id);
-      } else {
-        await refreshExplorer();
-      }
-      const queuedLabel = response.ingested.length
-        ? `, ${response.ingested.length} queued for indexing`
-        : ", no public items queued";
-      setStatus(`Research library build found ${response.candidates.length} candidate${response.candidates.length === 1 ? "" : "s"}${queuedLabel}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Research library build failed.");
-    } finally {
-      setBusy(false);
-    }
-  }, [
-    loadFolder,
-    refreshExplorer,
-    researchMaxDepth,
-    researchMaxSources,
-    researchQuery,
-    researchSeedType,
-  ]);
-
   const toggleExplorerTag = useCallback((tagId: string): void => {
     setSelectedExplorerTagIds((current) =>
       current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
     );
-  }, []);
-
-  const clearExplorerFilters = useCallback((): void => {
-    setSourceQuery("");
   }, []);
 
   const createExplorerTag = useCallback(async (): Promise<void> => {
@@ -791,7 +667,6 @@ export function App({ authMode }: AppProps) {
           cacheEntries(searchedEntries);
         }
         setActiveFileView("explorer");
-        setSourceQuery("");
         await loadFolder(revealedEntry.parent_id);
         setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
         setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
@@ -897,9 +772,6 @@ export function App({ authMode }: AppProps) {
       }
       if (toolCall.name === "show_research_builder") {
         const query = typeof toolCall.params.query === "string" ? toolCall.params.query : null;
-        const seedType = toolCall.params.seed_type === "paper" ? "paper" : toolCall.params.seed_type === "topic" ? "topic" : null;
-        const maxSources = typeof toolCall.params.max_sources === "number" ? toolCall.params.max_sources : null;
-        const maxDepth = typeof toolCall.params.max_depth === "number" ? toolCall.params.max_depth : null;
         const result = asResearchBuildResponse(toolCall.params.result);
         const candidates = asResearchCandidates(toolCall.params.candidates);
         const ingested = asResearchIngested(toolCall.params.ingested);
@@ -911,39 +783,7 @@ export function App({ authMode }: AppProps) {
               ? toolCall.params.folder_id
               : null);
         scheduleClientToolUiUpdate(async () => {
-          if (query) {
-            setResearchQuery((current) => current === query ? current : query);
-          }
-          if (seedType) {
-            setResearchSeedType(seedType);
-          }
-          if (maxSources !== null) {
-            setResearchMaxSources((current) => {
-              const next = clamp(Math.round(maxSources), 1, 50);
-              return current === next ? current : next;
-            });
-          }
-          if (maxDepth !== null) {
-            setResearchMaxDepth((current) => {
-              const next = clamp(Math.round(maxDepth), 0, 4);
-              return current === next ? current : next;
-            });
-          }
-          if (result) {
-            setResearchResult(result);
-          } else if (candidates.length || ingested.length) {
-            setResearchResult((current) =>
-              current
-                ? {
-                    ...current,
-                    candidates: mergeResearchCandidates(current.candidates, candidates),
-                    ingested: mergeResearchIngested(current.ingested, ingested),
-                  }
-                : current,
-            );
-          }
           if (targetFolderId) {
-            setSourceQuery((current) => current === "" ? current : "");
             setSelectedExplorerTagIds((current) => current.length ? [] : current);
             setSelectedEntryIds((current) => current.length ? [] : current);
             setSelectedSourceIds((current) => current.length ? [] : current);
@@ -954,7 +794,14 @@ export function App({ authMode }: AppProps) {
           }
           if (candidates.length || result) {
             const candidateCount = result?.candidates.length ?? candidates.length;
-            setStatus(`Research builder is showing ${candidateCount} candidate${candidateCount === 1 ? "" : "s"}.`);
+            const indexedCount = result?.ingested.length ?? ingested.length;
+            setStatus(
+              `Research library${query ? ` for "${query}"` : ""} found ${candidateCount} candidate${
+                candidateCount === 1 ? "" : "s"
+              }${indexedCount ? ` and queued ${indexedCount} for indexing` : ""}.`,
+            );
+          } else if (ingested.length) {
+            setStatus(`Queued ${ingested.length} research source${ingested.length === 1 ? "" : "s"} for indexing.`);
           }
         });
         return { ok: true, candidate_count: result?.candidates.length ?? candidates.length, target_folder_id: targetFolderId };
@@ -1056,16 +903,9 @@ export function App({ authMode }: AppProps) {
           librarySearching={librarySearching}
           libraryTagMatchMode={libraryTagMatchMode}
           newTagName={newTagName}
-          pendingFiles={pendingFiles}
           previewGridRef={previewGridRef}
           previewLayoutStyle={previewLayoutStyle}
           previewSplitPercent={previewSplitPercent}
-          researchMaxDepth={researchMaxDepth}
-          researchMaxSources={researchMaxSources}
-          researchQuery={researchQuery}
-          researchResult={researchResult}
-          researchSeedType={researchSeedType}
-          searching={searching}
           selectedEntryIds={selectedEntryIds}
           selectedEntryIdSet={selectedEntryIdSet}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
@@ -1076,14 +916,10 @@ export function App({ authMode }: AppProps) {
           selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
           selectionAnchorEntryId={selectionAnchorEntryId}
           sourceEntriesById={sourceEntriesById}
-          sourceQuery={sourceQuery}
-          splitPreview={splitPreview}
           tags={tags}
           uploadGuidance={uploadGuidance}
           onActiveFileViewChange={setActiveFileView}
           onChooseEntries={chooseEntries}
-          onChooseFiles={chooseFiles}
-          onClearFilters={clearExplorerFilters}
           onCreateFolder={() => void createFolderInCurrentFolder()}
           onCreateTag={() => void createExplorerTag()}
           onDeleteSelected={requestDeleteSelectedEntries}
@@ -1093,27 +929,19 @@ export function App({ authMode }: AppProps) {
           onClosePreview={() => setSelectedSource(null)}
           onOpenEntry={openEntry}
           onOpenSource={(sourceId) => void revealFileInExplorer({ sourceId })}
-          onPreviewSplit={() => void previewPendingSplit()}
           onPreviewResize={beginPreviewResize}
-          onResearchBuild={() => void buildResearchLibraryFromPanel()}
-          onResearchMaxDepthChange={setResearchMaxDepth}
-          onResearchMaxSourcesChange={setResearchMaxSources}
-          onResearchQueryChange={setResearchQuery}
-          onResearchSeedTypeChange={setResearchSeedType}
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
           onRunLibrarySearch={(mode) => void runLibrarySearch(mode)}
           onSaveTags={() => void saveSelectedSourceTags()}
           onSelectEntries={applyExplorerSelection}
           onShowShortcuts={() => setShortcutDialogOpen(true)}
-          onSourceQueryChange={setSourceQuery}
           onTagToggle={toggleSelectedSourceTagDraft}
           onLibraryQueryChange={setLibraryQuery}
           onLibraryTagMatchModeChange={setLibraryTagMatchMode}
           onSelectLibraryResults={selectLibraryResultsForChat}
           onToggleLibrarySourceSelection={toggleLibrarySourceSelection}
           onToggleExplorerTag={toggleExplorerTag}
-          onUpload={() => void handleUpload()}
           onUploadGuidanceChange={setUploadGuidance}
         />
 

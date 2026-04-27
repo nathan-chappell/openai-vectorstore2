@@ -7,20 +7,17 @@ import type {
   RefObject,
 } from "react";
 
-import type { LibrarySearchResult, ResearchBuilderSeedKind, WorkspaceFileView } from "../lib/appTypes";
+import type { LibrarySearchResult, WorkspaceFileView } from "../lib/appTypes";
 import type {
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
-  ResearchLibraryBuildResponse,
   SourceDetail,
-  SplitPreviewResponse,
   TagMatchMode,
   TagSummary,
 } from "../lib/types";
 import { clamp, isEditableShortcutTarget } from "../lib/uiState";
 import { FileEntryRow } from "./FileEntryRow";
 import { LibrarySearchView } from "./LibrarySearchView";
-import { ResearchBuilderPanel } from "./ResearchBuilderPanel";
 import { SourcePreview } from "./SourcePreview";
 
 export const FileExplorer = memo(function FileExplorer({
@@ -36,16 +33,9 @@ export const FileExplorer = memo(function FileExplorer({
   librarySearching,
   libraryTagMatchMode,
   newTagName,
-  pendingFiles,
   previewGridRef,
   previewLayoutStyle,
   previewSplitPercent,
-  researchMaxDepth,
-  researchMaxSources,
-  researchQuery,
-  researchResult,
-  researchSeedType,
-  searching,
   selectedEntryIds,
   selectedEntryIdSet,
   selectedExplorerTagIdSet,
@@ -56,14 +46,10 @@ export const FileExplorer = memo(function FileExplorer({
   selectedSourceTagDraftIdSet,
   selectionAnchorEntryId,
   sourceEntriesById,
-  sourceQuery,
-  splitPreview,
   tags,
   uploadGuidance,
   onActiveFileViewChange,
   onChooseEntries,
-  onChooseFiles,
-  onClearFilters,
   onCreateFolder,
   onCreateTag,
   onDeleteSelected,
@@ -73,27 +59,19 @@ export const FileExplorer = memo(function FileExplorer({
   onClosePreview,
   onOpenEntry,
   onOpenSource,
-  onPreviewSplit,
   onPreviewResize,
-  onResearchBuild,
-  onResearchMaxDepthChange,
-  onResearchMaxSourcesChange,
-  onResearchQueryChange,
-  onResearchSeedTypeChange,
   onRenameSelected,
   onResplit,
   onRunLibrarySearch,
   onSaveTags,
   onSelectEntries,
   onShowShortcuts,
-  onSourceQueryChange,
   onTagToggle,
   onLibraryQueryChange,
   onLibraryTagMatchModeChange,
   onSelectLibraryResults,
   onToggleLibrarySourceSelection,
   onToggleExplorerTag,
-  onUpload,
   onUploadGuidanceChange,
 }: {
   activeFileView: WorkspaceFileView;
@@ -108,16 +86,9 @@ export const FileExplorer = memo(function FileExplorer({
   librarySearching: boolean;
   libraryTagMatchMode: TagMatchMode;
   newTagName: string;
-  pendingFiles: File[];
   previewGridRef: RefObject<HTMLDivElement | null>;
   previewLayoutStyle: CSSProperties & Record<"--preview-list-width", string>;
   previewSplitPercent: number;
-  researchMaxDepth: number;
-  researchMaxSources: number;
-  researchQuery: string;
-  researchResult: ResearchLibraryBuildResponse | null;
-  researchSeedType: ResearchBuilderSeedKind;
-  searching: boolean;
   selectedEntryIds: string[];
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagIdSet: Set<string>;
@@ -128,14 +99,10 @@ export const FileExplorer = memo(function FileExplorer({
   selectedSourceTagDraftIdSet: Set<string>;
   selectionAnchorEntryId: string | null;
   sourceEntriesById: Record<string, FilesystemEntrySummary>;
-  sourceQuery: string;
-  splitPreview: SplitPreviewResponse | null;
   tags: TagSummary[];
   uploadGuidance: string;
   onActiveFileViewChange: (view: WorkspaceFileView) => void;
   onChooseEntries: (entry: FilesystemEntrySummary, event: ReactMouseEvent) => void;
-  onChooseFiles: (files: FileList | null) => void;
-  onClearFilters: () => void;
   onCreateFolder: () => void;
   onCreateTag: () => void;
   onDeleteSelected: () => void;
@@ -145,27 +112,19 @@ export const FileExplorer = memo(function FileExplorer({
   onClosePreview: () => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
   onOpenSource: (sourceId: string) => void;
-  onPreviewSplit: () => void;
   onPreviewResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
-  onResearchBuild: () => void;
-  onResearchMaxDepthChange: (value: number) => void;
-  onResearchMaxSourcesChange: (value: number) => void;
-  onResearchQueryChange: (value: string) => void;
-  onResearchSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
   onRenameSelected: () => void;
   onResplit: () => void;
   onRunLibrarySearch: (mode: "replace" | "append") => void;
   onSaveTags: () => void;
   onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
   onShowShortcuts: () => void;
-  onSourceQueryChange: (value: string) => void;
   onTagToggle: (tagId: string) => void;
   onLibraryQueryChange: (value: string) => void;
   onLibraryTagMatchModeChange: (value: TagMatchMode) => void;
   onSelectLibraryResults: () => void;
   onToggleLibrarySourceSelection: (sourceId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;
-  onUpload: () => void;
   onUploadGuidanceChange: (value: string) => void;
 }) {
   const selectedCount = selectedEntryIdSet.size;
@@ -299,7 +258,7 @@ export const FileExplorer = memo(function FileExplorer({
         </button>
       </div>
       <div className="explorer-commandbar">
-        <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy || searching}>
+        <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy}>
           New Folder
         </button>
         <div
@@ -312,37 +271,6 @@ export const FileExplorer = memo(function FileExplorer({
         <button type="button" className="icon-button" onClick={onShowShortcuts} aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
           ?
         </button>
-      </div>
-
-      <div className="explorer-filterbar">
-        <label className="filesystem-query">
-          <span>Query</span>
-          <input
-            value={sourceQuery}
-            onChange={(event) => onSourceQueryChange(event.currentTarget.value)}
-            placeholder="Find in this folder"
-          />
-        </label>
-        <button type="button" className="secondary-button" onClick={onClearFilters} disabled={!searching}>
-          Clear
-        </button>
-        <div className="tag-create-row compact-tag-create">
-          <input
-            aria-label="New tag name"
-            value={newTagName}
-            onChange={(event) => onNewTagNameChange(event.currentTarget.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                event.preventDefault();
-                onCreateTag();
-              }
-            }}
-            placeholder="New tag"
-          />
-          <button type="button" className="secondary-button" onClick={onCreateTag} disabled={busy || !newTagName.trim()}>
-            Add
-          </button>
-        </div>
       </div>
       {activeFileView === "library" ? (
         <LibrarySearchView
@@ -362,7 +290,6 @@ export const FileExplorer = memo(function FileExplorer({
               onSelectEntries([entry.id], entry.id, entry.id);
             }
             onActiveFileViewChange("explorer");
-            onSourceQueryChange("");
             onOpenSource(sourceId);
           }}
           onQueryChange={onLibraryQueryChange}
@@ -402,7 +329,6 @@ export const FileExplorer = memo(function FileExplorer({
             <section className="file-browser" aria-label="File list">
               <div className="file-list-header">
                 <span>Name</span>
-                <span>Tags</span>
                 <span>Status</span>
                 <span>Size</span>
                 <span>Modified</span>
@@ -420,52 +346,8 @@ export const FileExplorer = memo(function FileExplorer({
                     onOpen={onOpenEntry}
                   />
                 ))}
-                {!entries.length ? <div className="empty-file-list">{searching ? "No matching entries." : "Folder is empty."}</div> : null}
+                {!entries.length ? <div className="empty-file-list">Folder is empty.</div> : null}
               </div>
-
-              <section className="upload-strip filesystem-upload" aria-label="Index files">
-                <label className="file-picker">
-                  <input type="file" multiple onChange={(event) => onChooseFiles(event.currentTarget.files)} />
-                  <span>{pendingFiles.length ? `${pendingFiles.length} staged` : "Add files"}</span>
-                </label>
-                <textarea
-                  className="compact-textarea"
-                  value={uploadGuidance}
-                  onChange={(event) => onUploadGuidanceChange(event.currentTarget.value)}
-                  placeholder="Optional split notes; normal indexing stores the source file as-is"
-                />
-                <div className="button-row">
-                  <button type="button" className="secondary-button" onClick={onPreviewSplit} disabled={busy || !pendingFiles.length}>
-                    Preview split
-                  </button>
-                  <button type="button" onClick={onUpload} disabled={busy || !pendingFiles.length}>
-                    Index
-                  </button>
-                </div>
-                <p className="upload-hint">Index files first. Split preview is optional inspection tooling.</p>
-                {pendingFiles.length ? <p className="pending-file-list">{pendingFiles.map((file) => file.name).join(", ")}</p> : null}
-                {splitPreview ? (
-                  <div className="split-preview-summary">
-                    <strong>{splitPreview.split.chunks.length} optional split records</strong>
-                    <span>{splitPreview.split.tags.join(", ") || "no tags"}</span>
-                  </div>
-                ) : null}
-              </section>
-
-              <ResearchBuilderPanel
-                busy={busy}
-                maxDepth={researchMaxDepth}
-                maxSources={researchMaxSources}
-                query={researchQuery}
-                result={researchResult}
-                seedType={researchSeedType}
-                sourceEntriesById={sourceEntriesById}
-                onBuild={onResearchBuild}
-                onMaxDepthChange={onResearchMaxDepthChange}
-                onMaxSourcesChange={onResearchMaxSourcesChange}
-                onQueryChange={onResearchQueryChange}
-                onSeedTypeChange={onResearchSeedTypeChange}
-              />
             </section>
 
             {selectedSource ? (
@@ -495,6 +377,9 @@ export const FileExplorer = memo(function FileExplorer({
                     selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
                     tags={tags}
                     uploadGuidance={uploadGuidance}
+                    newTagName={newTagName}
+                    onCreateTag={onCreateTag}
+                    onNewTagNameChange={onNewTagNameChange}
                     onSaveTags={onSaveTags}
                     onTagToggle={onTagToggle}
                     onUploadGuidanceChange={onUploadGuidanceChange}

@@ -78,13 +78,6 @@ export const FileEntryRow = memo(function FileEntryRow({
           <small>{entry.path}</small>
         </span>
       </span>
-      <span role="cell" className="file-tag-list">
-        {entry.tags.slice(0, 2).map((tag) => (
-          <span key={tag.id}>{tag.name}</span>
-        ))}
-        {entry.tags.length > 2 ? <span>+{entry.tags.length - 2}</span> : null}
-        {entry.kind === "file" && !entry.tags.length ? <span>untagged</span> : null}
-      </span>
       <span role="cell" className="status-cell">
         {entry.status ? <span className={`status-badge status-${entry.status}`}>{entry.status}</span> : ""}
         {entry.status ? (

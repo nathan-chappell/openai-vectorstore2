@@ -874,26 +874,6 @@ kbd {
   font-size: 0.68rem;
 }
 
-.file-tag-list {
-  display: flex;
-  gap: 0.25rem;
-  align-items: center;
-  overflow: hidden;
-}
-
-.file-tag-list span {
-  overflow: hidden;
-  max-width: 5rem;
-  border: 1px solid #e2e8f0;
-  border-radius: 999px;
-  padding: 0.08rem 0.35rem;
-  color: #475569;
-  background: #f8fafc;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 0.68rem;
-}
-
 .status-ready {
   color: var(--green);
   background: var(--green-soft);
@@ -1227,16 +1207,6 @@ kbd {
   white-space: nowrap;
 }
 
-.explorer-filterbar {
-  display: grid;
-  grid-template-columns: minmax(14rem, 1fr) auto minmax(11rem, 0.55fr);
-  gap: 0.4rem;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  padding: 0.35rem 0.45rem;
-  background: #f6f9fc;
-}
-
 .library-search-view {
   min-height: 0;
   display: grid;
@@ -1382,19 +1352,6 @@ kbd {
   font-size: 0.74rem;
 }
 
-.filesystem-query {
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 0.35rem;
-  align-items: center;
-}
-
-.filesystem-query span {
-  color: #475569;
-  font-size: 0.74rem;
-  font-weight: 700;
-}
-
 .filesystem-tags {
   min-height: 1.85rem;
   padding-bottom: 0;
@@ -1451,7 +1408,7 @@ kbd {
   min-width: 0;
   min-height: 0;
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr) auto auto;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1495,7 +1452,7 @@ kbd {
 .file-list-header,
 .file-rows [role="row"] {
   display: grid;
-  grid-template-columns: minmax(13rem, 1fr) minmax(9rem, 0.75fr) 6.5rem 5.5rem 7.5rem;
+  grid-template-columns: minmax(13rem, 1fr) 6.5rem 5.5rem 7.5rem;
   gap: 0.45rem;
   align-items: center;
 }
@@ -1607,190 +1564,6 @@ kbd {
   color: var(--muted);
 }
 
-.filesystem-upload {
-  grid-template-columns: auto minmax(0, 1fr);
-  align-items: center;
-  max-height: none;
-  overflow: hidden;
-  border-top: 1px solid var(--line);
-  padding: 0.4rem 0.55rem;
-  background: linear-gradient(180deg, #fbfdff 0%, #f5f9ff 100%);
-}
-
-.filesystem-upload .button-row,
-.filesystem-upload .pending-file-list,
-.filesystem-upload .split-preview-summary,
-.filesystem-upload .upload-hint {
-  grid-column: 1 / -1;
-}
-
-.filesystem-upload .compact-textarea {
-  min-height: 2.15rem;
-  max-height: 3.75rem;
-}
-
-.research-builder-strip {
-  display: grid;
-  gap: 0.4rem;
-  max-height: 17rem;
-  overflow: auto;
-  border-top: 1px solid var(--line);
-  padding: 0.45rem 0.55rem;
-  background: #ffffff;
-}
-
-.research-builder-controls {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.4rem;
-  align-items: end;
-}
-
-.research-builder-controls label {
-  min-width: 0;
-  display: grid;
-  gap: 0.18rem;
-  color: #475569;
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-
-.research-builder-controls label:not(.research-query-field):not(.research-toggle) {
-  flex: 0 0 5.1rem;
-}
-
-.research-query-field {
-  flex: 1 1 15rem;
-}
-
-.research-builder-controls input,
-.research-builder-controls select {
-  min-height: 1.9rem;
-  padding: 0.32rem 0.45rem;
-  font-size: 0.78rem;
-}
-
-.research-toggle {
-  grid-template-columns: auto minmax(0, 1fr);
-  flex: 0 0 7rem;
-  align-items: center;
-  min-height: 1.9rem;
-}
-
-.research-toggle input {
-  width: auto;
-  margin: 0;
-  accent-color: var(--blue);
-}
-
-.research-builder-results {
-  display: grid;
-  gap: 0.35rem;
-  min-width: 0;
-}
-
-.research-result-summary {
-  display: grid;
-  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
-  gap: 0.4rem;
-  align-items: center;
-  font-size: 0.74rem;
-}
-
-.research-result-summary strong,
-.research-result-summary span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.research-result-summary span,
-.research-candidate-row span,
-.research-candidate-row small,
-.research-candidate-more {
-  color: var(--muted);
-}
-
-.research-candidate-list {
-  display: grid;
-  gap: 0.35rem;
-}
-
-.research-candidate-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 0.55rem;
-  align-items: start;
-  border: 1px solid #edf1f6;
-  border-radius: 6px;
-  padding: 0.42rem;
-  background: #fbfdff;
-  font-size: 0.74rem;
-}
-
-.research-candidate-row > div:first-child {
-  min-width: 0;
-  display: grid;
-  gap: 0.12rem;
-}
-
-.research-candidate-row strong,
-.research-candidate-row span,
-.research-candidate-row small,
-.research-candidate-row p {
-  overflow-wrap: anywhere;
-}
-
-.research-candidate-row p,
-.research-candidate-more {
-  margin: 0;
-}
-
-.research-candidate-actions {
-  min-width: 8.5rem;
-  display: grid;
-  justify-items: end;
-  gap: 0.25rem;
-}
-
-.research-result-summary button,
-.research-builder-controls button {
-  min-height: 1.85rem;
-  padding: 0.28rem 0.48rem;
-  font-size: 0.74rem;
-}
-
-.research-candidate-more {
-  font-size: 0.72rem;
-}
-
-.status-pending {
-  color: #475569;
-  background: #f1f5f9;
-}
-
-.status-approved,
-.status-ingested {
-  color: var(--green);
-  background: var(--green-soft);
-}
-
-.status-rejected {
-  color: var(--red);
-  background: var(--red-soft);
-}
-
-.status-ingesting {
-  color: var(--amber);
-  background: var(--amber-soft);
-}
-
-.status-duplicate {
-  color: #475569;
-  background: #e2e8f0;
-}
-
-.research-progress-track,
 .status-progress-track {
   display: block;
   overflow: hidden;
@@ -1800,7 +1573,6 @@ kbd {
   background: #e2e8f0;
 }
 
-.research-progress-track > span,
 .status-progress-track > span {
   display: block;
   height: 100%;
@@ -1809,17 +1581,10 @@ kbd {
   transition: width 180ms ease;
 }
 
-.status-ingested + .research-progress-track > span,
 .status-ready + .status-progress-track > span {
   background: var(--green);
 }
 
-.status-duplicate + .research-progress-track > span,
-.status-rejected + .research-progress-track > span {
-  background: #64748b;
-}
-
-.status-failed + .research-progress-track > span,
 .status-failed + .status-progress-track > span {
   background: var(--red);
 }
@@ -1828,12 +1593,6 @@ kbd {
   min-width: 0;
   display: grid;
   gap: 0.2rem;
-}
-
-.upload-hint {
-  margin: 0;
-  color: #64748b;
-  font-size: 0.72rem;
 }
 
 .chatkit-element,
@@ -2121,20 +1880,8 @@ kbd {
     border-bottom: 1px solid var(--line);
   }
 
-  .explorer-commandbar,
-  .explorer-filterbar,
-  .filesystem-upload {
+  .explorer-commandbar {
     grid-template-columns: 1fr;
-  }
-
-  .research-result-summary,
-  .research-candidate-row {
-    grid-template-columns: 1fr;
-  }
-
-  .research-candidate-actions {
-    justify-items: start;
-    min-width: 0;
   }
 
   .preview-main {

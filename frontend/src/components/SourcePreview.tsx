@@ -21,6 +21,9 @@ export function SourcePreview({
   selectedSourceTagDraftIdSet,
   tags,
   uploadGuidance,
+  newTagName,
+  onCreateTag,
+  onNewTagNameChange,
   onSaveTags,
   onTagToggle,
   onUploadGuidanceChange,
@@ -32,6 +35,9 @@ export function SourcePreview({
   selectedSourceTagDraftIdSet: Set<string>;
   tags: TagSummary[];
   uploadGuidance: string;
+  newTagName: string;
+  onCreateTag: () => void;
+  onNewTagNameChange: (value: string) => void;
   onSaveTags: () => void;
   onTagToggle: (tagId: string) => void;
   onUploadGuidanceChange: (value: string) => void;
@@ -176,6 +182,23 @@ export function SourcePreview({
           </button>
           <div className="tag-editor">
             <strong>Tags {selectedSourceTagDraftIdSet.size}/{SOURCE_TAG_LIMIT}</strong>
+            <div className="tag-create-row compact-tag-create">
+              <input
+                aria-label="New tag name"
+                value={newTagName}
+                onChange={(event) => onNewTagNameChange(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    onCreateTag();
+                  }
+                }}
+                placeholder="New tag"
+              />
+              <button type="button" className="secondary-button" onClick={onCreateTag} disabled={busy || !newTagName.trim()}>
+                Add
+              </button>
+            </div>
             <div className="tag-picker-list">
               {tags.map((tag) => {
                 const checked = selectedSourceTagDraftIdSet.has(tag.id);

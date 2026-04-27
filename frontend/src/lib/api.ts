@@ -90,10 +90,11 @@ export function setChatKitMetadataGetter(getter: (() => ChatKitMetadata | null) 
   chatKitMetadataGetter = getter;
 }
 
-export function getChatKitConfig(): { url: string; domainKey: string } {
+export function getChatKitConfig(): { url: string; domainKey: string; attachmentUploadUrl: string } {
   return {
     url: `${API_BASE_URL}/chatkit`,
     domainKey: CHATKIT_DOMAIN_KEY,
+    attachmentUploadUrl: `${API_BASE_URL}/chatkit/attachments`,
   };
 }
 

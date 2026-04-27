@@ -42,6 +42,7 @@ export const ChatPane = memo(function ChatPane({
       api: {
         url: chatKitConfig.url,
         domainKey: chatKitConfig.domainKey,
+        uploadStrategy: { type: "direct", uploadUrl: chatKitConfig.attachmentUploadUrl },
         fetch: authenticatedFetch,
       },
       theme: {
@@ -59,18 +60,19 @@ export const ChatPane = memo(function ChatPane({
         title: { enabled: true, text: "Chat" },
       },
       startScreen: {
-        greeting: "Select indexed files, then ask me to search, answer, synthesize, image, or narrate from them.",
+        greeting: "Ask me to add files, preview splits, search indexed sources, or build a research library.",
         prompts: [
-          { label: "Answer from files", prompt: "Answer my question using indexed file matches and cite the source titles.", icon: "check-circle" },
-          { label: "Build research library", prompt: "Build a research library for this topic or paper title, dedupe sources, and show progress in the file browser.", icon: "book-open" },
-          { label: "Search trails", prompt: "Search the indexed files around this topic and explain the useful trails.", icon: "sparkle" },
-          { label: "Generate from evidence", prompt: "Use retrieved indexed file matches as evidence, and separate facts from speculation.", icon: "bolt" },
+          { label: "Add files", prompt: "Add the files I attach, then tell me when they are indexed and ready to search.", icon: "plus" },
+          { label: "Preview split", prompt: "Preview a semantic split for the attached file or pasted text before changing the library.", icon: "settings-slider" },
+          { label: "Build research library", prompt: "Build a research library for this topic or paper title, dedupe sources, and keep me posted on indexing.", icon: "book-open" },
+          { label: "Search and cite", prompt: "Search the indexed files around this topic, answer from evidence, and cite source titles.", icon: "check-circle" },
         ],
       },
       composer: {
-        placeholder: "Ask files or build a research library...",
+        placeholder: "Attach files, search sources, or build a research library...",
         attachments: {
-          enabled: false,
+          enabled: true,
+          maxCount: 10,
         },
         tools: [
           {
@@ -96,7 +98,7 @@ export const ChatPane = memo(function ChatPane({
       onDeeplink: handleDeeplink,
       onClientTool,
     }),
-    [chatKitConfig.domainKey, chatKitConfig.url, handleDeeplink, onClientTool, onEntityClick, onEntitySearch],
+    [chatKitConfig.attachmentUploadUrl, chatKitConfig.domainKey, chatKitConfig.url, handleDeeplink, onClientTool, onEntityClick, onEntitySearch],
   );
   const chatKit = useChatKit(options);
   return <ChatKit control={chatKit.control} className="chatkit-element" />;
