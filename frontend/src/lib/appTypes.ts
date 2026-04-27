@@ -38,3 +38,15 @@ export type ChatKitClientToolCall = {
   name: string;
   params: Record<string, unknown>;
 };
+
+export type ChatKitClientToolResult = Record<string, unknown>;
+
+export type ChatKitDeeplinkEvent = {
+  name: string;
+  data?: Record<string, unknown>;
+};
+
+export type ChatKitMetadata = {
+  origin: "web";
+  selected_source_ids: string[];
+} & Record<string, unknown>;

@@ -44,6 +44,7 @@ Deployment checklist:
 - Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:0.1.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
 - Confirm mandatory env vars are documented: `OPENAI_API_KEY`, database URL, Clerk values if auth is enabled, storage backend/S3-compatible values if not using local ephemeral storage, app base URL, allowed origins, billing/admin settings, and any ChatKit/OpenAI model settings.
+- Decide whether beta admin/auth/payments come from this repo's default implementation or the private shared `ai-portfolio-admin` submodule; either path must leave the app bootable and demoable.
 - Decide beta storage explicitly: local container storage is acceptable only for throwaway demos; persistent Railway volume or S3-compatible storage is preferred for a live resume link.
 - Confirm logs work in Railway without leaking prompts, secrets, or bulky content, and that enough IDs are present to debug OpenAI API calls from platform logs.
 
@@ -104,6 +105,7 @@ Implementation plan:
 - Completed research-builder component split: moved research candidate controls/status rendering into a focused typed component.
 - Completed Explorer shell split: moved the remaining Explorer/Library pane shell and keyboard handling into a focused typed component, leaving `App.tsx` primarily as state orchestration.
 - Completed API contract pass: named repeated frontend request parameter shapes and reused filter/query serializers at the API boundary.
+- Completed ChatKit contract pass: named ChatKit metadata, deeplink, and client-tool result shapes instead of repeating broad inline records.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
 - Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
@@ -257,9 +259,50 @@ Add Playwright coverage for normal file-library work:
 - Reveal a source from ChatKit or Library view.
 - Delete files and folders with progress/status feedback.
 
-### 7. Usage Credits And Stripe-Ready Billing
+### 7. Shared Admin, Auth, And Payments Submodule
 
-Status: first backend pass implemented; admin UI, Stripe funding, and complete usage coverage remain planned.
+Status: planned.
+
+Goal:
+
+- Extract common sign-up, login, auth, admin-user management, credit/billing, and payment-provider code into a private shared project that PlodAI and this repo can consume.
+- Use `git@github.com:nathan-chappell/ai-portfolio-admin.git` as the private source of truth, likely mounted as a git submodule in each portfolio app.
+- Keep sensitive/admin implementation details out of the public-facing project repos while still preserving a clear boundary and a default implementation that lets each repo run without the private submodule.
+- Support payments through a provider-neutral boundary, with PayPal as an important planned provider and Stripe still possible later.
+
+Decision:
+
+- Treat `ai-portfolio-admin` as a shared admin/auth/payments package, not as business-domain code. This repo should keep vector-store/RAG/library/report logic local.
+- Each app should expose a narrow integration layer: current user, role/active state, credit balance, admin user operations, payment checkout/start, payment webhook/confirmation, credit grant, and cost debit.
+- The private submodule can provide the production implementation for Clerk, admin panels, credit ledgers, and payment providers.
+- This repo must also provide a default/local implementation that works without the submodule: local-dev auth, manual activation/credit grants, billing status, and clear "payments unavailable" behavior.
+- The fallback boundary is important both for developer experience and for making the app understandable when the private submodule is absent.
+
+Implementation plan:
+
+- Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
+- Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
+- Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
+- Add an adapter module in this repo that can load the shared submodule implementation when present and configured, otherwise falls back to the default local implementation.
+- Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
+- Add submodule setup docs with the private URL: `git@github.com:nathan-chappell/ai-portfolio-admin.git`.
+- Document how a public clone behaves without the private submodule: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
+- Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
+- Add the PayPal-specific flow from the ChatGPT notes once pasted into this plan: order/session creation, approval URL, capture/confirmation, webhook verification, idempotency key, payment-to-credit mapping, refund/chargeback handling, and audit logging.
+- Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
+
+Acceptance criteria:
+
+- This repo can run and pass tests without the private submodule installed.
+- With the private submodule installed/configured, shared auth/admin/payment code is used through a small adapter boundary.
+- Public app code does not import private implementation details outside the adapter layer.
+- Manual credit grants and usage debits still work in the default implementation.
+- Payment-provider events are idempotent, auditable, and can grant credits without duplicating balances.
+- PayPal implementation details are captured in the shared project plan before payment work begins.
+
+### 8. Usage Credits And Provider-Ready Billing
+
+Status: first backend pass implemented; admin UI/shared-admin extraction, payment-provider funding, and complete usage coverage remain planned.
 
 Reference `../plodai` directly during implementation and align models/services/schemas with it where the concepts match, adapting names only where this app's library/task surfaces need richer references.
 
@@ -271,13 +314,13 @@ PlodAI reference setup:
 - Admin endpoints and an admin UI list Clerk users, show activation/balance state, activate/deactivate users, and grant manual USD credit with an audit note.
 - ChatKit usage is converted to a platform cost by applying a multiplier to OpenAI token/transcription pricing, accumulated into thread metadata, recorded as cost events, and deducted from the user's credit balance.
 - Non-admin users are blocked when their current credit reaches the configured floor; admins bypass the paid-user gate.
-- Stripe is not implemented there yet; the manual grant ledger is the bridge that can later receive payment-created credits.
+- Stripe is not implemented there yet; the manual grant ledger is the bridge that can later receive payment-created credits from Stripe, PayPal, or another provider.
 
 Decision:
 
 - Bring the same account monetization model here: manual activation first, free trial credit on activation, prepaid USD credit balances, cost-event debits, and a configurable markup over underlying OpenAI API cost.
 - Start with a default markup in the `1.2x` to `1.5x` range, exposed as settings rather than hardcoded, so the business rule can change without a migration.
-- Treat Stripe as a future credit-funding source, not as the first implementation dependency. The first pass should make the ledger, admin grant flow, and usage debiting correct even when all credits are granted manually.
+- Treat external payment providers as future credit-funding sources, not as the first implementation dependency. The first pass should make the ledger, admin grant flow, and usage debiting correct even when all credits are granted manually.
 - Cover every expensive OpenAI-backed path, not only ChatKit text turns: ChatKit agent runs, transcription/voice if enabled, image generation, research discovery/answers, source-file vector uploads/searches where measurable, and any future generation actions.
 
 Implementation notes:
@@ -285,16 +328,16 @@ Implementation notes:
 - Completed first pass: added `user_credit_balances`, `credit_grants`, and `cost_events` tables with migration coverage; added `BillingService` for grants, idempotent debits, cost calculations, and credit-floor checks; exposed `/api/billing/me`, `/api/admin/users`, `/api/admin/users/set-active`, and `/api/admin/credits/grant`; added current credit and floor fields to `/api/auth/me`; gated billable REST operations before long-running work; recorded ChatKit response usage as auditable cost events when response usage is available; and records QA/freeform action usage from REST, MCP, or ChatKit tool calls.
 - Use these PlodAI files as the first implementation reference: `../plodai/backend/app/models/credit.py`, `../plodai/backend/app/models/credit_grant.py`, `../plodai/backend/app/models/cost.py`, `../plodai/backend/app/services/credit_service.py`, `../plodai/backend/app/core/clerk_metadata.py`, `../plodai/backend/app/core/auth.py`, `../plodai/backend/app/services/clerk_admin_service.py`, `../plodai/backend/app/schemas/credits.py`, `../plodai/backend/app/api/routes.py`, `../plodai/backend/app/chatkit/usage.py`, `../plodai/backend/app/chatkit/metadata.py`, `../plodai/frontend/src/components/AdminCreditsPanel.tsx`, and `../plodai/frontend/src/types/credits.ts`.
 - Reuse this repo's existing Clerk and `AppUser` foundation: `private_metadata` already provides `active` and `role`, and local `AppUser` records already mirror Clerk identity.
-- Align table shape and behavior with PlodAI's `UserCreditBalance`, `CreditGrant`, and `CostEvent` where possible so credit grants, balance debits, cost audit records, admin summaries, and future Stripe grants stay portable between the two projects.
+- Align table shape and behavior with PlodAI's `UserCreditBalance`, `CreditGrant`, and `CostEvent` where possible so credit grants, balance debits, cost audit records, admin summaries, and future provider-created grants stay portable between the two projects.
 - Add billing metadata support for a per-user credit floor, activation defaults, and admin-only active/role/balance management without weakening the local-dev auth path.
-- Add app-owned billing tables with migrations and drift tests: current balance, manual/admin credit grants, cost events with user/thread/task/source/action/openai response IDs when available, pricing version, raw usage summary, platform multiplier, and optional Stripe/payment reference fields for later.
+- Add app-owned billing tables with migrations and drift tests: current balance, manual/admin credit grants, cost events with user/thread/task/source/action/openai response IDs when available, pricing version, raw usage summary, platform multiplier, and optional provider/payment reference fields for later.
 - Add a `BillingService` or equivalent boundary that can grant credits, compute marked-up cost, record idempotent debits, enforce balance floors, and expose concise balance/status responses to web, ChatKit, MCP, and tests.
 - Centralize OpenAI pricing data and model it as configuration/versioned constants. Unknown models should log a warning and choose a deliberate policy: block, charge zero with an audit event, or require an explicit fallback price.
 - Gate billable user operations before starting long work where possible, then record actual cost after completion using the logged response IDs and usage data already captured by the OpenAI/ChatKit observability layer.
 - Add admin REST endpoints and a compact admin view for user search, activation/deactivation, manual credit grants with notes, balance display, recent grants/costs, and low/empty credit status.
-- Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding Stripe checkout until the ledger is proven.
-- Prepare Stripe integration by reserving fields for payment provider, checkout/session/payment intent IDs, payment status, and credit amount, then later add webhook-driven credit grants with idempotency.
-- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add the compact admin UI; and add Stripe-created credit grants once the manual ledger has been exercised.
+- Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding checkout flows until the ledger and shared-admin boundary are proven.
+- Prepare provider integrations by reserving fields for payment provider, checkout/session/order/payment intent IDs, payment status, and credit amount, then later add webhook/callback-driven credit grants with idempotency.
+- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add the compact admin UI or shared-admin adapter; and add provider-created credit grants once the manual ledger has been exercised.
 
 Acceptance criteria:
 

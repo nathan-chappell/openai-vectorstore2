@@ -41,6 +41,7 @@ import {
 import type {
   AppProps,
   ChatKitClientToolCall,
+  ChatKitClientToolResult,
   DeleteDialogState,
   LibrarySearchResult,
   ResearchBuilderSeedKind,
@@ -63,6 +64,7 @@ import type {
   ResearchLibraryBuildResponse,
   SourceDetail,
   SplitPreviewResponse,
+  TagMatchMode,
   TagSummary,
   TaskSummary,
 } from "./lib/types";
@@ -87,7 +89,7 @@ export function App({ authMode }: AppProps) {
   const [sourceQuery, setSourceQuery] = useState("");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
   const [libraryQuery, setLibraryQuery] = useState("");
-  const [libraryTagMatchMode, setLibraryTagMatchMode] = useState<"all" | "any">("all");
+  const [libraryTagMatchMode, setLibraryTagMatchMode] = useState<TagMatchMode>("all");
   const [libraryResults, setLibraryResults] = useState<LibrarySearchResult[]>([]);
   const [libraryResultCount, setLibraryResultCount] = useState(0);
   const [librarySearching, setLibrarySearching] = useState(false);
@@ -765,7 +767,7 @@ export function App({ authMode }: AppProps) {
   }, []);
 
   const revealFileInExplorer = useCallback(
-    async ({ sourceId, entryId }: RevealTarget): Promise<Record<string, unknown>> => {
+    async ({ sourceId, entryId }: RevealTarget): Promise<ChatKitClientToolResult> => {
       const entriesById = knownEntriesRef.current;
       let searchedEntries: FilesystemEntrySummary[] = [];
       let entry = entryId ? entriesById[entryId] : null;
@@ -844,7 +846,7 @@ export function App({ authMode }: AppProps) {
   );
 
   const handleClientTool = useCallback(
-    async (toolCall: ChatKitClientToolCall): Promise<Record<string, unknown>> => {
+    async (toolCall: ChatKitClientToolCall): Promise<ChatKitClientToolResult> => {
       if (toolCall.name === "set_file_selection") {
         const rawIds = Array.isArray(toolCall.params.source_ids) ? toolCall.params.source_ids : [];
         const sourceIds = rawIds.filter((id): id is string => typeof id === "string").slice(0, SELECTED_FILE_LIMIT);

@@ -14,6 +14,7 @@ import type {
   ResearchLibraryBuildResponse,
   SourceDetail,
   SplitPreviewResponse,
+  TagMatchMode,
   TagSummary,
 } from "../lib/types";
 import { clamp, isEditableShortcutTarget } from "../lib/uiState";
@@ -105,7 +106,7 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResultCount: number;
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
-  libraryTagMatchMode: "all" | "any";
+  libraryTagMatchMode: TagMatchMode;
   newTagName: string;
   pendingFiles: File[];
   previewGridRef: RefObject<HTMLDivElement | null>;
@@ -160,7 +161,7 @@ export const FileExplorer = memo(function FileExplorer({
   onSourceQueryChange: (value: string) => void;
   onTagToggle: (tagId: string) => void;
   onLibraryQueryChange: (value: string) => void;
-  onLibraryTagMatchModeChange: (value: "all" | "any") => void;
+  onLibraryTagMatchModeChange: (value: TagMatchMode) => void;
   onSelectLibraryResults: () => void;
   onToggleLibrarySourceSelection: (sourceId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;

@@ -3,7 +3,12 @@ import { memo, useCallback, useMemo } from "react";
 
 import { authenticatedFetch, getChatKitConfig } from "../lib/api";
 import { MODEL_CHOICES } from "../lib/appConstants";
-import type { ChatKitClientToolCall, RevealTarget } from "../lib/appTypes";
+import type {
+  ChatKitClientToolCall,
+  ChatKitClientToolResult,
+  ChatKitDeeplinkEvent,
+  RevealTarget,
+} from "../lib/appTypes";
 import { stringFromUnknown } from "../lib/uiState";
 
 export const ChatPane = memo(function ChatPane({
@@ -14,12 +19,12 @@ export const ChatPane = memo(function ChatPane({
 }: {
   onEntityClick: (entity: Entity) => void;
   onEntitySearch: (query: string) => Promise<Entity[]>;
-  onClientTool: (toolCall: ChatKitClientToolCall) => Promise<Record<string, unknown>>;
-  onRevealFile: (target: RevealTarget) => Promise<Record<string, unknown>>;
+  onClientTool: (toolCall: ChatKitClientToolCall) => Promise<ChatKitClientToolResult>;
+  onRevealFile: (target: RevealTarget) => Promise<ChatKitClientToolResult>;
 }) {
   const chatKitConfig = getChatKitConfig();
   const handleDeeplink = useCallback(
-    (event: { name: string; data?: Record<string, unknown> }): void => {
+    (event: ChatKitDeeplinkEvent): void => {
       const sourceIdFromName = event.name.startsWith("source/")
         ? decodeURIComponent(event.name.slice("source/".length))
         : null;

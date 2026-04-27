@@ -1,6 +1,6 @@
 import { DEFAULT_LIBRARY_QUERY } from "../lib/appConstants";
 import type { LibrarySearchResult } from "../lib/appTypes";
-import type { TagSummary } from "../lib/types";
+import type { TagMatchMode, TagSummary } from "../lib/types";
 import { stringAttribute } from "../lib/uiFormat";
 
 export function LibrarySearchView({
@@ -26,7 +26,7 @@ export function LibrarySearchView({
   libraryResultCount: number;
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
-  libraryTagMatchMode: "all" | "any";
+  libraryTagMatchMode: TagMatchMode;
   selectedSourceIdSet: Set<string>;
   selectedTagIdSet: Set<string>;
   tags: TagSummary[];
@@ -34,7 +34,7 @@ export function LibrarySearchView({
   onOpenSource: (sourceId: string) => void;
   onQueryChange: (value: string) => void;
   onRunSearch: (mode: "replace" | "append") => void;
-  onTagMatchModeChange: (value: "all" | "any") => void;
+  onTagMatchModeChange: (value: TagMatchMode) => void;
   onToggleSourceSelection: (sourceId: string) => void;
   onToggleTag: (tagId: string) => void;
 }) {

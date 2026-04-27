@@ -1,4 +1,7 @@
 import type {
+  ChatKitMetadata,
+} from "./appTypes";
+import type {
   ActionResponse,
   AuthUser,
   BranchSearchRequest,
@@ -49,7 +52,7 @@ const API_BASE_URL = normalizeBase(import.meta.env.VITE_API_BASE_URL ?? "/api");
 const CHATKIT_DOMAIN_KEY = import.meta.env.VITE_CHATKIT_DOMAIN_KEY ?? "domain_pk_local_vectorstore2";
 
 let bearerTokenGetter: (() => Promise<string | null>) | null = null;
-let chatKitMetadataGetter: (() => Record<string, unknown> | null) | null = null;
+let chatKitMetadataGetter: (() => ChatKitMetadata | null) | null = null;
 
 type SearchFilterRequestBody = {
   selected_source_ids: string[];
@@ -75,7 +78,7 @@ export function setBearerTokenGetter(getter: (() => Promise<string | null>) | nu
   bearerTokenGetter = getter;
 }
 
-export function setChatKitMetadataGetter(getter: (() => Record<string, unknown> | null) | null): void {
+export function setChatKitMetadataGetter(getter: (() => ChatKitMetadata | null) | null): void {
   chatKitMetadataGetter = getter;
 }
 
