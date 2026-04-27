@@ -4,6 +4,7 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 import logging
 import mimetypes
 from pathlib import Path
@@ -53,6 +54,7 @@ from backend.app.schemas import (
     SemanticSplitResult,
     SplitPreviewResponse,
     SourceKind,
+    SourceMetadata,
     SourceStatus,
     TagMatchMode,
     TagMutationResponse,
@@ -136,6 +138,18 @@ class VectorIndexMaterial:
     media_type: str
     payload: bytes
     strategy_label: str
+    part_index: int = 1
+    part_count: int = 1
+    start_page: int | None = None
+    end_page: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PdfPayloadPart:
+    filename: str
+    payload: bytes
+    start_page: int
+    end_page: int
 
 
 class SourceService:
@@ -1420,12 +1434,27 @@ class SourceService:
                 task.state_json = {"stage": "uploading_original_file", "source_id": source.id}
                 task.updated_at = _utcnow()
                 await session.commit()
-                source.openai_original_file_id = await self._openai.upload_file_bytes(
-                    filename=_virtual_name(source),
-                    payload=payload,
-                    purpose=_openai_file_purpose(source_kind=source_kind),
-                )
-                source.openai_original_file_purpose = _openai_file_purpose(source_kind=source_kind)
+                if len(payload) <= self._settings.openai_file_upload_max_bytes:
+                    source.openai_original_file_id = await self._openai.upload_file_bytes(
+                        filename=_virtual_name(source),
+                        payload=payload,
+                        purpose=_openai_file_purpose(source_kind=source_kind),
+                    )
+                    source.openai_original_file_purpose = _openai_file_purpose(source_kind=source_kind)
+                elif source_kind == "pdf":
+                    source.openai_original_file_id = None
+                    source.openai_original_file_purpose = None
+                    logger.info(
+                        "source_original_file_upload_skipped source_id=%s bytes=%s max_bytes=%s reason=oversized_pdf",
+                        source.id,
+                        len(payload),
+                        self._settings.openai_file_upload_max_bytes,
+                    )
+                else:
+                    raise ValueError(
+                        f"{source.original_filename} is larger than the OpenAI file upload limit "
+                        f"({self._settings.openai_file_upload_max_bytes} bytes)."
+                    )
                 task.state_json = {
                     "stage": "extracting_text",
                     "source_id": source.id,
@@ -1434,28 +1463,29 @@ class SourceService:
                 task.updated_at = _utcnow()
                 await session.commit()
 
-                index_material = await self._vector_index_material(
+                index_materials = await self._vector_index_materials(
                     source=source, source_kind=source_kind, payload=payload
                 )
-                source.ingest_strategy = index_material.strategy_label
+                source.ingest_strategy = index_materials[0].strategy_label
                 task.state_json = {
                     "stage": "indexing_source_file",
                     "source_id": source.id,
-                    "strategy_hint": index_material.strategy_label,
+                    "strategy_hint": source.ingest_strategy,
+                    "part_count": len(index_materials),
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
                 index_started_at = perf_counter()
-                vector_file_id = await self._replace_source_vector_file(
+                vector_file_ids = await self._replace_source_vector_files(
                     source=source,
-                    filename=index_material.filename,
-                    payload=index_material.payload,
+                    materials=index_materials,
                     tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
                 task.state_json = {
                     "stage": "indexing_source_file",
                     "source_id": source.id,
-                    "openai_vector_file_id": vector_file_id,
+                    "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_ids": vector_file_ids,
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
@@ -1464,7 +1494,7 @@ class SourceService:
                     clerk_user_id,
                     source.id,
                     task.id,
-                    vector_file_id,
+                    source.openai_vector_file_id,
                     (perf_counter() - index_started_at) * 1000,
                 )
 
@@ -1485,11 +1515,13 @@ class SourceService:
                     "chunk_count": len(source.chunks),
                     "tag_count": 1 if source.tag_slug else 0,
                     "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_count": len(vector_file_ids),
                 }
                 task.result_json = {
                     "source_id": source.id,
                     "chunk_count": len(source.chunks),
                     "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_ids": vector_file_ids,
                 }
                 task.error_message = None
                 task.completed_at = _utcnow()
@@ -1520,8 +1552,7 @@ class SourceService:
                     )
                 else:
                     source.openai_original_file_id = None
-                    source.openai_vector_file_id = None
-                    source.vector_attributes = {}
+                    _clear_source_vector_state(source)
                     for chunk in source.chunks:
                         chunk.openai_file_id = None
                 source.status = "failed"
@@ -1580,8 +1611,7 @@ class SourceService:
                 )
             else:
                 source.openai_original_file_id = None
-                source.openai_vector_file_id = None
-                source.vector_attributes = {}
+                _clear_source_vector_state(source)
                 for chunk in source.chunks:
                     chunk.openai_file_id = None
             source.status = "failed"
@@ -1772,19 +1802,18 @@ class SourceService:
                     (perf_counter() - save_started_at) * 1000,
                 )
 
-                index_material = await self._vector_index_material(
+                index_materials = await self._vector_index_materials(
                     source=source, source_kind=source_kind, payload=payload
                 )
-                vector_file_id = await self._replace_source_vector_file(
+                vector_file_ids = await self._replace_source_vector_files(
                     source=source,
-                    filename=index_material.filename,
-                    payload=index_material.payload,
+                    materials=index_materials,
                     tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
 
                 source.status = "ready"
                 source.error_message = None
-                source.ingest_strategy = index_material.strategy_label
+                source.ingest_strategy = index_materials[0].strategy_label
                 source.updated_at = _utcnow()
                 library.updated_at = _utcnow()
                 task.status = "completed"
@@ -1794,13 +1823,15 @@ class SourceService:
                     "chunk_count": len(normalized_chunks),
                     "replaced_chunk_count": replaced_chunk_count,
                     "tag_count": 1 if source.tag_slug else 0,
-                    "openai_vector_file_id": vector_file_id,
+                    "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_count": len(vector_file_ids),
                 }
                 task.result_json = {
                     "source_id": source.id,
                     "chunk_count": len(normalized_chunks),
                     "replaced_chunk_count": replaced_chunk_count,
-                    "openai_vector_file_id": vector_file_id,
+                    "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_ids": vector_file_ids,
                 }
                 task.error_message = None
                 task.completed_at = _utcnow()
@@ -1974,21 +2005,21 @@ class SourceService:
 
                 payload = await self._storage.get_bytes(key=source.storage_key)
                 source_kind = cast(SourceKind, source.source_kind)
-                index_material = await self._vector_index_material(
+                index_materials = await self._vector_index_materials(
                     source=source, source_kind=source_kind, payload=payload
                 )
-                source.ingest_strategy = index_material.strategy_label
-                vector_file_id = await self._replace_source_vector_file(
+                source.ingest_strategy = index_materials[0].strategy_label
+                vector_file_ids = await self._replace_source_vector_files(
                     source=source,
-                    filename=index_material.filename,
-                    payload=index_material.payload,
+                    materials=index_materials,
                     tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
                 reindexed_source_file = True
                 task.state_json = {
                     "stage": "reindexing_source_file",
                     "source_id": source.id,
-                    "openai_vector_file_id": vector_file_id,
+                    "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_count": len(vector_file_ids),
                 }
                 task.updated_at = _utcnow()
                 await session.commit()
@@ -2003,11 +2034,13 @@ class SourceService:
                     "source_id": source.id,
                     "openai_vector_file_id": source.openai_vector_file_id,
                     "tag_count": 1 if source.tag_slug else 0,
+                    "openai_vector_file_count": len(vector_file_ids),
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
                 task.result_json = {
                     "source_id": source.id,
                     "openai_vector_file_id": source.openai_vector_file_id,
+                    "openai_vector_file_ids": vector_file_ids,
                     "tag_count": 1 if source.tag_slug else 0,
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
@@ -2441,15 +2474,16 @@ class SourceService:
     async def _delete_openai_files_for_source(self, *, source: SourceFile) -> dict[str, object]:
         cleanup_started_at = perf_counter()
         chunk_cleanup = await self._delete_openai_chunk_files_for_source(source=source)
-        vector_file_deleted = source.openai_vector_file_id is not None
-        if source.openai_vector_file_id is not None:
+        vector_file_ids = _source_vector_file_ids(source)
+        if vector_file_ids:
             vector_store_id = source.library.openai_vector_store_id
-            if vector_store_id is not None:
-                await self._openai.detach_file_from_vector_store(
-                    vector_store_id=vector_store_id,
-                    file_id=source.openai_vector_file_id,
-                )
-            await self._openai.delete_file(file_id=source.openai_vector_file_id)
+            for file_id in vector_file_ids:
+                if vector_store_id is not None:
+                    await self._openai.detach_file_from_vector_store(
+                        vector_store_id=vector_store_id,
+                        file_id=file_id,
+                    )
+                await self._openai.delete_file(file_id=file_id)
         original_file_deleted = source.openai_original_file_id is not None
         if source.openai_original_file_id is not None:
             await self._openai.delete_file(file_id=source.openai_original_file_id)
@@ -2457,13 +2491,14 @@ class SourceService:
             "source_openai_files_cleaned source_id=%s openai_chunk_files=%s openai_vector_file=%s openai_original_file=%s duration_ms=%.1f",
             source.id,
             chunk_cleanup["chunk_file_count"],
-            vector_file_deleted,
+            bool(vector_file_ids),
             original_file_deleted,
             (perf_counter() - cleanup_started_at) * 1000,
         )
         return {
             "chunk_file_count": chunk_cleanup["chunk_file_count"],
-            "vector_file_deleted": vector_file_deleted,
+            "vector_file_deleted": bool(vector_file_ids),
+            "vector_file_count": len(vector_file_ids),
             "original_file_deleted": original_file_deleted,
         }
 
@@ -2487,44 +2522,74 @@ class SourceService:
         )
         return {"chunk_file_count": len(chunk_file_ids)}
 
-    async def _replace_source_vector_file(
+    async def _replace_source_vector_files(
         self,
         *,
         source: SourceFile,
-        filename: str,
-        payload: bytes,
+        materials: list[VectorIndexMaterial],
         tag_slugs: list[str],
-    ) -> str:
+    ) -> list[str]:
         vector_store_id = source.library.openai_vector_store_id
         if vector_store_id is None:
             raise ValueError("Source library does not have an OpenAI vector store.")
-        attributes = build_vector_attributes(
-            source_id=source.id,
-            source_kind=source.source_kind,
-            virtual_path=_virtual_path(source),
-            virtual_name=_virtual_name(source),
-            source_created_at=source.created_at,
-            tag_slugs=tag_slugs,
-        )
-        old_file_id = source.openai_vector_file_id
-        new_file_id = await self._openai.upload_file_bytes(
-            filename=filename,
-            payload=payload,
-            purpose="assistants",
-        )
+        if not materials:
+            raise ValueError("No vector index material was produced.")
+        old_file_ids = _source_vector_file_ids(source)
+        new_file_ids: list[str] = []
+        first_attributes: OpenAIAttributes | None = None
         try:
-            await self._openai.attach_file_to_vector_store(
-                vector_store_id=vector_store_id,
-                file_id=new_file_id,
-                attributes=attributes,
-            )
+            for material in materials:
+                attributes = build_vector_attributes(
+                    source_id=source.id,
+                    source_kind=source.source_kind,
+                    virtual_path=_virtual_path(source),
+                    virtual_name=material.filename,
+                    source_created_at=source.created_at,
+                    tag_slugs=tag_slugs,
+                    split_part=material.part_index if material.part_count > 1 else None,
+                    split_part_count=material.part_count if material.part_count > 1 else None,
+                    page_start=material.start_page,
+                    page_end=material.end_page,
+                )
+                new_file_id = await self._openai.upload_file_bytes(
+                    filename=material.filename,
+                    payload=material.payload,
+                    purpose="assistants",
+                )
+                try:
+                    await self._openai.attach_file_to_vector_store(
+                        vector_store_id=vector_store_id,
+                        file_id=new_file_id,
+                        attributes=attributes,
+                    )
+                except Exception:
+                    await self._openai.delete_file(file_id=new_file_id)
+                    raise
+                new_file_ids.append(new_file_id)
+                first_attributes = first_attributes or attributes
         except Exception:
-            await self._openai.delete_file(file_id=new_file_id)
+            for file_id in new_file_ids:
+                try:
+                    await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=file_id)
+                    await self._openai.delete_file(file_id=file_id)
+                except Exception as cleanup_error:
+                    logger.warning(
+                        "source_vector_new_file_cleanup_failed source_id=%s file_id=%s error=%s",
+                        source.id,
+                        file_id,
+                        cleanup_error,
+                    )
             raise
 
-        source.openai_vector_file_id = new_file_id
-        source.vector_attributes = attributes
-        if old_file_id is not None and old_file_id != new_file_id:
+        source.openai_vector_file_id = new_file_ids[0]
+        source.vector_attributes = first_attributes or {}
+        metadata = dict(source.source_metadata)
+        metadata["openai_vector_file_ids"] = new_file_ids
+        metadata["openai_vector_part_count"] = len(new_file_ids)
+        source.source_metadata = cast(SourceMetadata, metadata)
+        for old_file_id in old_file_ids:
+            if old_file_id in new_file_ids:
+                continue
             try:
                 await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=old_file_id)
                 await self._openai.delete_file(file_id=old_file_id)
@@ -2535,7 +2600,47 @@ class SourceService:
                     old_file_id,
                     cleanup_error,
                 )
-        return new_file_id
+        return new_file_ids
+
+    async def _vector_index_materials(
+        self,
+        *,
+        source: SourceFile,
+        source_kind: SourceKind,
+        payload: bytes,
+    ) -> list[VectorIndexMaterial]:
+        max_upload_bytes = self._settings.openai_file_upload_max_bytes
+        if source_kind == "pdf" and len(payload) > max_upload_bytes:
+            target_bytes = min(max_upload_bytes, self._settings.openai_pdf_split_target_bytes)
+            pdf_parts = split_pdf_payload_by_size(
+                filename=_virtual_name(source),
+                payload=payload,
+                max_part_bytes=target_bytes,
+            )
+            if len(pdf_parts) > self._settings.openai_pdf_split_max_parts:
+                raise ValueError(
+                    f"{source.original_filename} needs {len(pdf_parts)} PDF parts, which exceeds the configured "
+                    f"limit of {self._settings.openai_pdf_split_max_parts}."
+                )
+            return [
+                VectorIndexMaterial(
+                    filename=part.filename,
+                    media_type="application/pdf",
+                    payload=part.payload,
+                    strategy_label="openai_vector_pdf_split_file",
+                    part_index=index,
+                    part_count=len(pdf_parts),
+                    start_page=part.start_page,
+                    end_page=part.end_page,
+                )
+                for index, part in enumerate(pdf_parts, start=1)
+            ]
+        material = await self._vector_index_material(source=source, source_kind=source_kind, payload=payload)
+        if len(material.payload) > max_upload_bytes:
+            raise ValueError(
+                f"{material.filename} is larger than the OpenAI file upload limit ({max_upload_bytes} bytes)."
+            )
+        return [material]
 
     async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[str]:
         del session, library_id
@@ -2849,6 +2954,10 @@ def build_vector_attributes(
     virtual_name: str,
     source_created_at: datetime,
     tag_slugs: list[str],
+    split_part: int | None = None,
+    split_part_count: int | None = None,
+    page_start: int | None = None,
+    page_end: int | None = None,
 ) -> dict[str, str | float | bool]:
     created_at = _as_utc(source_created_at)
     attributes: dict[str, str | float | bool] = {
@@ -2861,6 +2970,14 @@ def build_vector_attributes(
         "created_at": created_at.timestamp(),
         "tag": _tag_metadata_value(tag_slugs),
     }
+    if split_part is not None:
+        attributes["split_part"] = float(split_part)
+    if split_part_count is not None:
+        attributes["split_part_count"] = float(split_part_count)
+    if page_start is not None:
+        attributes["page_start"] = float(page_start)
+    if page_end is not None:
+        attributes["page_end"] = float(page_end)
     return attributes
 
 
@@ -2932,6 +3049,69 @@ def extract_pdf_text(*, filename: str, payload: bytes) -> str:
         return "\n\n".join(page_blocks).strip() or f"{filename}\n\nNo extractable PDF text was found."
     finally:
         temp_path.unlink(missing_ok=True)
+
+
+def split_pdf_payload_by_size(*, filename: str, payload: bytes, max_part_bytes: int) -> list[PdfPayloadPart]:
+    if max_part_bytes <= 0:
+        raise ValueError("PDF split target size must be positive.")
+    if len(payload) <= max_part_bytes:
+        return [PdfPayloadPart(filename=filename, payload=payload, start_page=1, end_page=_pdf_page_count(payload))]
+
+    from pypdf import PdfReader, PdfWriter
+
+    reader = PdfReader(BytesIO(payload))
+    page_count = len(reader.pages)
+    if page_count == 0:
+        raise ValueError("PDF has no pages to split.")
+
+    parts: list[PdfPayloadPart] = []
+    current_pages: list[int] = []
+    part_index = 1
+    for page_index in range(page_count):
+        candidate_pages = [*current_pages, page_index]
+        candidate_payload = _write_pdf_pages(reader, candidate_pages)
+        if len(candidate_payload) <= max_part_bytes:
+            current_pages = candidate_pages
+            continue
+        if not current_pages:
+            raise ValueError(
+                f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting."
+            )
+        part_payload = _write_pdf_pages(reader, current_pages)
+        parts.append(
+            PdfPayloadPart(
+                filename=_pdf_part_filename(filename, part_index),
+                payload=part_payload,
+                start_page=current_pages[0] + 1,
+                end_page=current_pages[-1] + 1,
+            )
+        )
+        part_index += 1
+        single_page_payload = _write_pdf_pages(reader, [page_index])
+        if len(single_page_payload) > max_part_bytes:
+            raise ValueError(
+                f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting."
+            )
+        current_pages = [page_index]
+
+    if current_pages:
+        parts.append(
+            PdfPayloadPart(
+                filename=_pdf_part_filename(filename, part_index),
+                payload=_write_pdf_pages(reader, current_pages),
+                start_page=current_pages[0] + 1,
+                end_page=current_pages[-1] + 1,
+            )
+        )
+    logger.info(
+        "pdf_payload_split filename=%s bytes=%s max_part_bytes=%s pages=%s parts=%s",
+        filename,
+        len(payload),
+        max_part_bytes,
+        page_count,
+        len(parts),
+    )
+    return parts
 
 
 def build_pdf_text_batches(extracted_text: str, *, pages_per_batch: int) -> list[PdfTextBatch]:
@@ -3035,6 +3215,49 @@ def bounded_tag_ids(tag_ids: Sequence[str]) -> list[str]:
     if len(output) > 1:
         raise ValueError("A source can have at most one tag.")
     return output
+
+
+def _pdf_page_count(payload: bytes) -> int:
+    from pypdf import PdfReader
+
+    return len(PdfReader(BytesIO(payload)).pages)
+
+
+def _write_pdf_pages(reader: Any, page_indexes: Sequence[int]) -> bytes:
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    for page_index in page_indexes:
+        writer.add_page(reader.pages[page_index])
+    output = BytesIO()
+    writer.write(output)
+    return output.getvalue()
+
+
+def _pdf_part_filename(filename: str, part_index: int) -> str:
+    path = Path(filename)
+    suffix = path.suffix or ".pdf"
+    stem = path.stem or "document"
+    return f"{stem}.part-{part_index:03d}{suffix}"
+
+
+def _source_vector_file_ids(source: SourceFile) -> list[str]:
+    output: list[str] = []
+    metadata_ids = source.source_metadata.get("openai_vector_file_ids")
+    if isinstance(metadata_ids, list):
+        output.extend(item for item in metadata_ids if isinstance(item, str) and item.strip())
+    if source.openai_vector_file_id:
+        output.append(source.openai_vector_file_id)
+    return list(dict.fromkeys(output))
+
+
+def _clear_source_vector_state(source: SourceFile) -> None:
+    source.openai_vector_file_id = None
+    source.vector_attributes = {}
+    metadata = dict(source.source_metadata)
+    metadata.pop("openai_vector_file_ids", None)
+    metadata.pop("openai_vector_part_count", None)
+    source.source_metadata = cast(SourceMetadata, metadata)
 
 
 def _metadata_string(metadata: Mapping[str, object], key: str) -> str | None:

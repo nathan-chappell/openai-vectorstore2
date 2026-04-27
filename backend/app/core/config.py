@@ -60,6 +60,9 @@ class AppSettings(BaseSettings):
     openai_poll_interval_ms: int = 1_000
     openai_default_voice: str = "alloy"
     openai_context_compact_threshold: int | None = 80_000
+    openai_file_upload_max_bytes: int = 512 * 1024 * 1024
+    openai_pdf_split_target_bytes: int = 480 * 1024 * 1024
+    openai_pdf_split_max_parts: int = 128
 
     agent_model_provider: Literal["openai_responses", "chat_completions_v1"] = "openai_responses"
     chat_completions_base_url: AnyHttpUrl | None = None

@@ -7,7 +7,7 @@ from typing import Any, cast
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
-from backend.app.services.sources import build_pdf_text_batches, extract_pdf_text
+from backend.app.services.sources import build_pdf_text_batches, extract_pdf_text, split_pdf_payload_by_size
 
 
 def test_build_pdf_text_batches_preserves_page_markers_and_ranges() -> None:
@@ -54,6 +54,28 @@ def test_extract_pdf_text_marks_pages_from_fixture_pdf() -> None:
         (1, 1, "page 1"),
         (2, 2, "page 2"),
     ]
+
+
+def test_split_pdf_payload_by_size_preserves_page_ranges_and_limits() -> None:
+    page_texts = [
+        "Alpha " * 200,
+        "Bravo " * 200,
+        "Charlie " * 200,
+    ]
+    payload = _pdf_with_pages(page_texts)
+    single_page_limit = max(len(_pdf_with_pages([text])) for text in page_texts) + 256
+
+    parts = split_pdf_payload_by_size(filename="large.pdf", payload=payload, max_part_bytes=single_page_limit)
+
+    assert len(parts) == 3
+    assert [(part.filename, part.start_page, part.end_page) for part in parts] == [
+        ("large.part-001.pdf", 1, 1),
+        ("large.part-002.pdf", 2, 2),
+        ("large.part-003.pdf", 3, 3),
+    ]
+    assert all(len(part.payload) <= single_page_limit for part in parts)
+    assert "Alpha" in extract_pdf_text(filename=parts[0].filename, payload=parts[0].payload)
+    assert "Charlie" in extract_pdf_text(filename=parts[2].filename, payload=parts[2].payload)
 
 
 def _pdf_with_pages(page_texts: list[str]) -> bytes:

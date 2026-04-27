@@ -28,6 +28,8 @@ class SourceMetadata(TypedDict, total=False):
     artifact_kind: str
     report_title: str
     report_format: str
+    openai_vector_file_ids: list[str]
+    openai_vector_part_count: int
 
 
 class ResearchProvenance(SourceMetadata, total=False):
