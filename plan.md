@@ -84,7 +84,7 @@ Acceptance criteria:
 
 ### 1. TypeScript Contract And Legacy Cleanup
 
-Status: first utility/contract extraction implemented; continue component/API cleanup.
+Status: complete for current frontend refactor baseline; continue only opportunistic cleanup.
 
 Goal:
 
@@ -106,8 +106,9 @@ Implementation plan:
 - Completed Explorer shell split: moved the remaining Explorer/Library pane shell and keyboard handling into a focused typed component, leaving `App.tsx` primarily as state orchestration.
 - Completed API contract pass: named repeated frontend request parameter shapes and reused filter/query serializers at the API boundary.
 - Completed ChatKit contract pass: named ChatKit metadata, deeplink, and client-tool result shapes instead of repeating broad inline records.
-- Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
-- Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
+- Completed coverage pass: expanded browser coverage for Library tag-filter payloads and opening a semantic result back into Explorer with preview.
+- Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts as new surfaces are added.
+- Future cleanup should be opportunistic: extract hooks only if `App.tsx` orchestration becomes harder to maintain, and keep new API boundary payloads named as features are introduced.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
 - Keep runtime parsing at API boundaries explicit and lightweight. Use structured guards only where external or optional data genuinely needs narrowing; do not add a heavy validation library unless the codebase has a clear need.
 - Prefer discriminated unions for task states, artifact kinds, source kinds, ChatKit client-tool events, and render/export statuses so switch statements become exhaustive and UI state cannot silently drift.

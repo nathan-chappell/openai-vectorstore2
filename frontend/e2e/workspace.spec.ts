@@ -227,7 +227,7 @@ test("explorer local search and library semantic append use separate views", asy
     original_filename: "bravo-plan.txt",
     summary: "Roadmap for evals.",
   });
-  const searchQueries: string[] = [];
+  const searchPayloads: Array<{ query: string; tag_ids: string[] }> = [];
 
   await page.route("**/api/tags", async (route) => {
     await route.fulfill({
@@ -251,9 +251,15 @@ test("explorer local search and library semantic append use separate views", asy
   await page.route("**/api/sources/source-alpha", async (route) => {
     await route.fulfill({ json: { ...alphaSource, storage_provider: "local", storage_key: "alpha", ingest_strategy: "source", metadata: {}, chunks: [] } });
   });
+  await page.route("**/api/sources/source-alpha/content", async (route) => {
+    await route.fulfill({
+      body: "Alpha Notes\nRetrieval quality details for preview.",
+      contentType: "text/plain",
+    });
+  });
   await page.route("**/api/search", async (route) => {
     const payload = route.request().postDataJSON() as { query: string; tag_ids: string[] };
-    searchQueries.push(payload.query);
+    searchPayloads.push(payload);
     await route.fulfill({
       json: {
         query: payload.query,
@@ -288,18 +294,24 @@ test("explorer local search and library semantic append use separate views", asy
   await page.getByRole("button", { name: "RAG" }).click();
   await page.getByPlaceholder("indexed files").fill("");
   await page.keyboard.press("Enter");
-  await expect.poll(() => searchQueries).toEqual(["indexed files"]);
+  await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files"]);
+  expect(searchPayloads[0].tag_ids).toEqual(["tag-rag"]);
   await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
 
   await page.getByPlaceholder("indexed files").fill("bravo");
   await page.keyboard.press("Control+Enter");
-  await expect.poll(() => searchQueries).toEqual(["indexed files", "bravo"]);
+  await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files", "bravo"]);
   await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
   await expect(page.locator(".library-result-list")).toContainText("charlie-paper.pdf");
   await expect(page.locator(".library-result-list")).toContainText("/Archives/charlie-paper.pdf");
   await page.getByRole("button", { name: "Select results" }).click();
   await expect(page.getByRole("checkbox", { name: "Select alpha-notes.txt for chat" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Select charlie-paper.pdf for chat" })).toBeChecked();
+  await page.locator(".library-result-row").filter({ hasText: "alpha-notes.txt" }).locator(".library-result-open").click();
+  await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator('[data-entry-id="entry-alpha"]')).toHaveClass(/selected-file-row/);
+  await expect(page.locator(".explorer-detail")).toContainText("Alpha Notes");
+  await expect(page.locator(".raw-preview")).toContainText("Retrieval quality details for preview.");
   await page.screenshot({ path: testInfo.outputPath("workspace-library-search.png"), fullPage: true });
 });
 
