@@ -102,6 +102,12 @@ export type BillingStatusResponse = {
   primary_email: string | null;
 };
 
+export type PaymentIntegrationResponse = {
+  provider: string;
+  checkout_enabled: boolean;
+  reason: string | null;
+};
+
 export type CreditGrantSummary = {
   id: string;
   clerk_user_id: string;

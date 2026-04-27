@@ -19,6 +19,7 @@ import type {
   FilesystemUpdateEntryRequest,
   IngestFinalizeResponse,
   PaginationParams,
+  PaymentIntegrationResponse,
   QaActionRequest,
   ResearchCandidateIngestRequest,
   ResearchCandidateIngestResponse,
@@ -99,6 +100,10 @@ export async function authenticatedFetch(input: RequestInfo | URL, init?: Reques
 
 export async function getAuthenticatedUser(): Promise<AuthUser> {
   return apiRequest<AuthUser>("/auth/me");
+}
+
+export async function getPaymentIntegrationStatus(): Promise<PaymentIntegrationResponse> {
+  return apiRequest<PaymentIntegrationResponse>("/billing/payment-status");
 }
 
 export async function listSources(params: SourceListParams): Promise<SourceListResponse> {

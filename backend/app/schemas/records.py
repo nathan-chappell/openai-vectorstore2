@@ -144,6 +144,12 @@ class BillingStatusResponse(CreditBalanceSummary):
     primary_email: str | None = None
 
 
+class PaymentIntegrationResponse(BaseModel):
+    provider: str
+    checkout_enabled: bool
+    reason: str | None = None
+
+
 class AdminGrantCreditRequest(BaseModel):
     clerk_user_id: str = Field(min_length=1, max_length=128)
     credit_amount_usd: float = Field(gt=0)

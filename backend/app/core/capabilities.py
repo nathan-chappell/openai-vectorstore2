@@ -39,6 +39,7 @@ AppOperation: TypeAlias = Literal[
     "list_tasks",
     "get_task",
     "get_billing_status",
+    "get_payment_integration_status",
     "admin_list_users",
     "admin_set_user_active",
     "admin_grant_credit",
@@ -297,6 +298,11 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="get_billing_status",
         summary="Load current credit balance and billable status for the signed-in user.",
         rest_routes=("GET /api/billing/me",),
+    ),
+    AppCapability(
+        operation="get_payment_integration_status",
+        summary="Load checkout availability for the configured admin/payment integration.",
+        rest_routes=("GET /api/billing/payment-status",),
     ),
     AppCapability(
         operation="admin_list_users",

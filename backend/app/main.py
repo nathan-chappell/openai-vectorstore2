@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 import uvicorn
 
+from backend.app.admin import payment_integration_status
 from backend.app.bootstrap import create_services
 from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
@@ -41,6 +42,7 @@ from backend.app.schemas import (
     ImageGenerationRequest,
     IngestFinalizeResponse,
     LibrarySourceDetail,
+    PaymentIntegrationResponse,
     QaRequest,
     ResearchCandidateIngestRequest,
     ResearchCandidateIngestResponse,
@@ -178,6 +180,17 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             active=user.active,
             role=user.role,
             primary_email=user.email,
+        )
+
+    @app.get("/api/billing/payment-status")
+    async def billing_payment_status_api(
+        _: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> PaymentIntegrationResponse:
+        integration = payment_integration_status(resolved_settings)
+        return PaymentIntegrationResponse(
+            provider=integration.provider,
+            checkout_enabled=integration.checkout_enabled,
+            reason=integration.reason,
         )
 
     @app.post("/api/admin/credits/grant")

@@ -151,7 +151,8 @@ Implementation notes:
 - In Library view, `Enter` replaces the current result set and `Ctrl+Enter` appends/dedupes into it.
 - Results from Library view should be selectable as ChatKit file scope and reveal/open the corresponding file in Explorer.
 - ChatKit `set_file_search` should move the user to Library view and apply query/tag filters instead of crowding Explorer.
-- Preserve fast keyboard behavior in Explorer: `F2` rename, `Backspace` or `Alt+Left` go up, `Delete` delete, and Shift+arrow range selection.
+- Refine Explorer shortcut behavior around simple arrows: Up/Down move file focus/selection, Shift+Up/Down extends selection, Left/Right navigate backward/forward through a stack-based folder path history, `F2` renames, and `Delete` deletes.
+- Keep a simple folder-history stack for Explorer navigation instead of treating backward navigation as "go to parent folder"; entering folders, revealing files, and ChatKit/Library-driven folder jumps should push usable history entries without creating loops.
 - Keep preview closable and resizable so file details stay readable.
 
 Next:
@@ -169,6 +170,8 @@ Acceptance criteria:
 - `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not lose existing selected chat scope.
 - Selecting or revealing a file from Library opens the correct file in Explorer.
 - Explorer hotkeys work when focus is inside the file list rows, including after mouse selection.
+- Explorer shortcut help, such as `frontend/src/components/ExplorerDialogs.tsx`, documents Up/Down selection and Left/Right folder-history navigation rather than the older parent-folder-only behavior.
+- Folder history is deterministic: opening a folder pushes history, Left goes back, Right goes forward, and new navigation after going back truncates forward history.
 - Playwright covers switching views, tag filtering, file reveal, selection, and preview behavior.
 
 ### 3. Evidence Annotations
@@ -281,7 +284,7 @@ Decision:
 
 Implementation plan:
 
-- Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, and documented the default public behavior versus private `ai-portfolio-admin` setup.
+- Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, exposed typed payment integration status through `/api/billing/payment-status`, and documented the default public behavior versus private `ai-portfolio-admin` setup.
 - Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
 - Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.

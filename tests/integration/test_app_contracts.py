@@ -45,6 +45,10 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
         "BillingStatusResponse",
         {"active", "billable", "billing_enabled", "clerk_user_id", "credit_floor_usd", "current_credit_usd", "role"},
     ),
+    "PaymentIntegrationResponse": (
+        "PaymentIntegrationResponse",
+        {"checkout_enabled", "provider", "reason"},
+    ),
     "BranchSearchResponse": ("BranchSearchResponse", {"descend", "levels", "max_width", "query"}),
     "ChunkHit": ("ChunkHit", {"attributes", "chunk_id", "locator", "score", "source_file_id", "text"}),
     "ChunkLocator": ("ChunkLocator", {"end_page", "start_page", "type"}),
@@ -193,6 +197,11 @@ async def test_http_ingest_search_and_qa_contracts(
             billing = await client.get("/api/billing/me", headers=auth_headers)
             assert billing.status_code == 200
             assert billing.json()["billable"] is True
+
+            payment_status = await client.get("/api/billing/payment-status", headers=auth_headers)
+            assert payment_status.status_code == 200
+            assert payment_status.json()["provider"] == "default"
+            assert payment_status.json()["checkout_enabled"] is False
 
             grant = await client.post(
                 "/api/admin/credits/grant",
