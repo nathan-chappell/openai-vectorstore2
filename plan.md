@@ -32,6 +32,8 @@ Functional final checks:
 - Verify grounded ChatKit answers from selected Explorer files and Library search results, including citation clicks and browser-side reveal behavior.
 - Verify research-builder flow on a small topic: discovery, ingest, vector indexing, scoped answer, progress visibility, and log traceability.
 - Verify report generation end to end: structured draft, Markdown render with KaTeX-compatible math/evidence links, saved library artifact, PDF render path when implemented, PDF inspection/retry behavior, and download links that point at saved artifacts.
+- Verify deployed MCP from the user's ChatGPT account: connect to the deployed MCP server, run exposed tools/resources from ChatGPT, and confirm the MCP Apps UI renders well enough for screenshots.
+- Verify FastMCP dev-server workflow locally before deployment: use it to exercise MCP tool discovery, Apps UI resources, research actions, semantic/tag search, source detail views, and raw-file/content retrieval.
 - Verify generated assets and stored artifacts are reachable from the library, selectable for ChatKit context where appropriate, and covered by cleanup/delete flows.
 - Verify billing/usage foundations are acceptable for beta: activation gate, admin credit grant, low-credit block, cost event creation for the main expensive paths, and clear logs with response/conversation IDs.
 - Run the standard verification suite plus at least one browser smoke pass against a seeded realistic library.
@@ -51,7 +53,7 @@ Deployment checklist:
 Resume/demo checklist:
 
 - Update README with a concise feature list, architecture diagram or section, local run commands, Docker/Railway deployment notes, and a demo script.
-- Add screenshots or a short walkthrough showing Explorer, Library semantic search, ChatKit grounded answer, report artifact, and deployment/runtime logs if useful.
+- Add screenshots or a short walkthrough showing Explorer, Library semantic search, ChatKit grounded answer, report artifact, MCP Apps UI, and deployment/runtime logs if useful.
 - Call out the strongest technical points plainly: OpenAI vector-store file search with app-owned metadata filters, ChatKit agent tools, MCP adapters, task progress, typed Python/TypeScript contracts, usage accounting, and artifact/report workflows.
 - Keep the live beta route stable enough to show, but make clear in copy and logs that it is beta and may use admin-gated access.
 
@@ -275,11 +277,13 @@ Goal:
 - Use `git@github.com:nathan-chappell/ai-portfolio-admin.git` as the private source of truth, likely mounted as a git submodule in each portfolio app.
 - Keep sensitive/admin implementation details out of the public-facing project repos while still preserving a clear boundary and a default implementation that lets each repo run without the private submodule.
 - Support payments through a provider-neutral boundary, with PayPal as an important planned provider and Stripe still possible later.
+- Support a "request free credits" flow for early access, beta testers, and trusted networks such as LinkedIn connections. Admins must be able to approve, reject, and manually grant credits with clear audit history even before payment providers are fully automated.
 
 Decision:
 
 - Treat `ai-portfolio-admin` as a shared admin/auth/payments package, not as business-domain code. This repo should keep vector-store/RAG/library/report logic local.
 - Each app should expose a narrow integration layer: current user, role/active state, credit balance, admin user operations, payment checkout/start, payment webhook/confirmation, credit grant, and cost debit.
+- Free-credit requests are a first-class admin workflow, not a hidden manual database operation. They should produce request records, decision records, and eventual credit grants with source/reason metadata.
 - The private submodule can provide the production implementation for Clerk, admin panels, credit ledgers, and payment providers.
 - This repo must also provide a default/local implementation that works without the submodule: local-dev auth, manual activation/credit grants, billing status, and clear "payments unavailable" behavior.
 - The fallback boundary is important both for developer experience and for making the app understandable when the private submodule is absent.
@@ -287,8 +291,12 @@ Decision:
 Implementation plan:
 
 - Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, exposed typed payment integration status through `/api/billing/payment-status`, and documented the default public behavior versus private `ai-portfolio-admin` setup.
+- Completed shared package scaffold: `../ai-portfolio-admin` now has typed Python contracts, Clerk metadata helpers, free-credit policy evaluation, PayPal receipt-review policy, an admin credit workflow protocol, reusable frontend TypeScript contracts/components, tests, docs, and an `ai_portfolio_admin.openai_vectorstore2` adapter module that this repo can load when configured.
 - Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
 - Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
+- Add shared free-credit request contracts: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, and resulting credit grant ID.
+- Add policy support for configured automatic grants, such as `linkedin_connection -> 5.00 USD`, while keeping verification pluggable. The shared package should decide from typed evidence and policy; host apps should own persistence and any external identity lookup.
+- Add shared admin-panel frontend pieces for user search, activation, manual credit grant, free-credit request review, payment attempt review, and audit/decision notes. Host apps should pass API callbacks rather than the component importing app-specific clients.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
 - Continue expanding the adapter module in this repo so it can load the shared submodule implementation when present and configured, otherwise fall back to the default local implementation.
 - Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
@@ -296,7 +304,18 @@ Implementation plan:
 - Document how a public clone behaves without the private submodule: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
 - Add a PayPal receipt-based temporary access provider as the MVP-friendly bridge before full PayPal Checkout or Stripe integration exists.
+- Add a manual credit grant flow that logs grants for all users with admin ID, amount, note, source, optional payment/free-credit request reference, and resulting balance.
 - Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
+
+Free-credit request workflow:
+
+- User-facing flow: submit a short request for trial/beta credits with optional LinkedIn profile URL, relationship note, intended use, and requested amount. Empty or casual requests should still be reviewable rather than discarded.
+- Admin flow: list pending requests, inspect user identity/current balance/recent grant history, approve for a specific amount, reject with an internal/public note, or mark as manual review.
+- Automatic policy flow: configured trusted request kinds can auto-approve a bounded credit amount. Example: verified LinkedIn connection evidence grants `$5.00` once per account. The package should model the rule and decision; the host app supplies evidence verification.
+- Audit requirements: every request, auto decision, manual decision, grant, rejection, and expiry must preserve actor, timestamp, status, amount, source, note, and external references when available.
+- Abuse controls: one active request at a time per user unless an admin overrides, configurable per-source maximum amount, idempotency keys for auto-grants, and reusable duplicate detection hooks.
+- MVP scope: typed contracts, decision service, policy evaluator, admin review component, manual approval/rejection callbacks, and docs.
+- Out of MVP scope: direct LinkedIn API integration, automated social graph verification, public marketing pages, subscription billing, and tax/invoice handling.
 
 PayPal receipt-based temporary access:
 
@@ -426,6 +445,16 @@ Status: complete for the current baseline.
 - ChatKit can name threads early through a side-effect tool that updates thread title metadata.
 - ChatKit tool responses are compacted to avoid passing OpenAI file IDs, full tag objects, raw metadata, and bulky result payloads back through conversation state.
 - Tag slugs are treated as stable tag identifiers for ChatKit; backend tag-filter paths accept tag slugs as well as legacy tag IDs.
+
+Final MCP verification follow-ups:
+
+- Deployed MCP must be usable from the user's ChatGPT account against the beta service URL, not only through local clients.
+- FastMCP dev server should be the local verification path for MCP tool discovery, MCP Apps UI rendering, resource metadata, and end-to-end tool calls before deployment.
+- MCP Apps UI should expose screenshot-worthy flows for research-library building/status, semantic search, tag filtering, source detail/preview, and recent task state.
+- MCP tools/resources should expose research actions and semantic/tag search clearly enough for ChatGPT hosts to use them without relying on the web frontend.
+- After an MCP file search, ChatGPT should be able to request and receive the raw file content or appropriate extracted text for selected results, subject to size/safety limits and without leaking unrelated files.
+- Final screenshots should include the MCP Apps UI in ChatGPT or FastMCP dev tooling, plus at least one successful search-to-content retrieval flow.
+- Add or update tests/docs for MCP Apps resources, deployed MCP auth/config, raw content retrieval, and FastMCP dev-server usage.
 
 ### Logging And Debugging
 
