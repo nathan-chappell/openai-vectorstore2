@@ -45,10 +45,13 @@ from backend.app.schemas import (
     ResearchCandidateStatusUpdateRequest,
     ResearchImportCreateRequest,
     ResearchLibraryBuildRequest,
+    ReportDocument,
+    ReportMarkdownSaveRequest,
     SearchRequest,
     TaskKind,
     VoiceGenerationRequest,
 )
+from backend.app.services.reports import save_report_markdown_source
 from backend.app.services import ActionService, BillingService, ResearchImportService, SourceService
 
 logger = logging.getLogger("chatkit.server")
@@ -1431,6 +1434,41 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             )
             return compact_chatkit_action_payload(response.model_dump(mode="json"))
 
+        @function_tool(name_override="save_report_markdown")
+        async def save_report_markdown_tool(
+            ctx: ChatKitToolContext,
+            document: ReportDocument,
+            filename: str | None = None,
+            folder_id: str | None = None,
+            tag_ids: list[str] | None = None,
+            user_guidance: str | None = None,
+        ) -> dict[str, object]:
+            """Render a structured report to Markdown and save it as a searchable library source."""
+            request_context = ctx.context.request_context
+            await stream_chatkit_progress(ctx, "document", "Compiling report Markdown and saving it to the library.")
+            response = await save_report_markdown_source(
+                sources=self._sources,
+                clerk_user_id=request_context.clerk_user_id,
+                request=ReportMarkdownSaveRequest(
+                    document=document,
+                    filename=filename,
+                    folder_id=folder_id,
+                    tag_ids=tag_ids or [],
+                    user_guidance=user_guidance,
+                ),
+                origin_surface="chatkit",
+                origin_thread_id=ctx.context.thread.id,
+            )
+            task_label = (
+                f"task {response.task.id[:8]} ({response.task.status})" if response.task else "no task returned"
+            )
+            await stream_chatkit_progress(
+                ctx,
+                "check-circle",
+                f"Report saved as source {response.source.id[:8]} with {task_label}.",
+            )
+            return compact_chatkit_report_markdown_payload(response.model_dump(mode="json"))
+
         @function_tool(name_override="generate_image_from_library")
         async def generate_image_from_library_tool(
             ctx: ChatKitToolContext,
@@ -1532,6 +1570,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             get_task_tool,
             answer_from_library_tool,
             freeform_from_library_tool,
+            save_report_markdown_tool,
             generate_image_from_library_tool,
             generate_voice_from_library_tool,
         ]
@@ -1548,7 +1587,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "You are the indexed file-library assistant for an app-first OpenAI vector-store backed file explorer. "
             "Use the direct app tools to list the virtual filesystem, find files, inspect source details and tags, ingest text snippets, search indexed files, "
             "branch through related indexed file matches, preview proposed text splits without publishing them, re-split an existing source when the user asks "
-            "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
+            "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, save structured Markdown reports into the library, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "When a conversation starts or the topic becomes clear, call name_thread early with a concise 3-8 word title. "
             "When the user asks to research a topic, gather papers, or build a library from a paper title, use build_research_library as the primary path and let the browser panel mirror progress. "
             "The app's file explorer is the primary source of file input and selection; selected files are retrieval scope first, and only small ready files may be attached to a user turn as OpenAI file inputs. "
@@ -1845,6 +1884,18 @@ def compact_chatkit_action_payload(value: object) -> dict[str, object]:
             "source_status": payload.get("source_status")
             if isinstance(payload.get("source_status"), Mapping)
             else None,
+        }
+    )
+
+
+def compact_chatkit_report_markdown_payload(value: object) -> dict[str, object]:
+    payload = _mapping_or_empty(value)
+    markdown = _string_or_none(payload.get("markdown"))
+    return _drop_none(
+        {
+            "markdown": markdown[:4_000] if markdown is not None else None,
+            "source": compact_chatkit_source_payload(payload.get("source")),
+            "task": compact_chatkit_task_payload(payload.get("task")),
         }
     )
 

@@ -271,6 +271,8 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         operation="save_report_markdown",
         summary="Render a structured report document to Markdown and save it as a first-class library source.",
         rest_routes=("POST /api/reports/markdown",),
+        chatkit_tool="save_report_markdown",
+        mcp_tools=("save_report_markdown",),
         notes="The saved report follows the canonical source ingestion path so it can be searched, selected, downloaded, and cited.",
     ),
     AppCapability(

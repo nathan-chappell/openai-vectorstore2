@@ -67,6 +67,9 @@ from backend.app.schemas import (
     ResearchImportResponse,
     ResearchLibraryBuildRequest,
     ResearchLibraryBuildResponse,
+    ReportDocument,
+    ReportMarkdownSaveRequest,
+    ReportMarkdownSaveResponse,
     SearchRequest,
     SearchResponse,
     SplitPreviewResponse,
@@ -78,6 +81,7 @@ from backend.app.schemas import (
     TaskListResponse,
     VoiceGenerationRequest,
 )
+from backend.app.services.reports import save_report_markdown_source
 
 Badge: Any = Badge
 Button: Any = Button
@@ -963,6 +967,38 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         )
 
     @server.tool(
+        name="save_report_markdown",
+        description="Render a structured report to Markdown and save it as a searchable library source.",
+        annotations=mutating,
+    )
+    async def save_report_markdown_tool(
+        document: ReportDocument,
+        filename: Annotated[str | None, Field(min_length=1, max_length=255)] = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        tag_ids: list[str] | None = None,
+        user_guidance: Annotated[str | None, Field(max_length=2048)] = None,
+    ) -> ReportMarkdownSaveResponse:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = ReportMarkdownSaveRequest(
+            document=document,
+            filename=filename,
+            folder_id=folder_id,
+            tag_ids=tag_ids or [],
+            user_guidance=user_guidance,
+        )
+        return await _run_logged_tool(
+            tool_name="save_report_markdown",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=save_report_markdown_source(
+                sources=services.sources,
+                clerk_user_id=clerk_user_id,
+                request=payload,
+                origin_surface="mcp",
+            ),
+        )
+
+    @server.tool(
         name="generate_image",
         description="Generate an image asset, optionally grounded in chunks.",
         annotations=mutating,
@@ -1531,6 +1567,14 @@ def _summarize_result(result: object) -> object:
             "kind": result.kind,
             "hits": len(result.hits),
             "asset": result.asset is not None,
+        }
+    if isinstance(result, ReportMarkdownSaveResponse):
+        return {
+            "source_id": result.source.id,
+            "source_status": result.source.status,
+            "task_id": result.task.id if result.task is not None else None,
+            "task_status": result.task.status if result.task is not None else None,
+            "markdown_chars": len(result.markdown),
         }
     if isinstance(result, TaskListResponse):
         return {"returned": len(result.tasks)}
