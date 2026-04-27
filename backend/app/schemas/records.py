@@ -96,6 +96,14 @@ ResearchCandidateSourceType: TypeAlias = Literal[
 ResearchCandidateStatus: TypeAlias = Literal[
     "pending", "approved", "rejected", "ingesting", "ingested", "failed", "duplicate"
 ]
+PaymentAttemptStatus: TypeAlias = Literal[
+    "pending_payment",
+    "temporarily_approved",
+    "confirmed_paid",
+    "rejected_payment",
+    "expired_temporary_access",
+    "manual_review_required",
+]
 
 
 class AuthUser(BaseModel):
@@ -160,7 +168,12 @@ class BillingStatusResponse(CreditBalanceSummary):
 class PaymentIntegrationResponse(BaseModel):
     provider: str
     checkout_enabled: bool
+    receipt_upload_enabled: bool = False
     reason: str | None = None
+    paypal_recipient_email: str | None = None
+    paypal_payment_url: str | None = None
+    min_payment_usd: float
+    max_payment_usd: float
 
 
 class AdminGrantCreditRequest(BaseModel):
@@ -205,6 +218,40 @@ class AdminUserListResponse(BaseModel):
     offset: int
     has_more: bool
     query: str | None = None
+
+
+class PayPalPaymentAttemptCreateRequest(BaseModel):
+    expected_amount_usd: float = Field(gt=0)
+
+
+class PaymentAttemptSummary(BaseModel):
+    id: str
+    clerk_user_id: str
+    provider: str
+    expected_amount_usd: float
+    expected_currency: str
+    reference_code: str
+    status: PaymentAttemptStatus
+    temporary_access_expires_at: datetime | None = None
+    provider_reference: str | None = None
+    credit_grant_id: str | None = None
+    receipt_filename: str | None = None
+    review_reason: str | None = None
+    decision_note: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class PaymentAttemptListResponse(BaseModel):
+    attempts: list[PaymentAttemptSummary] = Field(default_factory=list)
+
+
+class AdminPaymentAttemptDecisionRequest(BaseModel):
+    attempt_id: str = Field(min_length=1, max_length=32)
+    status: Literal["confirmed_paid", "rejected_payment", "manual_review_required"]
+    decision_note: str = Field(min_length=1, max_length=500)
+    credit_amount_usd: float | None = Field(default=None, gt=0)
+    provider_reference: str | None = Field(default=None, max_length=255)
 
 
 class TagSummary(BaseModel):

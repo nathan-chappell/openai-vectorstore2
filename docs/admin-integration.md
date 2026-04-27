@@ -16,9 +16,10 @@ This mode uses the in-repo auth and billing services:
 - Clerk auth works through the documented Clerk env vars;
 - admin endpoints can activate users and grant manual credit;
 - usage debits and billing status are stored in this app's database;
-- payment checkout is deliberately unavailable.
+- payment checkout is deliberately unavailable;
+- optional PayPal receipt uploads can grant temporary credit when `PAYPAL_RECIPIENT_EMAIL` is configured.
 
-The default provider is the only mode required for a public clone, local tests, and early beta demos where credit is manually granted.
+The default provider is the only mode required for a public clone, local tests, and early beta demos where credit is manually granted or temporarily granted from PayPal receipt evidence.
 
 ## Private Shared Mode
 
@@ -44,4 +45,6 @@ The host app should expose app-owned factories from `ADMIN_SHARED_MODULE`, start
 
 Keep imports one-way: host apps import shared contracts/helpers from `vendor/ai-portfolio-admin`, while the shared submodule must not import host modules such as `backend.app`.
 
-Future payment work should stay provider-neutral at the app boundary: create checkout requests, verify provider callbacks or webhooks, idempotently grant credits, store provider references, and expose updated balances. PayPal-specific order creation, approval, capture, webhook verification, refund, and chargeback logic belongs in the private shared package plan before it is wired into this app.
+The current public PayPal flow does not require a PayPal business ID or API integration. It creates a reference code, asks the user to send payment to the configured PayPal recipient, accepts a text/PDF/email-style receipt upload, checks amount/currency/recipient/reference, grants temporary credit when the receipt looks safe enough, and leaves final confirmation to the admin panel.
+
+Future payment work should stay provider-neutral at the app boundary: create checkout requests, verify provider callbacks or webhooks, idempotently grant credits, store provider references, and expose updated balances. PayPal-specific order creation, approval, capture, webhook verification, refund, and chargeback logic belongs in the private shared package plan before it replaces the receipt-first flow.

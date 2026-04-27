@@ -394,7 +394,7 @@ Acceptance criteria:
 
 ### 8. Shared Admin, Auth, And Payments Submodule
 
-Status: shared submodule foundation and host admin UI wiring complete; free-credit request storage and provider-backed payments remain planned.
+Status: shared submodule foundation and host admin UI wiring complete; PayPal receipt temporary-credit flow implemented; free-credit request storage and full provider checkout/webhook payments remain planned.
 
 Goal:
 
@@ -424,7 +424,8 @@ Completed:
 
 Remaining implementation plan:
 
-- Extend host endpoints for the shared panel's free-credit and payment-attempt review callbacks once persistence exists. User search, activation/deactivation, and manual credit grants are wired now; review sections remain callback-ready but hidden until host callbacks are provided.
+- Completed PayPal receipt pass: users can create a PayPal payment reference, upload text/PDF/email-style receipt evidence, receive temporary credit when amount/currency/recipient/reference checks pass, and admins can review/confirm/reject payment attempts from the shared admin panel.
+- Extend host endpoints for the shared panel's free-credit review callbacks once persistence exists. User search, activation/deactivation, manual credit grants, and payment-attempt review are wired now.
 - Add host-owned persistence for free-credit requests: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, resulting credit grant ID, idempotency key, and duplicate/active-request checks.
 - Use shared free-credit policy evaluation from `ai-portfolio-admin` in host endpoints. The shared package decides from typed evidence and policy; host apps own persistence and external evidence verification.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
@@ -462,7 +463,7 @@ PayPal receipt-based temporary access:
 - Fraud controls: unique reference per attempt, no reused transaction IDs, no reused receipt evidence across accounts, automatic temporary expiry, stronger confirmation for permanent access, manual review for suspicious uploads, logged AI decisions, logged admin decisions, rate/attempt limits for temporary access, and automatic blocking for mismatched amount/currency/recipient or stale payment date.
 - Risk flags include missing transaction ID, missing/wrong recipient, wrong amount, wrong currency, old payment date, reused transaction ID, visible screenshot edits, cropped/incomplete receipt, payer identity mismatch, missing reference code, and multiple failed attempts by one user.
 - User messaging should be explicit: uploaded proof may grant temporary access while payment is verified; temporary approval can expire; confirmed payment activates access normally; rejection should tell the user to check amount, currency, recipient, and reference code.
-- MVP scope: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, AI extraction/plausibility review, temporary access grants, automatic expiry, admin review dashboard, manual confirm/reject/revoke actions, and audit logging.
+- Current MVP scope implemented without PayPal API/webhooks: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, local text/PDF plausibility review, temporary credit grants, admin review dashboard, manual confirm/reject/manual-review actions, and audit logging. Still add automatic expiry enforcement/revocation and image/OCR or model-assisted receipt extraction later if needed.
 - Out of MVP scope: full Stripe integration, full PayPal Checkout integration, subscriptions, refunds, tax handling, invoice generation, chargeback/dispute workflows, and fully automated permanent confirmation.
 
 Acceptance criteria:
@@ -477,7 +478,7 @@ Acceptance criteria:
 
 ### 9. Usage Credits And Provider-Ready Billing
 
-Status: first backend pass implemented; shared-admin foundation complete; admin UI, free-credit/payment funding, and complete usage coverage remain planned.
+Status: first backend pass implemented; shared-admin foundation complete; PayPal receipt funding implemented; free-credit request flow and complete usage coverage remain planned.
 
 Reference `../plodai` directly during implementation and align models/services/schemas with it where the concepts match, adapting names only where this app's library/task surfaces need richer references.
 
@@ -512,7 +513,8 @@ Implementation notes:
 - Add admin REST endpoints and a compact admin view for user search, activation/deactivation, manual credit grants with notes, balance display, recent grants/costs, and low/empty credit status.
 - Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding checkout flows until the ledger and shared-admin boundary are proven.
 - Prepare provider integrations by reserving fields for payment provider, checkout/session/order/payment intent IDs, payment status, and credit amount, then later add webhook/callback-driven credit grants with idempotency.
-- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add the compact admin UI or shared-admin adapter; and add provider-created credit grants once the manual ledger has been exercised.
+- Completed PayPal receipt funding pass: added payment-attempt persistence, receipt upload/review, temporary PayPal credit grants, account-panel payment instructions, and admin payment-attempt review.
+- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add free-credit requests; and add checkout/webhook-created credit grants once the manual and receipt ledgers have been exercised.
 
 Acceptance criteria:
 

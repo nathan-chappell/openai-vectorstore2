@@ -51,6 +51,18 @@ CHAT_COMPLETIONS_ON_PREM_PRICE_PER_MILLION_TOKENS=1.0
 
 Leave `CHAT_COMPLETIONS_BASE_URL` and `CHAT_COMPLETIONS_API_KEY` empty to use the normal OpenAI client defaults and `OPENAI_API_KEY`. Set `CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS` for private or OSS models whose context size is not in the app's known model table. On-prem billing uses the placeholder per-million-token rate until real infrastructure costs are modeled.
 
+For the simple PayPal receipt flow, set a personal or business PayPal recipient email. `PAYPAL_PAYMENT_URL` is optional; when present the account panel links users to it.
+
+```bash
+PAYPAL_RECIPIENT_EMAIL=you@example.com
+PAYPAL_PAYMENT_URL=
+PAYPAL_MIN_PAYMENT_USD=5.0
+PAYPAL_MAX_PAYMENT_USD=250.0
+PAYPAL_TEMPORARY_ACCESS_DAYS=14
+```
+
+This flow does not use PayPal checkout or webhooks. Users create a reference code, pay externally, upload text/PDF/email-style proof, and receive temporary credits when the receipt matches. Admins still confirm or reject attempts later.
+
 Set Clerk values when browser auth is enabled:
 
 ```bash

@@ -6,13 +6,25 @@ import type {
   AdminUserSummary as SharedAdminUserSummary,
   CreditGrantRecord,
   ManualCreditGrantRequest,
+  PaymentAttemptRecord as SharedPaymentAttemptRecord,
 } from "../../../vendor/ai-portfolio-admin/frontend";
-import { getPaymentIntegrationStatus, grantAdminCredit, listAdminUsers, setAdminUserActive } from "../lib/api";
+import {
+  createPayPalPaymentAttempt,
+  decideAdminPaymentAttempt,
+  getPaymentIntegrationStatus,
+  grantAdminCredit,
+  listAdminPaymentAttempts,
+  listAdminUsers,
+  listPayPalPaymentAttempts,
+  setAdminUserActive,
+  uploadPayPalReceipt,
+} from "../lib/api";
 import type {
   AdminGrantCreditResponse,
   AdminSetUserActiveResponse,
   AdminUserSummary as LocalAdminUserSummary,
   AuthUser,
+  PaymentAttemptSummary,
   PaymentIntegrationResponse,
 } from "../lib/types";
 
@@ -71,6 +83,21 @@ function toSharedGrant(payload: ManualCreditGrantRequest, response: AdminGrantCr
   };
 }
 
+function toSharedPaymentAttempt(attempt: PaymentAttemptSummary): SharedPaymentAttemptRecord {
+  return {
+    id: attempt.id,
+    user_id: attempt.clerk_user_id,
+    provider: "paypal",
+    expected_amount_usd: attempt.expected_amount_usd,
+    expected_currency: attempt.expected_currency,
+    reference_code: attempt.reference_code,
+    status: attempt.status,
+    temporary_access_expires_at: attempt.temporary_access_expires_at,
+    provider_reference: attempt.provider_reference,
+    created_at: attempt.created_at,
+  };
+}
+
 export function AdminWorkspacePanel({ user }: { user: AuthUser | null }) {
   const callbacks = useMemo<AdminPortfolioPanelCallbacks>(() => {
     let latestUsers: SharedAdminUserSummary[] = [];
@@ -100,6 +127,20 @@ export function AdminWorkspacePanel({ user }: { user: AuthUser | null }) {
         });
         return toSharedGrant(payload, response);
       },
+      async listPaymentAttempts(status) {
+        const response = await listAdminPaymentAttempts(status);
+        return response.attempts.map(toSharedPaymentAttempt);
+      },
+      async decidePaymentAttempt(payload) {
+        const response = await decideAdminPaymentAttempt({
+          attempt_id: payload.attempt_id,
+          status: payload.status,
+          decision_note: payload.decision_note,
+          credit_amount_usd: payload.credit_amount_usd,
+          provider_reference: payload.provider_reference,
+        });
+        return toSharedPaymentAttempt(response);
+      },
     };
   }, []);
 
@@ -120,15 +161,21 @@ function formatUsd(value: number): string {
 
 function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
   const [paymentStatus, setPaymentStatus] = useState<PaymentIntegrationResponse | null>(null);
+  const [paymentAttempts, setPaymentAttempts] = useState<PaymentAttemptSummary[]>([]);
+  const [paymentAmount, setPaymentAmount] = useState("10.00");
+  const [selectedReceipt, setSelectedReceipt] = useState<File | null>(null);
+  const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     setStatus(null);
-    void getPaymentIntegrationStatus()
-      .then((response) => {
+    void Promise.all([getPaymentIntegrationStatus(), listPayPalPaymentAttempts()])
+      .then(([response, attemptResponse]) => {
         if (!cancelled) {
           setPaymentStatus(response);
+          setPaymentAttempts(attemptResponse.attempts);
+          setActiveAttemptId(attemptResponse.attempts[0]?.id ?? null);
         }
       })
       .catch((error: unknown) => {
@@ -143,6 +190,38 @@ function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
 
   const availableCredit =
     user === null ? 0 : Math.max(user.current_credit_usd - user.credit_floor_usd, 0);
+  const activeAttempt = paymentAttempts.find((attempt) => attempt.id === activeAttemptId) ?? paymentAttempts[0] ?? null;
+
+  async function createAttempt(): Promise<void> {
+    const amount = Number(paymentAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      setStatus("Enter a payment amount.");
+      return;
+    }
+    try {
+      const attempt = await createPayPalPaymentAttempt({ expected_amount_usd: amount });
+      setPaymentAttempts((current) => [attempt, ...current]);
+      setActiveAttemptId(attempt.id);
+      setStatus("Payment reference created. Send PayPal payment with this reference, then upload the receipt.");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to create payment reference.");
+    }
+  }
+
+  async function uploadReceipt(): Promise<void> {
+    if (!activeAttempt || !selectedReceipt) {
+      setStatus("Choose a payment reference and receipt file first.");
+      return;
+    }
+    try {
+      const attempt = await uploadPayPalReceipt(activeAttempt.id, selectedReceipt);
+      setPaymentAttempts((current) => current.map((candidate) => (candidate.id === attempt.id ? attempt : candidate)));
+      setSelectedReceipt(null);
+      setStatus(attempt.review_reason ?? `Receipt reviewed: ${attempt.status}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to upload receipt.");
+    }
+  }
 
   return (
     <section className="admin-workspace-panel account-workspace-panel" aria-label="Account and payment settings">
@@ -181,17 +260,67 @@ function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
         </section>
         <section className="account-settings-section" aria-label="Payments">
           <p className="eyebrow">Payments</p>
-          <h2>{paymentStatus?.checkout_enabled ? "Checkout available" : "Checkout unavailable"}</h2>
+          <h2>{paymentStatus?.receipt_upload_enabled ? "PayPal receipt credit" : "Payments unavailable"}</h2>
           <dl>
             <div>
               <dt>Provider</dt>
               <dd>{paymentStatus?.provider ?? "Loading"}</dd>
             </div>
+            {paymentStatus?.paypal_recipient_email ? (
+              <div>
+                <dt>Send to</dt>
+                <dd>{paymentStatus.paypal_recipient_email}</dd>
+              </div>
+            ) : null}
             <div>
               <dt>Details</dt>
               <dd>{status ?? paymentStatus?.reason ?? "Payment status is current."}</dd>
             </div>
           </dl>
+          {paymentStatus?.receipt_upload_enabled ? (
+            <div className="payment-receipt-flow">
+              <label>
+                Amount
+                <input
+                  inputMode="decimal"
+                  onChange={(event) => setPaymentAmount(event.currentTarget.value)}
+                  value={paymentAmount}
+                />
+              </label>
+              <button type="button" className="secondary-button" onClick={() => void createAttempt()}>
+                New reference
+              </button>
+              {activeAttempt ? (
+                <div className="payment-reference-box">
+                  <strong>{activeAttempt.reference_code}</strong>
+                  <span>
+                    {formatUsd(activeAttempt.expected_amount_usd)} {activeAttempt.expected_currency} / {activeAttempt.status.replaceAll("_", " ")}
+                  </span>
+                  {paymentStatus.paypal_payment_url ? (
+                    <a href={paymentStatus.paypal_payment_url} target="_blank" rel="noreferrer">
+                      Open PayPal
+                    </a>
+                  ) : null}
+                </div>
+              ) : null}
+              <label>
+                Receipt or invoice
+                <input
+                  type="file"
+                  accept=".txt,.pdf,.eml,.html,.htm,text/plain,application/pdf,text/html,message/rfc822"
+                  onChange={(event) => setSelectedReceipt(event.currentTarget.files?.[0] ?? null)}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary-button"
+                disabled={!activeAttempt || !selectedReceipt}
+                onClick={() => void uploadReceipt()}
+              >
+                Upload receipt
+              </button>
+            </div>
+          ) : null}
         </section>
       </div>
     </section>

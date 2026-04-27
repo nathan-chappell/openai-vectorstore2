@@ -1712,6 +1712,32 @@ kbd {
   color: var(--ink);
 }
 
+.payment-receipt-flow {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 0.85rem;
+}
+
+.payment-reference-box {
+  display: grid;
+  gap: 0.2rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 0.65rem;
+  background: var(--panel-muted);
+}
+
+.payment-reference-box strong {
+  font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.95rem;
+  letter-spacing: 0.04em;
+}
+
+.payment-reference-box span {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
 .admin-portfolio-panel__header,
 .admin-portfolio-panel__toolbar,
 .admin-portfolio-panel__pager,

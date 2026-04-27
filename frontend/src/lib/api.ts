@@ -5,6 +5,7 @@ import type {
   ActionResponse,
   AdminGrantCreditRequest,
   AdminGrantCreditResponse,
+  AdminPaymentAttemptDecisionRequest,
   AdminSetUserActiveRequest,
   AdminSetUserActiveResponse,
   AdminUserListResponse,
@@ -24,7 +25,11 @@ import type {
   FilesystemUpdateEntryRequest,
   IngestFinalizeResponse,
   PaginationParams,
+  PaymentAttemptListResponse,
+  PaymentAttemptStatus,
+  PaymentAttemptSummary,
   PaymentIntegrationResponse,
+  PayPalPaymentAttemptCreateRequest,
   QaActionRequest,
   ResearchCandidateIngestRequest,
   ResearchCandidateIngestResponse,
@@ -114,6 +119,26 @@ export async function getPaymentIntegrationStatus(): Promise<PaymentIntegrationR
   return apiRequest<PaymentIntegrationResponse>("/billing/payment-status");
 }
 
+export async function listPayPalPaymentAttempts(): Promise<PaymentAttemptListResponse> {
+  return apiRequest<PaymentAttemptListResponse>("/billing/paypal/attempts");
+}
+
+export async function createPayPalPaymentAttempt(payload: PayPalPaymentAttemptCreateRequest): Promise<PaymentAttemptSummary> {
+  return apiRequest<PaymentAttemptSummary>("/billing/paypal/attempts", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function uploadPayPalReceipt(attemptId: string, file: File): Promise<PaymentAttemptSummary> {
+  const formData = new FormData();
+  formData.set("file", file);
+  return apiRequest<PaymentAttemptSummary>(`/billing/paypal/attempts/${encodeURIComponent(attemptId)}/receipt`, {
+    method: "POST",
+    body: formData,
+  });
+}
+
 export async function listAdminUsers(params: {
   query?: string;
   limit: number;
@@ -137,6 +162,19 @@ export async function setAdminUserActive(payload: AdminSetUserActiveRequest): Pr
 
 export async function grantAdminCredit(payload: AdminGrantCreditRequest): Promise<AdminGrantCreditResponse> {
   return apiRequest<AdminGrantCreditResponse>("/admin/credits/grant", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listAdminPaymentAttempts(status: PaymentAttemptStatus): Promise<PaymentAttemptListResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("status", status);
+  return apiRequest<PaymentAttemptListResponse>(`/admin/payments?${searchParams.toString()}`);
+}
+
+export async function decideAdminPaymentAttempt(payload: AdminPaymentAttemptDecisionRequest): Promise<PaymentAttemptSummary> {
+  return apiRequest<PaymentAttemptSummary>("/admin/payments/decide", {
     method: "POST",
     body: JSON.stringify(payload),
   });

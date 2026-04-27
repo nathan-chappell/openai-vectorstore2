@@ -76,6 +76,11 @@ class AppSettings(BaseSettings):
     billing_default_credit_floor_usd: float = -1.0
     billing_platform_markup_multiplier: float = 1.3
     billing_unknown_model_policy: Literal["block", "zero"] = "zero"
+    paypal_recipient_email: str | None = None
+    paypal_payment_url: AnyHttpUrl | None = None
+    paypal_min_payment_usd: float = 5.0
+    paypal_max_payment_usd: float = 250.0
+    paypal_temporary_access_days: int = 14
     admin_integration_provider: Literal["default", "ai_portfolio_admin"] = "default"
     admin_shared_module: str = "backend.app.admin.shared_adapter"
 
@@ -127,6 +132,8 @@ class AppSettings(BaseSettings):
         "chat_completions_api_key",
         "chat_completions_context_window_tokens",
         "chat_completions_web_search_url",
+        "paypal_recipient_email",
+        "paypal_payment_url",
         mode="before",
     )
     @classmethod

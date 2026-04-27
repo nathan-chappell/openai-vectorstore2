@@ -59,7 +59,32 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     ),
     "PaymentIntegrationResponse": (
         "PaymentIntegrationResponse",
-        {"checkout_enabled", "provider", "reason"},
+        {
+            "checkout_enabled",
+            "max_payment_usd",
+            "min_payment_usd",
+            "paypal_payment_url",
+            "paypal_recipient_email",
+            "provider",
+            "reason",
+            "receipt_upload_enabled",
+        },
+    ),
+    "PaymentAttemptSummary": (
+        "PaymentAttemptSummary",
+        {"clerk_user_id", "credit_grant_id", "expected_amount_usd", "reference_code", "review_reason", "status"},
+    ),
+    "PaymentAttemptListResponse": (
+        "PaymentAttemptListResponse",
+        {"attempts"},
+    ),
+    "PayPalPaymentAttemptCreateRequest": (
+        "PayPalPaymentAttemptCreateRequest",
+        {"expected_amount_usd"},
+    ),
+    "AdminPaymentAttemptDecisionRequest": (
+        "AdminPaymentAttemptDecisionRequest",
+        {"attempt_id", "credit_amount_usd", "decision_note", "provider_reference", "status"},
     ),
     "BranchSearchResponse": ("BranchSearchResponse", {"descend", "levels", "max_width", "query"}),
     "ChunkHit": ("ChunkHit", {"attributes", "chunk_id", "locator", "score", "source_file_id", "text"}),
@@ -317,6 +342,77 @@ async def test_http_ingest_search_and_qa_contracts(
                 if task["kind"] == "ingest" and task["id"] == upload_payload["task"]["id"]
             ]
             assert deleted_source_tasks[0]["source_file_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_http_paypal_receipt_upload_grants_temporary_credit(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    settings = configured_settings.model_copy(update={"paypal_recipient_email": "owner@example.com"})
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            payment_status = await client.get("/api/billing/payment-status", headers=auth_headers)
+            assert payment_status.status_code == 200
+            assert payment_status.json()["provider"] == "paypal"
+            assert payment_status.json()["receipt_upload_enabled"] is True
+
+            created = await client.post(
+                "/api/billing/paypal/attempts",
+                headers=auth_headers,
+                json={"expected_amount_usd": 12.0},
+            )
+            assert created.status_code == 200
+            attempt = created.json()
+            reference_code = attempt["reference_code"]
+
+            receipt_text = "\n".join(
+                [
+                    "PayPal receipt",
+                    "Transaction ID: PAYPAL123456789",
+                    "Paid with PayPal",
+                    "Amount: $12.00 USD",
+                    "Recipient: owner@example.com",
+                    f"Reference: {reference_code}",
+                ]
+            )
+            reviewed = await client.post(
+                f"/api/billing/paypal/attempts/{attempt['id']}/receipt",
+                headers=auth_headers,
+                files={"file": ("paypal-receipt.txt", receipt_text.encode(), "text/plain")},
+            )
+            assert reviewed.status_code == 200
+            reviewed_payload = reviewed.json()
+            assert reviewed_payload["status"] == "temporarily_approved"
+            assert reviewed_payload["credit_grant_id"]
+            assert reviewed_payload["provider_reference"] == "PAYPAL123456789"
+
+            billing = await client.get("/api/billing/me", headers=auth_headers)
+            assert billing.status_code == 200
+            assert billing.json()["current_credit_usd"] == 12.0
+
+            admin_payments = await client.get(
+                "/api/admin/payments?status=temporarily_approved",
+                headers=auth_headers,
+            )
+            assert admin_payments.status_code == 200
+            assert admin_payments.json()["attempts"][0]["id"] == attempt["id"]
+
+            confirmed = await client.post(
+                "/api/admin/payments/decide",
+                headers=auth_headers,
+                json={
+                    "attempt_id": attempt["id"],
+                    "status": "confirmed_paid",
+                    "decision_note": "Matched PayPal dashboard manually.",
+                },
+            )
+            assert confirmed.status_code == 200
+            assert confirmed.json()["status"] == "confirmed_paid"
 
 
 @pytest.mark.asyncio

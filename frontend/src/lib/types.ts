@@ -105,7 +105,54 @@ export type BillingStatusResponse = {
 export type PaymentIntegrationResponse = {
   provider: string;
   checkout_enabled: boolean;
+  receipt_upload_enabled: boolean;
   reason: string | null;
+  paypal_recipient_email: string | null;
+  paypal_payment_url: string | null;
+  min_payment_usd: number;
+  max_payment_usd: number;
+};
+
+export type PaymentAttemptStatus =
+  | "pending_payment"
+  | "temporarily_approved"
+  | "confirmed_paid"
+  | "rejected_payment"
+  | "expired_temporary_access"
+  | "manual_review_required";
+
+export type PaymentAttemptSummary = {
+  id: string;
+  clerk_user_id: string;
+  provider: string;
+  expected_amount_usd: number;
+  expected_currency: string;
+  reference_code: string;
+  status: PaymentAttemptStatus;
+  temporary_access_expires_at: string | null;
+  provider_reference: string | null;
+  credit_grant_id: string | null;
+  receipt_filename: string | null;
+  review_reason: string | null;
+  decision_note: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type PaymentAttemptListResponse = {
+  attempts: PaymentAttemptSummary[];
+};
+
+export type PayPalPaymentAttemptCreateRequest = {
+  expected_amount_usd: number;
+};
+
+export type AdminPaymentAttemptDecisionRequest = {
+  attempt_id: string;
+  status: Extract<PaymentAttemptStatus, "confirmed_paid" | "rejected_payment" | "manual_review_required">;
+  decision_note: string;
+  credit_amount_usd?: number | null;
+  provider_reference?: string | null;
 };
 
 export type CreditGrantSummary = {

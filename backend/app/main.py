@@ -26,6 +26,7 @@ from backend.app.schemas import (
     AdminSetUserActiveResponse,
     AdminUserListResponse,
     AdminUserSummary,
+    AdminPaymentAttemptDecisionRequest,
     AuthUser,
     BillingStatusResponse,
     BranchSearchRequest,
@@ -42,7 +43,11 @@ from backend.app.schemas import (
     ImageGenerationRequest,
     IngestFinalizeResponse,
     LibrarySourceDetail,
+    PaymentAttemptListResponse,
+    PaymentAttemptStatus,
+    PaymentAttemptSummary,
     PaymentIntegrationResponse,
+    PayPalPaymentAttemptCreateRequest,
     QaRequest,
     ResearchCandidateIngestRequest,
     ResearchCandidateIngestResponse,
@@ -190,11 +195,68 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         _: AuthenticatedUser = Depends(require_authenticated_web_user),
     ) -> PaymentIntegrationResponse:
         integration = payment_integration_status(resolved_settings)
+        paypal_recipient_email = resolved_settings.paypal_recipient_email.strip() if resolved_settings.paypal_recipient_email else None
+        paypal_payment_url = str(resolved_settings.paypal_payment_url) if resolved_settings.paypal_payment_url else None
         return PaymentIntegrationResponse(
-            provider=integration.provider,
+            provider="paypal" if paypal_recipient_email else integration.provider,
             checkout_enabled=integration.checkout_enabled,
-            reason=integration.reason,
+            receipt_upload_enabled=paypal_recipient_email is not None,
+            reason=(
+                "Send a PayPal payment, include the generated reference code, then upload the receipt for temporary credit."
+                if paypal_recipient_email
+                else integration.reason
+            ),
+            paypal_recipient_email=paypal_recipient_email,
+            paypal_payment_url=paypal_payment_url,
+            min_payment_usd=resolved_settings.paypal_min_payment_usd,
+            max_payment_usd=resolved_settings.paypal_max_payment_usd,
         )
+
+    @app.get("/api/billing/paypal/attempts")
+    async def list_paypal_attempts_api(
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> PaymentAttemptListResponse:
+        attempts = await services.payments.list_user_attempts(clerk_user_id=user.clerk_user_id)
+        return PaymentAttemptListResponse(attempts=attempts)
+
+    @app.post("/api/billing/paypal/attempts")
+    async def create_paypal_attempt_api(
+        payload: PayPalPaymentAttemptCreateRequest,
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> PaymentAttemptSummary:
+        try:
+            return await services.payments.create_paypal_attempt(
+                clerk_user_id=user.clerk_user_id,
+                expected_amount_usd=payload.expected_amount_usd,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+
+    @app.post("/api/billing/paypal/attempts/{attempt_id}/receipt")
+    async def upload_paypal_receipt_api(
+        attempt_id: str,
+        file: UploadFile = File(...),
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> PaymentAttemptSummary:
+        payload = await file.read()
+        if len(payload) > 5_000_000:
+            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Receipt upload is too large.")
+        try:
+            return await services.payments.review_receipt_upload(
+                clerk_user_id=user.clerk_user_id,
+                attempt_id=attempt_id,
+                filename=file.filename or "receipt",
+                media_type=file.content_type,
+                payload=payload,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     @app.post("/api/admin/credits/grant")
     async def admin_grant_credit_api(
@@ -211,6 +273,31 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             role=target_record.role,
         )
         return AdminGrantCreditResponse(balance=balance, grant=grant)
+
+    @app.get("/api/admin/payments")
+    async def admin_list_payment_attempts_api(
+        _: AuthenticatedUser = Depends(require_admin_web_user),
+        status_filter: PaymentAttemptStatus | None = Query(default=None, alias="status"),
+    ) -> PaymentAttemptListResponse:
+        attempts = await services.payments.list_admin_attempts(status=status_filter)
+        return PaymentAttemptListResponse(attempts=attempts)
+
+    @app.post("/api/admin/payments/decide")
+    async def admin_decide_payment_attempt_api(
+        payload: AdminPaymentAttemptDecisionRequest,
+        admin: AuthenticatedUser = Depends(require_admin_web_user),
+    ) -> PaymentAttemptSummary:
+        try:
+            return await services.payments.decide_admin_attempt(
+                attempt_id=payload.attempt_id,
+                admin_clerk_user_id=admin.clerk_user_id,
+                status=payload.status,
+                decision_note=payload.decision_note,
+                credit_amount_usd=payload.credit_amount_usd,
+                provider_reference=payload.provider_reference,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     @app.get("/api/admin/users")
     async def admin_list_users_api(

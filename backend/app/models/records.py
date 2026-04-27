@@ -75,6 +75,41 @@ class CreditGrant(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
+class PaymentAttempt(Base):
+    __tablename__ = "payment_attempts"
+    __table_args__ = (
+        UniqueConstraint("reference_code", name="uq_payment_attempts_reference_code"),
+        Index("ix_payment_attempts_user_created_at", "clerk_user_id", "created_at"),
+        Index("ix_payment_attempts_status_created_at", "status", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    clerk_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    provider: Mapped[str] = mapped_column(String(32), nullable=False, default="paypal")
+    expected_amount_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    expected_currency: Mapped[str] = mapped_column(String(3), nullable=False, default="USD")
+    reference_code: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending_payment")
+    temporary_access_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    provider_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    credit_grant_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    receipt_filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    receipt_media_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    receipt_text_excerpt: Mapped[str | None] = mapped_column(Text, nullable=True)
+    review_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    @property
+    def review_payload(self) -> StructuredObject:
+        return _object_payload(self.review_json)
+
+    @review_payload.setter
+    def review_payload(self, value: StructuredObject) -> None:
+        self.review_json = dict(value)
+
+
 class CostEvent(Base):
     __tablename__ = "cost_events"
     __table_args__ = (

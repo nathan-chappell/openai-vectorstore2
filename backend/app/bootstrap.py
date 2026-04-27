@@ -11,7 +11,7 @@ from backend.app.core.config import AppSettings
 from backend.app.core.logging import configure_logging
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.services import ActionService, AuthService, BillingService, ResearchImportService, SourceService
+from backend.app.services import ActionService, AuthService, BillingService, PaymentService, ResearchImportService, SourceService
 from backend.app.storage import StorageService, build_storage_service
 
 
@@ -21,6 +21,7 @@ class AppServices:
     database: DatabaseManager
     auth: AuthService
     billing: BillingService
+    payments: PaymentService
     storage: StorageService
     openai: OpenAIGateway
     sources: SourceService
@@ -52,6 +53,7 @@ def create_services(settings: AppSettings) -> AppServices:
     database = DatabaseManager(settings)
     auth = build_auth_service(settings)
     billing = BillingService(settings=settings, database=database)
+    payments = PaymentService(settings=settings, database=database, auth=auth, billing=billing)
     storage = build_storage_service(settings)
     openai = OpenAIGateway(settings)
     sources = SourceService(
@@ -90,6 +92,7 @@ def create_services(settings: AppSettings) -> AppServices:
         database=database,
         auth=auth,
         billing=billing,
+        payments=payments,
         storage=storage,
         openai=openai,
         sources=sources,
