@@ -7,7 +7,7 @@ OpenAI Vectorstore2 is an app-first file explorer backed by OpenAI vector-store 
 - Backend: FastAPI, SQLAlchemy, pydantic-settings, OpenAI Responses/vector stores, ChatKit server, FastMCP.
 - Frontend: Vite, React, TypeScript, Clerk, ChatKit, Playwright.
 - Storage: local file storage by default, with an S3-compatible adapter for deployment.
-- Retrieval: normal ingestion publishes source-level files into OpenAI vector stores with app-owned attributes for source ID, path, type, tags, and created date. Optional semantic split records can be generated explicitly for inspection.
+- Retrieval: normal ingestion publishes source-level files into OpenAI vector stores with app-owned attributes for source ID, path, type, one representative tag, and created date. Optional semantic split records can be generated explicitly for inspection.
 - Schema: Alembic migrations are the default. `create_all` is only for empty throwaway databases because it does not alter existing tables.
 
 ## Core Workflows
@@ -16,7 +16,7 @@ OpenAI Vectorstore2 is an app-first file explorer backed by OpenAI vector-store 
 - Store files in virtual folders and publish source-level OpenAI vector-store indexes.
 - Search with source, kind, tag, path, and creation-time filters.
 - Run QA, free-form generation, image generation, voice generation, and branch search over indexed source-file matches.
-- Use the web explorer for files, tags, query, preview, and ChatKit scope selection.
+- Use the web workspace for Explorer navigation, Library semantic/tag search, Results references, preview, and explicit ChatKit `@` file references.
 - Use ChatKit as the main agentic web UI and MCP as an adapter over the same service layer.
 
 ## Local Development

@@ -207,7 +207,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             checkout_enabled=integration.checkout_enabled,
             receipt_upload_enabled=paypal_recipient_email is not None,
             reason=(
-                "Send a PayPal payment, include the generated reference code, then upload the receipt for temporary credit."
+                "Send a PayPal payment, include the generated reference code, then upload the receipt for immediate receipt-backed credit."
                 if paypal_recipient_email
                 else integration.reason
             ),

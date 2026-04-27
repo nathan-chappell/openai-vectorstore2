@@ -58,10 +58,9 @@ PAYPAL_RECIPIENT_EMAIL=you@example.com
 PAYPAL_PAYMENT_URL=
 PAYPAL_MIN_PAYMENT_USD=5.0
 PAYPAL_MAX_PAYMENT_USD=250.0
-PAYPAL_TEMPORARY_ACCESS_DAYS=14
 ```
 
-This flow does not use PayPal checkout or webhooks. Users create a reference code, pay externally, upload text/PDF/email-style proof, and receive temporary credits when the receipt matches. Admins still confirm or reject attempts later.
+This flow does not use PayPal checkout or webhooks. Users create a reference code, pay externally, upload text/PDF/email-style proof, and receive immediate receipt-backed credits when the receipt matches. Those credits remain available unless an admin rejects/revokes the attempt, which records a reversal adjustment.
 
 Set Clerk values when browser auth is enabled:
 
@@ -104,9 +103,15 @@ BILLING_ENABLED=true
 BILLING_DEFAULT_CREDIT_FLOOR_USD=-1.0
 BILLING_PLATFORM_MARKUP_MULTIPLIER=1.3
 BILLING_UNKNOWN_MODEL_POLICY=zero
+BILLING_SEMANTIC_SPLIT_COST_USD=0.002
+BILLING_RESEARCH_DISCOVERY_COST_USD=0.01
+BILLING_VECTOR_SEARCH_COST_USD=0.0005
+BILLING_VECTOR_INDEX_FILE_COST_USD=0.002
+BILLING_IMAGE_GENERATION_COST_USD=0.04
+BILLING_VOICE_GENERATION_COST_PER_1K_CHARS_USD=0.02
 ```
 
-Manual credit grants and cost events live in this app's database, including events created from ChatKit, REST, and MCP operations.
+Manual grants, free-credit request grants, receipt-backed PayPal grants, reversal adjustments, and cost events live in this app's database. Some non-ChatKit OpenAI operations use the configurable placeholder rates above until provider usage/pricing data is richer.
 
 ## Logs
 

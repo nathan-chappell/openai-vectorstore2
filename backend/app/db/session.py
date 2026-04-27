@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -128,8 +129,22 @@ class DatabaseManager:
             _INITIALIZED_DATABASES.add(database_url)
 
     def _upgrade_to_head(self) -> None:
-        config = Config(str(PROJECT_ROOT / "alembic.ini"))
-        config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+        migrations_dir: Path | None = None
+        for candidate_dir in (PROJECT_ROOT / "migrations", Path.cwd() / "migrations"):
+            if candidate_dir.exists():
+                migrations_dir = candidate_dir
+                break
+        if migrations_dir is None:
+            migrations_dir = Path(str(resources.files("migrations"))).resolve()
+
+        alembic_ini: Path | None = None
+        for candidate_file in (PROJECT_ROOT / "alembic.ini", Path.cwd() / "alembic.ini"):
+            if candidate_file.exists():
+                alembic_ini = candidate_file
+                break
+
+        config = Config(str(alembic_ini)) if alembic_ini is not None else Config()
+        config.set_main_option("script_location", str(migrations_dir))
         config.set_main_option("sqlalchemy.url", self._settings.sync_database_url)
         command.upgrade(config, "head")
 

@@ -434,7 +434,7 @@ Completed:
 
 Remaining implementation plan:
 
-- Completed PayPal receipt pass: users can create a PayPal payment reference, upload text/PDF/email-style receipt evidence, receive temporary credit when amount/currency/recipient/reference checks pass, and admins can review/confirm/reject payment attempts from the shared admin panel.
+- Completed PayPal receipt pass: users can create a PayPal payment reference, upload text/PDF/email-style receipt evidence, receive immediate receipt-backed credit when amount/currency/recipient/reference checks pass, and admins can review/confirm/reject payment attempts from the shared admin panel.
 - Completed follow-up: host endpoints now persist free-credit requests, expose user request creation/listing, wire shared admin-panel review callbacks, grant approved request credit, preserve idempotency keys, and block duplicate active requests.
 - Completed follow-up: shared free-credit policy evaluation from `ai-portfolio-admin` is used as the host request pre-check while host apps own persistence and external evidence verification.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
@@ -443,7 +443,7 @@ Remaining implementation plan:
 - Add/update submodule setup docs with the private URL, clone command, and `git submodule update --init --recursive`.
 - Document clone/submodule setup and how the default provider behaves without private production wiring: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
-- Continue hardening the implemented PayPal receipt-based temporary access provider with expiry/revocation enforcement, richer receipt extraction, attempt limits, and stronger duplicate evidence checks.
+- Continue hardening the implemented PayPal receipt-backed credit provider with richer receipt extraction, attempt limits, stronger duplicate evidence checks, and admin reversal/revocation tooling.
 - Extend the manual credit grant flow so grants are auditable for all users with admin ID, amount, note, source, optional payment/free-credit request reference, and resulting balance.
 - Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
 
@@ -457,21 +457,21 @@ Free-credit request workflow:
 - MVP scope: typed contracts, decision service, policy evaluator, admin review component, manual approval/rejection callbacks, and docs.
 - Out of MVP scope: direct LinkedIn API integration, automated social graph verification, public marketing pages, subscription billing, and tax/invoice handling.
 
-PayPal receipt-based temporary access:
+PayPal receipt-backed credit:
 
-- Goal: let a user pay externally through PayPal, upload proof of payment, and receive temporary access if the receipt plausibly matches the expected payment. Final payment truth must still come from PayPal-side data or admin confirmation.
-- User flow: create pending payment attempt; show amount, currency, recipient PayPal account/payment link, and unique reference code; accept uploaded receipt/screenshot/PDF/email confirmation; run AI receipt review; grant temporary access only when policy passes; expire temporary access automatically unless reconciled; let admin confirm, reject, flag, extend, or revoke.
-- Access statuses: `pending_payment`, `temporarily_approved`, `confirmed_paid`, `rejected_payment`, `expired_temporary_access`, and `manual_review_required`.
+- Goal: let a user pay externally through PayPal, upload proof of payment, and receive immediate receipt-backed credit if the receipt plausibly matches the expected payment. Final payment truth must still come from PayPal-side data or admin confirmation.
+- User flow: create pending payment attempt; show amount, currency, recipient PayPal account/payment link, and unique reference code; accept uploaded receipt/screenshot/PDF/email confirmation; run receipt review; grant immediate credit when policy passes; let admin confirm, reject with reversal, flag, or revoke.
+- Payment statuses: `pending`, `receipt_uploaded`, `auto_credited`, `confirmed`, `rejected`, and `manual_review`.
 - AI receipt review should return structured data, not prose: amount, currency, payment date/time, PayPal transaction ID when present, payer name/email, recipient name/email, payment note/reference code, whether it appears to be a PayPal receipt, mismatch flags, tampering/suspicion flags, confidence/risk level, and a decision recommendation.
-- Treat AI as evidence extractor and provisional gatekeeper only. It may grant temporary access under narrow policy; permanent access requires admin approval, PayPal-side verification, or future checkout/webhook confirmation.
-- Temporary approval requires matching expected amount, currency, recipient, recent payment date, unique reference code when available, unused transaction ID or unused receipt evidence, and no obvious fraud/tampering signals.
-- Approval levels: level 0 uploaded/plausible receipt grants short temporary access; level 1 strong receipt match with amount/currency/recipient/recent date/reference or transaction ID grants longer temporary access; level 2 PayPal-side/admin confirmation grants confirmed paid access; level 3 full PayPal Checkout/webhook/capture integration grants automatic confirmed access.
-- Admin dashboard should show user account, expected amount/currency, reference code, uploaded receipt, AI-extracted payment details, confidence/risk assessment, access status, temporary expiry, PayPal transaction ID, decision history, and internal notes.
-- Admin actions should include confirm payment, reject payment, extend temporary access, revoke access, mark for manual review, and add internal note.
+- Treat automated review as evidence extraction and provisional gatekeeping only. It may grant receipt-backed credit under narrow policy; durable payment confidence requires admin approval, PayPal-side verification, or future checkout/webhook confirmation.
+- Auto-credit requires matching expected amount, currency, recipient, recent payment date, unique reference code when available, unused transaction ID or unused receipt evidence, and no obvious fraud/tampering signals.
+- Approval levels: level 0 uploaded/plausible receipt grants manual review only; level 1 strong receipt match with amount/currency/recipient/recent date/reference or transaction ID grants immediate receipt-backed credit; level 2 PayPal-side/admin confirmation marks confirmed paid credit; level 3 full PayPal Checkout/webhook/capture integration grants automatic confirmed credit.
+- Admin dashboard should show user account, expected amount/currency, reference code, uploaded receipt, extracted payment details, confidence/risk assessment, payment status, credited amount, PayPal transaction ID, decision history, and internal notes.
+- Admin actions should include confirm payment, reject payment with reversal, revoke credited amount, mark for manual review, and add internal note.
 - Reconciliation sources can include PayPal email notifications, PayPal dashboard review, PayPal transaction search/API when available, admin review, and future PayPal Checkout/webhook integration.
-- Fraud controls: unique reference per attempt, no reused transaction IDs, no reused receipt evidence across accounts, automatic temporary expiry, stronger confirmation for permanent access, manual review for suspicious uploads, logged AI decisions, logged admin decisions, rate/attempt limits for temporary access, and automatic blocking for mismatched amount/currency/recipient or stale payment date.
+- Fraud controls: unique reference per attempt, no reused transaction IDs, no reused receipt evidence across accounts, stronger confirmation for long-lived access, manual review for suspicious uploads, logged automated decisions, logged admin decisions, rate/attempt limits for receipt-backed credit, and automatic blocking for mismatched amount/currency/recipient or stale payment date.
 - Risk flags include missing transaction ID, missing/wrong recipient, wrong amount, wrong currency, old payment date, reused transaction ID, visible screenshot edits, cropped/incomplete receipt, payer identity mismatch, missing reference code, and multiple failed attempts by one user.
-- User messaging should be explicit: uploaded proof may grant temporary access while payment is verified; temporary approval can expire; confirmed payment activates access normally; rejection should tell the user to check amount, currency, recipient, and reference code.
+- User messaging should be explicit: uploaded proof may grant immediate credit while payment is verified; confirmed payment records final approval; rejection should tell the user to check amount, currency, recipient, and reference code, and may reverse prior receipt-backed credit.
 - Current MVP scope implemented without PayPal API/webhooks: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, local text/PDF plausibility review, immediate receipt credit grants that remain until confirmed or revoked, admin review dashboard, manual confirm/reject/manual-review actions, rejection reversal entries, and audit logging. Still add image/OCR or model-assisted receipt extraction later if needed.
 - Out of MVP scope: full Stripe integration, full PayPal Checkout integration, subscriptions, refunds, tax handling, invoice generation, chargeback/dispute workflows, and fully automated permanent confirmation.
 

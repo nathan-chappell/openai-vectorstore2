@@ -68,4 +68,7 @@ target-version = "py314"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["backend*"]
+include = ["backend*", "migrations*"]
+
+[tool.setuptools.package-data]
+migrations = ["script.py.mako"]

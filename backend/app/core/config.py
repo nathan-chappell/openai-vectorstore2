@@ -157,9 +157,13 @@ class AppSettings(BaseSettings):
     @property
     def normalized_static_dir(self) -> str:
         candidate = Path(self.static_dir).expanduser()
-        if not candidate.is_absolute():
-            candidate = PROJECT_ROOT / candidate
-        return str(candidate)
+        if candidate.is_absolute():
+            return str(candidate)
+        project_candidate = PROJECT_ROOT / candidate
+        runtime_candidate = Path.cwd() / candidate
+        if project_candidate.exists() or not runtime_candidate.exists():
+            return str(project_candidate)
+        return str(runtime_candidate)
 
     @property
     def normalized_local_storage_dir(self) -> Path:
