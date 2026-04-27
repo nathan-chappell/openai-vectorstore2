@@ -434,7 +434,7 @@ Remaining implementation plan:
 - Add/update submodule setup docs with the private URL, clone command, and `git submodule update --init --recursive`.
 - Document clone/submodule setup and how the default provider behaves without private production wiring: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
-- Implement the PayPal receipt-based temporary access provider in host persistence/API/UI using shared receipt-review contracts.
+- Continue hardening the implemented PayPal receipt-based temporary access provider with expiry/revocation enforcement, richer receipt extraction, attempt limits, and stronger duplicate evidence checks.
 - Extend the manual credit grant flow so grants are auditable for all users with admin ID, amount, note, source, optional payment/free-credit request reference, and resulting balance.
 - Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
 
