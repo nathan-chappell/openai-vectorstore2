@@ -38,6 +38,10 @@ AppOperation: TypeAlias = Literal[
     "generate_voice",
     "list_tasks",
     "get_task",
+    "get_billing_status",
+    "admin_list_users",
+    "admin_set_user_active",
+    "admin_grant_credit",
 ]
 
 
@@ -288,6 +292,26 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("GET /api/tasks/{task_id}",),
         chatkit_tool="get_task",
         mcp_tools=("get_task",),
+    ),
+    AppCapability(
+        operation="get_billing_status",
+        summary="Load current credit balance and billable status for the signed-in user.",
+        rest_routes=("GET /api/billing/me",),
+    ),
+    AppCapability(
+        operation="admin_list_users",
+        summary="List Clerk users with activation state, credit floor, and current balance for admins.",
+        rest_routes=("GET /api/admin/users",),
+    ),
+    AppCapability(
+        operation="admin_set_user_active",
+        summary="Activate or deactivate a Clerk user and apply the default credit floor on activation.",
+        rest_routes=("POST /api/admin/users/set-active",),
+    ),
+    AppCapability(
+        operation="admin_grant_credit",
+        summary="Grant manual USD credit with an audit note.",
+        rest_routes=("POST /api/admin/credits/grant",),
     ),
 )
 

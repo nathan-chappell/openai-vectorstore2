@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from backend.app.services import AuthenticatedUser
+from backend.app.services import AuthenticatedUser, CreditRequiredError
 
 _http_bearer = HTTPBearer(auto_error=False)
 
@@ -27,4 +27,28 @@ async def require_active_web_user(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Your account is signed in but is still pending manual activation.",
         )
+    return user
+
+
+async def require_admin_web_user(
+    user: AuthenticatedUser = Depends(require_active_web_user),
+) -> AuthenticatedUser:
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required.")
+    return user
+
+
+async def require_billable_web_user(
+    request: Request,
+    user: AuthenticatedUser = Depends(require_active_web_user),
+) -> AuthenticatedUser:
+    try:
+        await request.app.state.services.billing.assert_can_start_billable_operation(
+            clerk_user_id=user.clerk_user_id,
+            role=user.role,
+            credit_floor_usd=user.credit_floor_usd,
+            operation_kind=f"{request.method} {request.url.path}",
+        )
+    except CreditRequiredError as exc:
+        raise HTTPException(status_code=status.HTTP_402_PAYMENT_REQUIRED, detail=str(exc)) from exc
     return user

@@ -49,7 +49,7 @@ from backend.app.schemas import (
     TaskKind,
     VoiceGenerationRequest,
 )
-from backend.app.services import ActionService, ResearchImportService, SourceService
+from backend.app.services import ActionService, BillingService, ResearchImportService, SourceService
 
 logger = logging.getLogger("chatkit.server")
 
@@ -100,7 +100,7 @@ class ChatKitOpenAIState:
 def chatkit_request_log_summary(raw_request: bytes | str) -> ChatKitRequestLogSummary:
     try:
         parsed = json.loads(raw_request)
-    except (TypeError, ValueError, json.JSONDecodeError):
+    except TypeError, ValueError, json.JSONDecodeError:
         return ChatKitRequestLogSummary(op="unknown")
     if not isinstance(parsed, dict):
         return ChatKitRequestLogSummary(op="unknown")
@@ -186,6 +186,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         research: ResearchImportService,
         actions: ActionService,
         openai: OpenAIGateway,
+        billing: BillingService,
     ) -> None:
         super().__init__(store=store, attachment_store=store)
         self._settings = settings
@@ -194,6 +195,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         self._research = research
         self._actions = actions
         self._openai = openai
+        self._billing = billing
         self._converter = VectorstoreThreadItemConverter()
 
     async def build_request_context(
@@ -203,6 +205,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         clerk_user_id: str,
         user_email: str | None,
         display_name: str,
+        role: str | None,
+        credit_floor_usd: float,
         bearer_token: str,
         request_app: Any,
     ) -> VectorstoreChatContext:
@@ -213,6 +217,8 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             clerk_user_id=clerk_user_id,
             user_email=user_email,
             display_name=display_name,
+            role=role,
+            credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
             selected_source_ids=_string_list(metadata.get("selected_source_ids")),
             thread_origin=_string_or_none(metadata.get("origin")),
@@ -227,12 +233,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         clerk_user_id: str,
         user_email: str | None,
         display_name: str,
+        role: str | None,
+        credit_floor_usd: float,
         bearer_token: str,
     ) -> VectorstoreChatContext:
         return VectorstoreChatContext(
             clerk_user_id=clerk_user_id,
             user_email=user_email,
             display_name=display_name,
+            role=role,
+            credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
             selected_source_ids=[],
             thread_origin=None,
@@ -286,6 +296,12 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     ) -> AsyncIterator[ThreadStreamEvent]:
         started_at = perf_counter()
         requested_model = self._resolve_requested_model(input_user_message=input_user_message)
+        await self._billing.assert_can_start_billable_operation(
+            clerk_user_id=context.clerk_user_id,
+            role=context.role,
+            credit_floor_usd=context.credit_floor_usd,
+            operation_kind="chatkit_turn",
+        )
         if thread.title is None and input_user_message is not None:
             thread.title = _title_from_user_message(input_user_message)
         thread.metadata = thread_metadata_with_scope(thread.metadata, context)
@@ -394,6 +410,20 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             or cast(str | None, getattr(result, "_conversation_id", None))
             or conversation_id
         )
+        for raw_response in result.raw_responses:
+            response_key = raw_response.response_id or raw_response.request_id
+            await self._billing.record_usage_cost(
+                clerk_user_id=context.clerk_user_id,
+                operation_kind="chatkit_turn",
+                origin_surface="chatkit",
+                model=requested_model,
+                usage=raw_response.usage,
+                event_key=f"chatkit:{thread.id}:{response_key}" if response_key else None,
+                thread_id=thread.id,
+                openai_response_id=raw_response.response_id,
+                openai_conversation_id=result_conversation_id,
+                openai_request_id=raw_response.request_id,
+            )
         thread.metadata = chatkit_metadata_with_openai_state(
             thread.metadata,
             conversation_id=result_conversation_id,
@@ -723,7 +753,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Rename or recolor a tag, queuing reindex tasks when filter slugs change."""
             request_context = ctx.context.request_context
-            await stream_chatkit_progress(ctx, "settings-slider", "Updating tag metadata and queuing affected reindex tasks.")
+            await stream_chatkit_progress(
+                ctx, "settings-slider", "Updating tag metadata and queuing affected reindex tasks."
+            )
             response = await self._sources.update_tag(
                 clerk_user_id=request_context.clerk_user_id,
                 tag_id=tag_id,
@@ -1072,7 +1104,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         ) -> dict[str, object]:
             """Ingest approved lower-level research candidates through the app's normal source ingestion path."""
             request_context = ctx.context.request_context
-            await stream_chatkit_progress(ctx, "document", "Queuing approved lower-level research candidates for ingestion.")
+            await stream_chatkit_progress(
+                ctx, "document", "Queuing approved lower-level research candidates for ingestion."
+            )
             response = await self._research.ingest_approved_candidates(
                 clerk_user_id=request_context.clerk_user_id,
                 payload=ResearchCandidateIngestRequest(
@@ -1808,7 +1842,9 @@ def compact_chatkit_action_payload(value: object) -> dict[str, object]:
             "answer": _string_or_none(payload.get("answer")),
             "sources": [compact_chatkit_hit_payload(hit) for hit in _mapping_list(payload.get("hits"))],
             "asset": _compact_asset_payload(payload.get("asset")),
-            "source_status": payload.get("source_status") if isinstance(payload.get("source_status"), Mapping) else None,
+            "source_status": payload.get("source_status")
+            if isinstance(payload.get("source_status"), Mapping)
+            else None,
         }
     )
 
@@ -1841,7 +1877,9 @@ def compact_chatkit_research_import_payload(value: object) -> dict[str, object]:
         {
             "task": compact_chatkit_task_payload(payload.get("task")),
             "seed_source": compact_chatkit_source_payload(payload.get("seed_source")),
-            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "candidates": [
+                compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))
+            ],
             "duplicate_count": payload.get("duplicate_count"),
             "target_folder_id": _string_or_none(payload.get("target_folder_id")),
         }
@@ -1855,7 +1893,9 @@ def compact_chatkit_research_build_payload(value: object) -> dict[str, object]:
             "task": compact_chatkit_task_payload(payload.get("task")),
             "target_folder_id": _string_or_none(payload.get("target_folder_id")),
             "seed_source": compact_chatkit_source_payload(payload.get("seed_source")),
-            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "candidates": [
+                compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))
+            ],
             "ingested": [compact_chatkit_ingest_payload(item) for item in _mapping_list(payload.get("ingested"))],
             "duplicate_count": payload.get("duplicate_count"),
         }
@@ -1866,7 +1906,9 @@ def compact_chatkit_research_candidate_list_payload(value: object) -> dict[str, 
     payload = _mapping_or_empty(value)
     return _drop_none(
         {
-            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "candidates": [
+                compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))
+            ],
             "total_count": payload.get("total_count"),
             "page": payload.get("page"),
             "page_size": payload.get("page_size"),
@@ -1880,7 +1922,9 @@ def compact_chatkit_research_ingest_payload(value: object) -> dict[str, object]:
     return _drop_none(
         {
             "ingested": [compact_chatkit_ingest_payload(item) for item in _mapping_list(payload.get("ingested"))],
-            "candidates": [compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))],
+            "candidates": [
+                compact_chatkit_research_candidate(item) for item in _mapping_list(payload.get("candidates"))
+            ],
         }
     )
 
@@ -1953,7 +1997,11 @@ def _compact_tag_slugs(value: object) -> list[str]:
         slug: str | None
         if isinstance(item, Mapping):
             mapping = _mapping_or_empty(item)
-            slug = _string_or_none(mapping.get("slug")) or _string_or_none(mapping.get("name")) or _string_or_none(mapping.get("id"))
+            slug = (
+                _string_or_none(mapping.get("slug"))
+                or _string_or_none(mapping.get("name"))
+                or _string_or_none(mapping.get("id"))
+            )
         else:
             slug = _string_or_none(item)
         if slug is not None and slug not in output:

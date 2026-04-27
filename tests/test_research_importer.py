@@ -29,7 +29,9 @@ def test_research_import_url_normalization_removes_tracking_and_fragments() -> N
 
 
 def test_research_import_arxiv_and_pdf_detection() -> None:
-    assert research_module._arxiv_pdf_url("https://arxiv.org/abs/2401.01234v2") == "https://arxiv.org/pdf/2401.01234v2.pdf"
+    assert (
+        research_module._arxiv_pdf_url("https://arxiv.org/abs/2401.01234v2") == "https://arxiv.org/pdf/2401.01234v2.pdf"
+    )
     assert research_module._arxiv_pdf_url("https://arxiv.org/pdf/2401.01234") == "https://arxiv.org/pdf/2401.01234.pdf"
     assert research_module._source_type_from_url("https://arxiv.org/abs/2401.01234", default="url") == "arxiv"
     assert research_module._source_type_from_url("https://example.com/report.PDF?download=1", default="url") == "pdf"
@@ -53,8 +55,18 @@ def test_research_import_download_filenames_keep_supported_extensions_and_titles
         )
         == "Attention Is All You Need.pdf"
     )
-    assert research_module._filename_from_url("https://example.com/reports/model.PDF?download=1", title=None, extension=".pdf") == "model.pdf"
-    assert research_module._filename_from_url("https://example.com/articles/alignment.html", title="Alignment", extension=".txt") == "alignment.txt"
+    assert (
+        research_module._filename_from_url(
+            "https://example.com/reports/model.PDF?download=1", title=None, extension=".pdf"
+        )
+        == "model.pdf"
+    )
+    assert (
+        research_module._filename_from_url(
+            "https://example.com/articles/alignment.html", title="Alignment", extension=".txt"
+        )
+        == "alignment.txt"
+    )
 
 
 def test_research_import_html_cleanup_removes_boilerplate_and_preserves_public_links() -> None:

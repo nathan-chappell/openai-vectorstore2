@@ -30,7 +30,9 @@ class VectorstoreTokenVerifier(TokenVerifier):
         authenticated = await self._auth.authenticate_bearer(token)
         if authenticated is None:
             return None
-        token_type: Literal["local_dev", "clerk"] = "local_dev" if authenticated.clerk_user_id == "local-dev" else "clerk"
+        token_type: Literal["local_dev", "clerk"] = (
+            "local_dev" if authenticated.clerk_user_id == "local-dev" else "clerk"
+        )
         return VectorstoreAccessToken(
             token=token,
             client_id=token_type,
@@ -42,6 +44,7 @@ class VectorstoreTokenVerifier(TokenVerifier):
                 "email": authenticated.email,
                 "role": authenticated.role,
                 "active": authenticated.active,
+                "credit_floor_usd": authenticated.credit_floor_usd,
             },
         )
 

@@ -909,11 +909,11 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
                 clerk_user_id=clerk_user_id,
                 task_id=task_id,
             )
-            selected_source_ids = list(
-                dict.fromkeys([*selected_source_ids, *linked_scope.ready_source_ids])
-            )
+            selected_source_ids = list(dict.fromkeys([*selected_source_ids, *linked_scope.ready_source_ids]))
             if linked_scope.total_count > 0 and not selected_source_ids:
-                raise ValueError("The research library files are still indexing; try again when at least one file is ready.")
+                raise ValueError(
+                    "The research library files are still indexing; try again when at least one file is ready."
+                )
             if linked_scope.total_count == 0 and not selected_source_ids:
                 raise ValueError("That research task does not have any ingested files to search yet.")
         payload = QaRequest(
@@ -926,7 +926,12 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
         return await _run_logged_tool(
             tool_name="answer_research_library",
             clerk_user_id=clerk_user_id,
-            arguments={"question": question, "task_id": task_id, "source_ids": selected_source_ids, "tag_ids": tag_ids or []},
+            arguments={
+                "question": question,
+                "task_id": task_id,
+                "source_ids": selected_source_ids,
+                "tag_ids": tag_ids or [],
+            },
             operation=services.actions.qa(clerk_user_id=clerk_user_id, payload=payload, origin_surface="mcp"),
         )
 

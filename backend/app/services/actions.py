@@ -127,7 +127,11 @@ class ActionService:
             answer = await self._openai.freeform_with_chunks(prompt=payload.prompt, hits=hits, mode=payload.mode)
             await self._complete_task(
                 task_id=task.id,
-                result_json={"answer": answer, "mode": payload.mode, "hits": [hit.model_dump(mode="json") for hit in hits]},
+                result_json={
+                    "answer": answer,
+                    "mode": payload.mode,
+                    "hits": [hit.model_dump(mode="json") for hit in hits],
+                },
             )
             return ActionResponse(task_id=task.id, kind="freeform", answer=answer, hits=hits)
         except Exception as exc:
@@ -136,7 +140,9 @@ class ActionService:
         finally:
             del app_user, library
 
-    async def image(self, *, clerk_user_id: str, payload: ImageGenerationRequest, origin_surface: str) -> ActionResponse:
+    async def image(
+        self, *, clerk_user_id: str, payload: ImageGenerationRequest, origin_surface: str
+    ) -> ActionResponse:
         task, _app_user, library = await self._create_task(
             clerk_user_id=clerk_user_id,
             kind="image_gen",
@@ -183,7 +189,9 @@ class ActionService:
             await self._fail_task(task_id=task.id, error_message=str(exc))
             raise
 
-    async def voice(self, *, clerk_user_id: str, payload: VoiceGenerationRequest, origin_surface: str) -> ActionResponse:
+    async def voice(
+        self, *, clerk_user_id: str, payload: VoiceGenerationRequest, origin_surface: str
+    ) -> ActionResponse:
         task, _app_user, library = await self._create_task(
             clerk_user_id=clerk_user_id,
             kind="voice_gen",
@@ -203,7 +211,11 @@ class ActionService:
                     max_results=4,
                 ),
             )
-            speech_text = payload.source_text.strip() if isinstance(payload.source_text, str) and payload.source_text.strip() else payload.prompt
+            speech_text = (
+                payload.source_text.strip()
+                if isinstance(payload.source_text, str) and payload.source_text.strip()
+                else payload.prompt
+            )
             voice = payload.voice or self._settings.openai_default_voice
             audio_bytes, metadata = await self._openai.generate_voice_bytes(
                 text=speech_text,
@@ -274,7 +286,9 @@ class ActionService:
         payload: bytes,
         metadata: dict[str, object],
     ) -> GeneratedAsset:
-        stored = await self._storage.put_bytes(scope=f"generated/{kind}", filename=filename, media_type=media_type, payload=payload)
+        stored = await self._storage.put_bytes(
+            scope=f"generated/{kind}", filename=filename, media_type=media_type, payload=payload
+        )
         await self._database.ensure_ready()
         async with self._database.session() as session:
             record = StoredAsset(

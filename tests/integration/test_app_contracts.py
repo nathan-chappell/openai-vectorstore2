@@ -25,7 +25,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "ActionResponse": ("ActionResponse", {"asset", "answer", "hits", "kind", "task_id"}),
-    "AuthUser": ("AuthUser", {"active", "clerk_user_id", "display_name", "primary_email", "role"}),
+    "AdminGrantCreditRequest": ("AdminGrantCreditRequest", {"clerk_user_id", "credit_amount_usd", "note"}),
+    "AdminGrantCreditResponse": ("AdminGrantCreditResponse", {"balance", "grant"}),
+    "AdminSetUserActiveRequest": ("AdminSetUserActiveRequest", {"active", "clerk_user_id"}),
+    "AdminSetUserActiveResponse": (
+        "AdminSetUserActiveResponse",
+        {"active", "clerk_user_id", "credit_floor_usd", "current_credit_usd"},
+    ),
+    "AdminUserListResponse": ("AdminUserListResponse", {"has_more", "items", "limit", "offset", "query"}),
+    "AdminUserSummary": (
+        "AdminUserSummary",
+        {"active", "clerk_user_id", "credit_floor_usd", "current_credit_usd", "primary_email", "role"},
+    ),
+    "AuthUser": (
+        "AuthUser",
+        {"active", "clerk_user_id", "credit_floor_usd", "current_credit_usd", "display_name", "primary_email", "role"},
+    ),
+    "BillingStatusResponse": (
+        "BillingStatusResponse",
+        {"active", "billable", "billing_enabled", "clerk_user_id", "credit_floor_usd", "current_credit_usd", "role"},
+    ),
     "BranchSearchResponse": ("BranchSearchResponse", {"descend", "levels", "max_width", "query"}),
     "ChunkHit": ("ChunkHit", {"attributes", "chunk_id", "locator", "score", "source_file_id", "text"}),
     "ChunkLocator": ("ChunkLocator", {"end_page", "start_page", "type"}),
@@ -168,6 +187,25 @@ async def test_http_ingest_search_and_qa_contracts(
             me = await client.get("/api/auth/me", headers=auth_headers)
             assert me.status_code == 200
             assert me.json()["clerk_user_id"] == "local-dev"
+            assert me.json()["current_credit_usd"] == 0.0
+            assert me.json()["credit_floor_usd"] == -1.0
+
+            billing = await client.get("/api/billing/me", headers=auth_headers)
+            assert billing.status_code == 200
+            assert billing.json()["billable"] is True
+
+            grant = await client.post(
+                "/api/admin/credits/grant",
+                headers=auth_headers,
+                json={"clerk_user_id": "local-dev", "credit_amount_usd": 2.5, "note": "manual test grant"},
+            )
+            assert grant.status_code == 200
+            assert grant.json()["balance"]["current_credit_usd"] == 2.5
+            assert grant.json()["grant"]["admin_clerk_user_id"] == "local-dev"
+
+            admin_users = await client.get("/api/admin/users", headers=auth_headers)
+            assert admin_users.status_code == 200
+            assert admin_users.json()["items"][0]["clerk_user_id"] == "local-dev"
 
             upload = await client.post(
                 "/api/sources",
@@ -676,7 +714,10 @@ async def test_http_research_library_build_skips_duplicate_downloaded_content(
                     params={"task_id": payload["task"]["id"]},
                 )
                 assert candidates.status_code == 200
-                assert {candidate["status"] for candidate in candidates.json()["candidates"]} == {"ingested", "duplicate"}
+                assert {candidate["status"] for candidate in candidates.json()["candidates"]} == {
+                    "ingested",
+                    "duplicate",
+                }
 
                 target_folder = await client.get(
                     "/api/filesystem",
@@ -1587,6 +1628,8 @@ async def test_chatkit_attachment_save_backfills_ingest_task_thread_link(
             clerk_user_id="local-dev",
             user_email=None,
             display_name="Local Dev",
+            role="admin",
+            credit_floor_usd=-1.0,
             bearer_token="local-dev",
         )
         thread = ThreadMetadata(id="chat_thread_link_test", created_at=datetime.now(UTC))
@@ -1621,6 +1664,8 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
             clerk_user_id="local-dev",
             user_email=None,
             display_name="Local Dev",
+            role="admin",
+            credit_floor_usd=-1.0,
             bearer_token="local-dev",
         )
         context.selected_source_ids = ["source_alpha", "source_bravo"]

@@ -24,6 +24,8 @@ class VectorstoreChatContext:
     clerk_user_id: str
     user_email: str | None
     display_name: str
+    role: str | None
+    credit_floor_usd: float
     bearer_token: str
     selected_source_ids: list[str]
     thread_origin: str | None
@@ -42,7 +44,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
-            record = await session.scalar(select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == app_user.id))
+            record = await session.scalar(
+                select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == app_user.id)
+            )
             if record is None:
                 raise NotFoundError(f"Thread {thread_id} was not found")
             return self._to_thread_metadata(record)
@@ -51,7 +55,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
-            record = await session.scalar(select(AppChatThread).where(AppChatThread.id == thread.id, AppChatThread.user_id == app_user.id))
+            record = await session.scalar(
+                select(AppChatThread).where(AppChatThread.id == thread.id, AppChatThread.user_id == app_user.id)
+            )
             next_sequence = await self._next_thread_sequence(session)
             metadata_json = thread_metadata_with_scope(thread.metadata, context)
             if record is None:
@@ -93,8 +99,14 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
             if after:
                 cursor = await session.get(AppChatEntry, after)
                 if cursor is not None:
-                    query = query.where(AppChatEntry.sequence < cursor.sequence if order == "desc" else AppChatEntry.sequence > cursor.sequence)
-            query = query.order_by(AppChatEntry.sequence.desc() if order == "desc" else AppChatEntry.sequence.asc()).limit(limit + 1)
+                    query = query.where(
+                        AppChatEntry.sequence < cursor.sequence
+                        if order == "desc"
+                        else AppChatEntry.sequence > cursor.sequence
+                    )
+            query = query.order_by(
+                AppChatEntry.sequence.desc() if order == "desc" else AppChatEntry.sequence.asc()
+            ).limit(limit + 1)
             records = list((await session.execute(query)).scalars().all())
             has_more = len(records) > limit
             page_records = records[:limit]
@@ -124,7 +136,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
-            thread = await session.scalar(select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == app_user.id))
+            thread = await session.scalar(
+                select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == app_user.id)
+            )
             if thread is None:
                 return
             await session.delete(thread)
@@ -135,10 +149,14 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
             await self._require_thread(session, thread_id=thread_id, user_id=app_user.id)
-            await session.execute(delete(AppChatEntry).where(AppChatEntry.id == item_id, AppChatEntry.thread_id == thread_id))
+            await session.execute(
+                delete(AppChatEntry).where(AppChatEntry.id == item_id, AppChatEntry.thread_id == thread_id)
+            )
             await session.commit()
 
-    async def load_threads(self, limit: int, after: str | None, order: str, context: VectorstoreChatContext) -> Page[ThreadMetadata]:
+    async def load_threads(
+        self, limit: int, after: str | None, order: str, context: VectorstoreChatContext
+    ) -> Page[ThreadMetadata]:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
@@ -146,8 +164,14 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
             if after:
                 cursor = await session.get(AppChatThread, after)
                 if cursor is not None:
-                    query = query.where(AppChatThread.updated_sequence < cursor.updated_sequence if order == "desc" else AppChatThread.updated_sequence > cursor.updated_sequence)
-            query = query.order_by(AppChatThread.updated_sequence.desc() if order == "desc" else AppChatThread.updated_sequence.asc()).limit(limit + 1)
+                    query = query.where(
+                        AppChatThread.updated_sequence < cursor.updated_sequence
+                        if order == "desc"
+                        else AppChatThread.updated_sequence > cursor.updated_sequence
+                    )
+            query = query.order_by(
+                AppChatThread.updated_sequence.desc() if order == "desc" else AppChatThread.updated_sequence.asc()
+            ).limit(limit + 1)
             records = list((await session.execute(query)).scalars().all())
             has_more = len(records) > limit
             page_records = records[:limit]
@@ -195,7 +219,11 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
-            record = await session.scalar(select(AppChatAttachment).where(AppChatAttachment.id == attachment_id, AppChatAttachment.user_id == app_user.id))
+            record = await session.scalar(
+                select(AppChatAttachment).where(
+                    AppChatAttachment.id == attachment_id, AppChatAttachment.user_id == app_user.id
+                )
+            )
             if record is None:
                 raise NotFoundError(f"Attachment {attachment_id} was not found")
             return ATTACHMENT_ADAPTER.validate_python(record.payload)
@@ -204,7 +232,11 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
-            await session.execute(delete(AppChatAttachment).where(AppChatAttachment.id == attachment_id, AppChatAttachment.user_id == app_user.id))
+            await session.execute(
+                delete(AppChatAttachment).where(
+                    AppChatAttachment.id == attachment_id, AppChatAttachment.user_id == app_user.id
+                )
+            )
             await session.commit()
 
     async def create_attachment(self, input: AttachmentCreateParams, context: VectorstoreChatContext) -> Attachment:
@@ -266,7 +298,9 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         await self.save_attachment(attachment, context=context)
         return attachment
 
-    async def _save_item(self, *, thread_id: str, item: ThreadItem, context: VectorstoreChatContext, create_only: bool) -> None:
+    async def _save_item(
+        self, *, thread_id: str, item: ThreadItem, context: VectorstoreChatContext, create_only: bool
+    ) -> None:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self._sources.ensure_app_user(session, clerk_user_id=context.clerk_user_id)
@@ -304,20 +338,27 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
 
     @staticmethod
     async def _require_thread(session: Any, *, thread_id: str, user_id: int) -> AppChatThread:
-        record = await session.scalar(select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == user_id))
+        record = await session.scalar(
+            select(AppChatThread).where(AppChatThread.id == thread_id, AppChatThread.user_id == user_id)
+        )
         if record is None:
             raise NotFoundError(f"Thread {thread_id} was not found")
         return record
 
     @staticmethod
     async def _next_thread_sequence(session: Any) -> int:
-        value = await session.scalar(select(AppChatThread.updated_sequence).order_by(AppChatThread.updated_sequence.desc()).limit(1))
+        value = await session.scalar(
+            select(AppChatThread.updated_sequence).order_by(AppChatThread.updated_sequence.desc()).limit(1)
+        )
         return int(value or 0) + 1
 
     @staticmethod
     async def _next_item_sequence(session: Any, *, thread_id: str) -> int:
         value = await session.scalar(
-            select(AppChatEntry.sequence).where(AppChatEntry.thread_id == thread_id).order_by(AppChatEntry.sequence.desc()).limit(1)
+            select(AppChatEntry.sequence)
+            .where(AppChatEntry.thread_id == thread_id)
+            .order_by(AppChatEntry.sequence.desc())
+            .limit(1)
         )
         return int(value or 0) + 1
 

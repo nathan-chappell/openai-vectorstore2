@@ -36,6 +36,7 @@ class AppSettings(BaseSettings):
 
     clerk_active_metadata_key: str = "active"
     clerk_role_metadata_key: str = "role"
+    clerk_credit_floor_metadata_key: str = "credit_floor_usd"
     clerk_clock_skew_ms: int = 5_000
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
     mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openid", "email", "profile"])
@@ -59,6 +60,11 @@ class AppSettings(BaseSettings):
     openai_poll_interval_ms: int = 1_000
     openai_default_voice: str = "alloy"
     openai_context_compact_threshold: int | None = 80_000
+
+    billing_enabled: bool = True
+    billing_default_credit_floor_usd: float = -1.0
+    billing_platform_markup_multiplier: float = 1.3
+    billing_unknown_model_policy: Literal["block", "zero"] = "zero"
 
     semantic_split_pdf_batch_pages: int = 25
     semantic_split_text_batch_lines: int = 2_000

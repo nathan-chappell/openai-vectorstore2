@@ -19,7 +19,14 @@ from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
 from backend.app.schemas import (
     ActionResponse,
+    AdminGrantCreditRequest,
+    AdminGrantCreditResponse,
+    AdminSetUserActiveRequest,
+    AdminSetUserActiveResponse,
+    AdminUserListResponse,
+    AdminUserSummary,
     AuthUser,
+    BillingStatusResponse,
     BranchSearchRequest,
     BranchSearchResponse,
     FileListResponse,
@@ -60,7 +67,12 @@ from backend.app.schemas import (
     VoiceGenerationRequest,
 )
 from backend.app.services import AuthenticatedUser
-from backend.app.web_auth import require_active_web_user, require_authenticated_web_user
+from backend.app.web_auth import (
+    require_active_web_user,
+    require_admin_web_user,
+    require_authenticated_web_user,
+    require_billable_web_user,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -137,12 +149,104 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/auth/me")
     async def auth_me_api(user: AuthenticatedUser = Depends(require_authenticated_web_user)) -> AuthUser:
+        billing = await services.billing.get_status(
+            clerk_user_id=user.clerk_user_id,
+            credit_floor_usd=user.credit_floor_usd,
+            role=user.role,
+        )
         return AuthUser(
             clerk_user_id=user.clerk_user_id,
             display_name=user.display_name,
             primary_email=user.email,
             active=user.active,
             role=user.role,
+            current_credit_usd=billing.current_credit_usd,
+            credit_floor_usd=billing.credit_floor_usd,
+        )
+
+    @app.get("/api/billing/me")
+    async def billing_me_api(
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> BillingStatusResponse:
+        billing = await services.billing.get_status(
+            clerk_user_id=user.clerk_user_id,
+            credit_floor_usd=user.credit_floor_usd,
+            role=user.role,
+        )
+        return BillingStatusResponse(
+            **billing.model_dump(),
+            active=user.active,
+            role=user.role,
+            primary_email=user.email,
+        )
+
+    @app.post("/api/admin/credits/grant")
+    async def admin_grant_credit_api(
+        payload: AdminGrantCreditRequest,
+        admin: AuthenticatedUser = Depends(require_admin_web_user),
+    ) -> AdminGrantCreditResponse:
+        target_record = await services.auth.get_user_record(payload.clerk_user_id)
+        balance, grant = await services.billing.grant_credit(
+            clerk_user_id=payload.clerk_user_id,
+            credit_amount_usd=payload.credit_amount_usd,
+            admin_clerk_user_id=admin.clerk_user_id,
+            note=payload.note,
+            credit_floor_usd=target_record.credit_floor_usd,
+            role=target_record.role,
+        )
+        return AdminGrantCreditResponse(balance=balance, grant=grant)
+
+    @app.get("/api/admin/users")
+    async def admin_list_users_api(
+        admin: AuthenticatedUser = Depends(require_admin_web_user),
+        limit: int = Query(default=20, ge=1, le=100),
+        offset: int = Query(default=0, ge=0),
+        query: str | None = Query(default=None, max_length=200),
+    ) -> AdminUserListResponse:
+        del admin
+        records = await services.auth.list_user_records(limit=limit, offset=offset, query=query)
+        balances = await services.billing.list_balance_amounts([record.clerk_user_id for record in records])
+        return AdminUserListResponse(
+            items=[
+                AdminUserSummary(
+                    clerk_user_id=record.clerk_user_id,
+                    primary_email=record.primary_email,
+                    display_name=record.display_name,
+                    image_url=record.image_url,
+                    active=record.active,
+                    role=record.role,
+                    current_credit_usd=round(float(balances.get(record.clerk_user_id, 0.0)), 8),
+                    credit_floor_usd=record.credit_floor_usd,
+                    created_at_ms=record.created_at_ms,
+                    last_sign_in_at_ms=record.last_sign_in_at_ms,
+                )
+                for record in records
+            ],
+            limit=limit,
+            offset=offset,
+            has_more=len(records) == limit,
+            query=query.strip() if isinstance(query, str) and query.strip() else None,
+        )
+
+    @app.post("/api/admin/users/set-active")
+    async def admin_set_user_active_api(
+        payload: AdminSetUserActiveRequest,
+        _: AuthenticatedUser = Depends(require_admin_web_user),
+    ) -> AdminSetUserActiveResponse:
+        target = await services.auth.set_user_active_state(
+            clerk_user_id=payload.clerk_user_id,
+            active=payload.active,
+        )
+        balance = await services.billing.get_status(
+            clerk_user_id=payload.clerk_user_id,
+            credit_floor_usd=target.credit_floor_usd,
+            role=target.role,
+        )
+        return AdminSetUserActiveResponse(
+            clerk_user_id=target.clerk_user_id,
+            active=target.active,
+            current_credit_usd=balance.current_credit_usd,
+            credit_floor_usd=balance.credit_floor_usd,
         )
 
     @app.get("/api/sources")
@@ -177,7 +281,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/api/filesystem/search")
     async def search_filesystem_api(
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
         query: str | None = Query(default=None),
         tag_ids: list[str] | None = Query(default=None),
         tag_match_mode: Literal["all", "any"] = Query(default="all"),
@@ -260,7 +364,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         user_guidance: str | None = Form(default=None),
         folder_id: str | None = Form(default=None),
         virtual_name: str | None = Form(default=None),
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> IngestFinalizeResponse:
         payload = await file.read()
         await file.close()
@@ -285,7 +389,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     async def preview_source_split_api(
         file: UploadFile = File(...),
         user_guidance: str | None = Form(default=None),
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> SplitPreviewResponse:
         payload = await file.read()
         await file.close()
@@ -306,7 +410,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     async def resplit_source_api(
         source_id: str,
         payload: ResplitSourceRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> IngestFinalizeResponse:
         try:
             return await services.sources.resplit_source(
@@ -399,7 +503,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.post("/api/research/imports")
     async def create_research_import_api(
         payload: ResearchImportCreateRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ResearchImportResponse:
         try:
             return await services.research.create_import(
@@ -415,7 +519,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.post("/api/research/library-builds")
     async def build_research_library_api(
         payload: ResearchLibraryBuildRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ResearchLibraryBuildResponse:
         try:
             return await services.research.build_library(
@@ -463,7 +567,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.post("/api/research/candidates/ingest")
     async def ingest_research_candidates_api(
         payload: ResearchCandidateIngestRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ResearchCandidateIngestResponse:
         try:
             return await services.research.ingest_approved_candidates(
@@ -536,42 +640,42 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.post("/api/search")
     async def search_api(
         payload: SearchRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> SearchResponse:
         return await services.sources.search(clerk_user_id=user.clerk_user_id, request=payload)
 
     @app.post("/api/search/branch")
     async def branch_search_api(
         payload: BranchSearchRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> BranchSearchResponse:
         return await services.sources.branch_search(clerk_user_id=user.clerk_user_id, request=payload)
 
     @app.post("/api/actions/qa")
     async def qa_api(
         payload: QaRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ActionResponse:
         return await services.actions.qa(clerk_user_id=user.clerk_user_id, payload=payload, origin_surface="web")
 
     @app.post("/api/actions/freeform")
     async def freeform_api(
         payload: FreeformRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ActionResponse:
         return await services.actions.freeform(clerk_user_id=user.clerk_user_id, payload=payload, origin_surface="web")
 
     @app.post("/api/actions/image")
     async def image_api(
         payload: ImageGenerationRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ActionResponse:
         return await services.actions.image(clerk_user_id=user.clerk_user_id, payload=payload, origin_surface="web")
 
     @app.post("/api/actions/voice")
     async def voice_api(
         payload: VoiceGenerationRequest,
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ActionResponse:
         return await services.actions.voice(clerk_user_id=user.clerk_user_id, payload=payload, origin_surface="web")
 
@@ -618,6 +722,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 clerk_user_id=user.clerk_user_id,
                 user_email=user.email,
                 display_name=user.display_name,
+                role=user.role,
+                credit_floor_usd=user.credit_floor_usd,
                 bearer_token=user.bearer_token,
                 request_app=request.app,
             )
@@ -656,7 +762,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         tag_ids: list[str] | None = Form(default=None),
         user_guidance: str | None = Form(default=None),
         thread_id: str | None = Form(default=None),
-        user: AuthenticatedUser = Depends(require_active_web_user),
+        user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> Response:
         payload = await file.read()
         await file.close()
@@ -664,6 +770,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             clerk_user_id=user.clerk_user_id,
             user_email=user.email,
             display_name=user.display_name,
+            role=user.role,
+            credit_floor_usd=user.credit_floor_usd,
             bearer_token=user.bearer_token,
         )
         try:

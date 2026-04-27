@@ -20,6 +20,83 @@ export type AuthUser = {
   primary_email: string | null;
   active: boolean;
   role: string | null;
+  current_credit_usd: number;
+  credit_floor_usd: number;
+};
+
+export type CreditBalanceSummary = {
+  clerk_user_id: string;
+  current_credit_usd: number;
+  credit_floor_usd: number;
+  billable: boolean;
+  billing_enabled: boolean;
+};
+
+export type BillingStatusResponse = {
+  clerk_user_id: string;
+  current_credit_usd: number;
+  credit_floor_usd: number;
+  billable: boolean;
+  billing_enabled: boolean;
+  active: boolean;
+  role: string | null;
+  primary_email: string | null;
+};
+
+export type CreditGrantSummary = {
+  id: string;
+  clerk_user_id: string;
+  admin_clerk_user_id: string | null;
+  credit_amount_usd: number;
+  source: string;
+  note: string | null;
+  payment_provider: string | null;
+  payment_reference: string | null;
+  created_at: string;
+};
+
+export type AdminGrantCreditRequest = {
+  clerk_user_id: string;
+  credit_amount_usd: number;
+  note?: string | null;
+};
+
+export type AdminGrantCreditResponse = {
+  balance: CreditBalanceSummary;
+  grant: CreditGrantSummary;
+};
+
+export type AdminSetUserActiveRequest = {
+  clerk_user_id: string;
+  active: boolean;
+};
+
+export type AdminSetUserActiveResponse = {
+  clerk_user_id: string;
+  active: boolean;
+  current_credit_usd: number;
+  credit_floor_usd: number;
+};
+
+export type AdminUserSummary = {
+  clerk_user_id: string;
+  primary_email: string | null;
+  display_name: string | null;
+  image_url: string | null;
+  active: boolean;
+  role: string | null;
+  current_credit_usd: number;
+  credit_floor_usd: number;
+  created_at_ms: number | null;
+  last_sign_in_at_ms: number | null;
+};
+
+export type AdminUserListResponse = {
+  items: AdminUserSummary[];
+  limit: number;
+  offset: number;
+  has_more: boolean;
+  query: string | null;
 };
 
 export type TagSummary = {

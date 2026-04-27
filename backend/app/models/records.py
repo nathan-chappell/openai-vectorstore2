@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from uuid import uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
+from sqlalchemy import DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -32,6 +32,63 @@ class AppUser(Base):
     chat_threads: Mapped[list["AppChatThread"]] = relationship(back_populates="user")
     chat_attachments: Mapped[list["AppChatAttachment"]] = relationship(back_populates="user")
     research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(back_populates="user")
+
+
+class UserCreditBalance(Base):
+    __tablename__ = "user_credit_balances"
+
+    clerk_user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    current_credit_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CreditGrant(Base):
+    __tablename__ = "credit_grants"
+    __table_args__ = (Index("ix_credit_grants_user_created_at", "clerk_user_id", "created_at"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    clerk_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    admin_clerk_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    credit_amount_usd: Mapped[float] = mapped_column(Float, nullable=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False, default="manual")
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    payment_provider: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    payment_reference: Mapped[str | None] = mapped_column(String(255), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+
+class CostEvent(Base):
+    __tablename__ = "cost_events"
+    __table_args__ = (
+        UniqueConstraint("event_key", name="uq_cost_events_event_key"),
+        Index("ix_cost_events_user_created_at", "clerk_user_id", "created_at"),
+        Index("ix_cost_events_thread_created_at", "thread_id", "created_at"),
+        Index("ix_cost_events_task_created_at", "task_id", "created_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    event_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    clerk_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    operation_kind: Mapped[str] = mapped_column(String(80), nullable=False)
+    origin_surface: Mapped[str] = mapped_column(String(32), nullable=False)
+    thread_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    task_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    source_file_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    openai_response_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    openai_conversation_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    openai_request_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pricing_version: Mapped[str] = mapped_column(String(80), nullable=False)
+    input_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    cached_input_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    output_tokens: Mapped[int] = mapped_column(nullable=False, default=0)
+    raw_usage_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    openai_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    platform_multiplier: Mapped[float] = mapped_column(Float, nullable=False, default=1.0)
+    platform_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
 
 
 class UserLibrary(Base):

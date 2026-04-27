@@ -108,7 +108,9 @@ class ResearchImportService:
         progress_callback: ResearchProgressCallback | None = None,
     ) -> ResearchImportResponse:
         started_at = perf_counter()
-        await _emit_research_progress(progress_callback, "search", f"Starting research discovery for {_seed_title(payload)}.")
+        await _emit_research_progress(
+            progress_callback, "search", f"Starting research discovery for {_seed_title(payload)}."
+        )
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user, library = await self._active_user_and_library(session, clerk_user_id=clerk_user_id)
@@ -514,9 +516,7 @@ class ResearchImportService:
         source_status_by_id: dict[str, str] = {}
         for source_id, status in rows:
             source_status_by_id.setdefault(str(source_id), str(status))
-        ready_source_ids = [
-            source_id for source_id, status in source_status_by_id.items() if status == "ready"
-        ]
+        ready_source_ids = [source_id for source_id, status in source_status_by_id.items() if status == "ready"]
         failed_count = sum(1 for status in source_status_by_id.values() if status == "failed")
         processing_count = sum(1 for status in source_status_by_id.values() if status not in {"ready", "failed"})
         return ResearchLinkedSourceScope(

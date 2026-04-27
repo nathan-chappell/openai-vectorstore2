@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import math
 from typing import Any, Mapping
 
 import httpx
@@ -25,6 +26,20 @@ class UserRecord(BaseModel):
     display_name: str
     active: bool = False
     role: str | None = None
+    credit_floor_usd: float = 0.0
+
+
+@dataclass(frozen=True, slots=True)
+class AdminUserRecord:
+    clerk_user_id: str
+    primary_email: str | None
+    display_name: str
+    image_url: str | None
+    active: bool
+    role: str | None
+    credit_floor_usd: float
+    created_at_ms: int | None
+    last_sign_in_at_ms: int | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,6 +49,7 @@ class AuthenticatedUser:
     display_name: str
     active: bool
     role: str | None
+    credit_floor_usd: float
     bearer_token: str
 
 
@@ -68,6 +84,7 @@ class AuthService:
                 display_name="Local Developer",
                 active=True,
                 role="admin",
+                credit_floor_usd=self._settings.billing_default_credit_floor_usd,
                 bearer_token="local-dev",
             )
         if not token or self._http_client is None or self._clerk_sdk is None or self._settings.clerk_secret_key is None:
@@ -84,6 +101,7 @@ class AuthService:
             display_name=record.display_name,
             active=record.active,
             role=record.role,
+            credit_floor_usd=record.credit_floor_usd,
             bearer_token=token,
         )
 
@@ -95,6 +113,7 @@ class AuthService:
                 display_name="Local Developer",
                 active=True,
                 role="admin",
+                credit_floor_usd=self._settings.billing_default_credit_floor_usd,
             )
         if self._http_client is None:
             raise RuntimeError("CLERK_SECRET_KEY is required for non-local users.")
@@ -110,7 +129,61 @@ class AuthService:
             display_name=_extract_display_name(payload, clerk_user_id),
             active=bool(private_metadata.get(self._settings.clerk_active_metadata_key)),
             role=role,
+            credit_floor_usd=self._resolve_credit_floor(private_metadata),
         )
+
+    async def list_user_records(self, *, limit: int, offset: int, query: str | None = None) -> list[AdminUserRecord]:
+        if self._settings.allow_local_dev_auth and (self._http_client is None or query in {None, "", "local-dev"}):
+            return [
+                AdminUserRecord(
+                    clerk_user_id="local-dev",
+                    primary_email="local-dev@example.com",
+                    display_name="Local Developer",
+                    image_url=None,
+                    active=True,
+                    role="admin",
+                    credit_floor_usd=self._settings.billing_default_credit_floor_usd,
+                    created_at_ms=None,
+                    last_sign_in_at_ms=None,
+                )
+            ][offset : offset + limit]
+        if self._http_client is None:
+            raise RuntimeError("CLERK_SECRET_KEY is required for Clerk admin operations.")
+        params: dict[str, str | int] = {"limit": limit, "offset": offset, "order_by": "-created_at"}
+        normalized_query = query.strip() if isinstance(query, str) else ""
+        if normalized_query:
+            params["query"] = normalized_query
+        response = await self._http_client.get("/v1/users", params=params)
+        response.raise_for_status()
+        payload = response.json()
+        raw_items = payload.get("data") if isinstance(payload, dict) else payload
+        if not isinstance(raw_items, list):
+            return []
+        return [self._admin_user_record_from_payload(item) for item in raw_items if isinstance(item, dict)]
+
+    async def set_user_active_state(self, *, clerk_user_id: str, active: bool) -> UserRecord:
+        if clerk_user_id == "local-dev" and self._settings.allow_local_dev_auth:
+            return await self.get_user_record(clerk_user_id)
+        if self._http_client is None:
+            raise RuntimeError("CLERK_SECRET_KEY is required for Clerk admin operations.")
+        current = await self._http_client.get(f"/v1/users/{clerk_user_id}")
+        current.raise_for_status()
+        payload = current.json()
+        private_metadata = dict(payload.get("private_metadata") or {})
+        private_metadata[self._settings.clerk_active_metadata_key] = active
+        if (
+            active
+            and self._coerce_credit_floor(private_metadata.get(self._settings.clerk_credit_floor_metadata_key)) is None
+        ):
+            private_metadata[self._settings.clerk_credit_floor_metadata_key] = (
+                self._settings.billing_default_credit_floor_usd
+            )
+        updated = await self._http_client.patch(
+            f"/v1/users/{clerk_user_id}",
+            json={"private_metadata": private_metadata},
+        )
+        updated.raise_for_status()
+        return self._user_record_from_payload(updated.json(), clerk_user_id=clerk_user_id)
 
     async def _verify_session_token(self, token: str) -> str | None:
         if self._clerk_sdk is None or self._settings.clerk_secret_key is None:
@@ -135,7 +208,9 @@ class AuthService:
     async def _verify_oauth_token(self, token: str) -> str | None:
         if self._http_client is None:
             return None
-        response = await self._http_client.post("/oauth_applications/access_tokens/verify", json={"access_token": token})
+        response = await self._http_client.post(
+            "/oauth_applications/access_tokens/verify", json={"access_token": token}
+        )
         if response.status_code in {400, 401, 404}:
             return None
         response.raise_for_status()
@@ -145,12 +220,78 @@ class AuthService:
         subject = payload.get("subject")
         return subject if isinstance(subject, str) and subject.strip() else None
 
+    def _admin_user_record_from_payload(self, payload: dict[str, Any]) -> AdminUserRecord:
+        clerk_user_id = str(payload.get("id") or "").strip()
+        private_metadata = payload.get("private_metadata") or {}
+        raw_role = (
+            private_metadata.get(self._settings.clerk_role_metadata_key) if isinstance(private_metadata, dict) else None
+        )
+        role = raw_role.strip() if isinstance(raw_role, str) and raw_role.strip() else None
+        return AdminUserRecord(
+            clerk_user_id=clerk_user_id,
+            primary_email=_extract_primary_email(payload),
+            display_name=_extract_display_name(payload, clerk_user_id),
+            image_url=payload.get("image_url") if isinstance(payload.get("image_url"), str) else None,
+            active=bool(private_metadata.get(self._settings.clerk_active_metadata_key))
+            if isinstance(private_metadata, dict)
+            else False,
+            role=role,
+            credit_floor_usd=self._resolve_credit_floor(private_metadata if isinstance(private_metadata, dict) else {}),
+            created_at_ms=_int_or_none(payload.get("created_at")),
+            last_sign_in_at_ms=_int_or_none(payload.get("last_sign_in_at")),
+        )
+
+    def _user_record_from_payload(self, payload: dict[str, Any], *, clerk_user_id: str) -> UserRecord:
+        private_metadata = payload.get("private_metadata") or {}
+        raw_role = (
+            private_metadata.get(self._settings.clerk_role_metadata_key) if isinstance(private_metadata, dict) else None
+        )
+        role = raw_role.strip() if isinstance(raw_role, str) and raw_role.strip() else None
+        return UserRecord(
+            clerk_user_id=clerk_user_id,
+            primary_email=_extract_primary_email(payload),
+            display_name=_extract_display_name(payload, clerk_user_id),
+            active=bool(private_metadata.get(self._settings.clerk_active_metadata_key))
+            if isinstance(private_metadata, dict)
+            else False,
+            role=role,
+            credit_floor_usd=self._resolve_credit_floor(private_metadata if isinstance(private_metadata, dict) else {}),
+        )
+
+    def _resolve_credit_floor(self, metadata: Mapping[str, object]) -> float:
+        resolved = self._coerce_credit_floor(metadata.get(self._settings.clerk_credit_floor_metadata_key))
+        return resolved if resolved is not None else self._settings.billing_default_credit_floor_usd
+
+    @staticmethod
+    def _coerce_credit_floor(raw_value: object) -> float | None:
+        if isinstance(raw_value, bool):
+            return None
+        if isinstance(raw_value, (int, float)):
+            value = float(raw_value)
+        elif isinstance(raw_value, str):
+            normalized_value = raw_value.strip()
+            if not normalized_value:
+                return None
+            try:
+                value = float(normalized_value)
+            except ValueError:
+                return None
+        else:
+            return None
+        if not math.isfinite(value):
+            return None
+        return round(value, 8)
+
 
 def _extract_primary_email(payload: dict[str, Any]) -> str | None:
     primary_email_id = payload.get("primary_email_address_id")
     email_addresses = payload.get("email_addresses") or []
     for email in email_addresses:
-        if isinstance(email, dict) and email.get("id") == primary_email_id and isinstance(email.get("email_address"), str):
+        if (
+            isinstance(email, dict)
+            and email.get("id") == primary_email_id
+            and isinstance(email.get("email_address"), str)
+        ):
             return email["email_address"]
     for email in email_addresses:
         if isinstance(email, dict) and isinstance(email.get("email_address"), str):
@@ -168,3 +309,13 @@ def _extract_display_name(payload: dict[str, Any], fallback: str) -> str:
     if isinstance(username, str) and username.strip():
         return username.strip()
     return _extract_primary_email(payload) or fallback
+
+
+def _int_or_none(value: object) -> int | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    return None

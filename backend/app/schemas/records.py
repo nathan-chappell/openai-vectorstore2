@@ -38,6 +38,101 @@ class AuthUser(BaseModel):
     primary_email: str | None = None
     active: bool
     role: str | None = None
+    current_credit_usd: float = 0.0
+    credit_floor_usd: float = 0.0
+
+
+class CreditBalanceSummary(BaseModel):
+    clerk_user_id: str
+    current_credit_usd: float
+    credit_floor_usd: float
+    billable: bool
+    billing_enabled: bool
+
+
+class CreditGrantSummary(BaseModel):
+    id: str
+    clerk_user_id: str
+    admin_clerk_user_id: str | None = None
+    credit_amount_usd: float
+    source: str
+    note: str | None = None
+    payment_provider: str | None = None
+    payment_reference: str | None = None
+    created_at: datetime
+
+
+class CostEventSummary(BaseModel):
+    id: str
+    event_key: str | None = None
+    clerk_user_id: str
+    operation_kind: str
+    origin_surface: str
+    thread_id: str | None = None
+    task_id: str | None = None
+    source_file_id: str | None = None
+    openai_response_id: str | None = None
+    openai_conversation_id: str | None = None
+    model: str | None = None
+    pricing_version: str
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    openai_cost_usd: float
+    platform_multiplier: float
+    platform_cost_usd: float
+    note: str | None = None
+    created_at: datetime
+
+
+class BillingStatusResponse(CreditBalanceSummary):
+    active: bool
+    role: str | None = None
+    primary_email: str | None = None
+
+
+class AdminGrantCreditRequest(BaseModel):
+    clerk_user_id: str = Field(min_length=1, max_length=128)
+    credit_amount_usd: float = Field(gt=0)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class AdminGrantCreditResponse(BaseModel):
+    balance: CreditBalanceSummary
+    grant: CreditGrantSummary
+
+
+class AdminSetUserActiveRequest(BaseModel):
+    clerk_user_id: str = Field(min_length=1, max_length=128)
+    active: bool
+
+
+class AdminSetUserActiveResponse(BaseModel):
+    clerk_user_id: str
+    active: bool
+    current_credit_usd: float
+    credit_floor_usd: float
+
+
+class AdminUserSummary(BaseModel):
+    clerk_user_id: str
+    primary_email: str | None = None
+    display_name: str | None = None
+    image_url: str | None = None
+    active: bool
+    role: str | None = None
+    current_credit_usd: float
+    credit_floor_usd: float
+    created_at_ms: int | None = None
+    last_sign_in_at_ms: int | None = None
+
+
+class AdminUserListResponse(BaseModel):
+    items: list[AdminUserSummary] = Field(default_factory=list)
+    limit: int
+    offset: int
+    has_more: bool
+    query: str | None = None
 
 
 class TagSummary(BaseModel):

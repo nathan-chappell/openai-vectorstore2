@@ -57,7 +57,11 @@ def test_build_filter_groups_combines_source_kind_and_any_tags() -> None:
         ],
     }
     assert kind_filter == {"type": "eq", "key": "source_kind", "value": "text"}
-    assert created_after_filter == {"type": "gte", "key": "created_at", "value": datetime(2026, 1, 1, tzinfo=UTC).timestamp()}
+    assert created_after_filter == {
+        "type": "gte",
+        "key": "created_at",
+        "value": datetime(2026, 1, 1, tzinfo=UTC).timestamp(),
+    }
     assert created_before_filter == {
         "type": "lte",
         "key": "created_at",

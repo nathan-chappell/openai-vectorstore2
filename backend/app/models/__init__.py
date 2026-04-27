@@ -5,6 +5,8 @@ from .records import (
     AppTask,
     AppUser,
     Base,
+    CostEvent,
+    CreditGrant,
     FilesystemEntry,
     ResearchImportCandidate,
     SemanticChunk,
@@ -13,6 +15,7 @@ from .records import (
     StoredAsset,
     Tag,
     UserLibrary,
+    UserCreditBalance,
     new_id,
 )
 
@@ -23,6 +26,8 @@ __all__ = [
     "AppTask",
     "AppUser",
     "Base",
+    "CostEvent",
+    "CreditGrant",
     "FilesystemEntry",
     "ResearchImportCandidate",
     "SemanticChunk",
@@ -31,5 +36,6 @@ __all__ = [
     "StoredAsset",
     "Tag",
     "UserLibrary",
+    "UserCreditBalance",
     "new_id",
 ]

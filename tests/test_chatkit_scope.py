@@ -38,6 +38,8 @@ def test_selected_scope_falls_back_when_model_passes_openai_file_ids() -> None:
         clerk_user_id="local-dev",
         user_email="local-dev@example.com",
         display_name="Local Developer",
+        role="admin",
+        credit_floor_usd=-1.0,
         bearer_token="local-dev",
         selected_source_ids=["source_a", "source_b"],
         thread_origin="web",
@@ -51,6 +53,8 @@ def test_selected_scope_preserves_explicit_app_source_ids() -> None:
         clerk_user_id="local-dev",
         user_email="local-dev@example.com",
         display_name="Local Developer",
+        role="admin",
+        credit_floor_usd=-1.0,
         bearer_token="local-dev",
         selected_source_ids=["source_a"],
         thread_origin="web",
@@ -101,9 +105,7 @@ def test_chatkit_openai_state_round_trips_metadata() -> None:
 def test_chatkit_model_settings_enable_server_side_compaction() -> None:
     settings = chatkit_model_settings_for_model("gpt-5.4-mini", compact_threshold=80_000)
 
-    assert settings.extra_body == {
-        "context_management": [{"type": "compaction", "compact_threshold": 80_000}]
-    }
+    assert settings.extra_body == {"context_management": [{"type": "compaction", "compact_threshold": 80_000}]}
     assert settings.reasoning is not None
     assert settings.reasoning.effort == "low"
     assert settings.reasoning.summary == "auto"
@@ -229,10 +231,13 @@ def test_pending_chatkit_items_keeps_completed_client_tool_output_with_conversat
         [_user_message("user_1"), _assistant_message("assistant_1"), completed_tool],
         has_openai_conversation=True,
     ) == [completed_tool]
-    assert pending_chatkit_thread_items(
-        [_user_message("user_1"), _assistant_message("assistant_1"), pending_tool],
-        has_openai_conversation=True,
-    ) == []
+    assert (
+        pending_chatkit_thread_items(
+            [_user_message("user_1"), _assistant_message("assistant_1"), pending_tool],
+            has_openai_conversation=True,
+        )
+        == []
+    )
 
 
 def _user_message(item_id: str) -> UserMessageItem:
