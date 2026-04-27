@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { AdminPortfolioPanel } from "../../../vendor/ai-portfolio-admin/frontend";
 import type {
@@ -7,12 +7,13 @@ import type {
   CreditGrantRecord,
   ManualCreditGrantRequest,
 } from "../../../vendor/ai-portfolio-admin/frontend";
-import { grantAdminCredit, listAdminUsers, setAdminUserActive } from "../lib/api";
+import { getPaymentIntegrationStatus, grantAdminCredit, listAdminUsers, setAdminUserActive } from "../lib/api";
 import type {
   AdminGrantCreditResponse,
   AdminSetUserActiveResponse,
   AdminUserSummary as LocalAdminUserSummary,
   AuthUser,
+  PaymentIntegrationResponse,
 } from "../lib/types";
 
 function toSharedRole(role: string | null): SharedAdminUserSummary["role"] {
@@ -103,12 +104,96 @@ export function AdminWorkspacePanel({ user }: { user: AuthUser | null }) {
   }, []);
 
   if (user?.role !== "admin") {
-    return null;
+    return <AccountWorkspacePanel user={user} />;
   }
 
   return (
     <section className="admin-workspace-panel" aria-label="Admin users and credits">
       <AdminPortfolioPanel callbacks={callbacks} />
+    </section>
+  );
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(2)}`;
+}
+
+function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
+  const [paymentStatus, setPaymentStatus] = useState<PaymentIntegrationResponse | null>(null);
+  const [status, setStatus] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setStatus(null);
+    void getPaymentIntegrationStatus()
+      .then((response) => {
+        if (!cancelled) {
+          setPaymentStatus(response);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setStatus(error instanceof Error ? error.message : "Unable to load payment status.");
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const availableCredit =
+    user === null ? 0 : Math.max(user.current_credit_usd - user.credit_floor_usd, 0);
+
+  return (
+    <section className="admin-workspace-panel account-workspace-panel" aria-label="Account and payment settings">
+      <div className="account-settings-grid">
+        <section className="account-settings-section" aria-label="Account">
+          <p className="eyebrow">Account</p>
+          <h2>{user?.display_name ?? "Signed-in user"}</h2>
+          <dl>
+            <div>
+              <dt>Email</dt>
+              <dd>{user?.primary_email ?? "Not provided"}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd>{user?.active ? "Active" : "Pending activation"}</dd>
+            </div>
+            <div>
+              <dt>Role</dt>
+              <dd>{user?.role ?? "User"}</dd>
+            </div>
+          </dl>
+        </section>
+        <section className="account-settings-section" aria-label="Credits">
+          <p className="eyebrow">Credits</p>
+          <h2>{formatUsd(availableCredit)}</h2>
+          <dl>
+            <div>
+              <dt>Current balance</dt>
+              <dd>{formatUsd(user?.current_credit_usd ?? 0)}</dd>
+            </div>
+            <div>
+              <dt>Credit floor</dt>
+              <dd>{formatUsd(user?.credit_floor_usd ?? 0)}</dd>
+            </div>
+          </dl>
+        </section>
+        <section className="account-settings-section" aria-label="Payments">
+          <p className="eyebrow">Payments</p>
+          <h2>{paymentStatus?.checkout_enabled ? "Checkout available" : "Checkout unavailable"}</h2>
+          <dl>
+            <div>
+              <dt>Provider</dt>
+              <dd>{paymentStatus?.provider ?? "Loading"}</dd>
+            </div>
+            <div>
+              <dt>Details</dt>
+              <dd>{status ?? paymentStatus?.reason ?? "Payment status is current."}</dd>
+            </div>
+          </dl>
+        </section>
+      </div>
     </section>
   );
 }

@@ -21,7 +21,7 @@ export function WorkspaceHeader({
   onToggleAdmin: () => void;
 }) {
   const latestTask = tasks[0] ?? null;
-  const canViewAdmin = user?.role === "admin";
+  const canOpenSettings = user !== null;
   return (
     <header className="app-bar">
       <div className="app-identity">
@@ -36,9 +36,16 @@ export function WorkspaceHeader({
         <span>Recent Tasks</span>
         <strong>{latestTask ? `${latestTask.kind} | ${latestTask.status}` : "No tasks yet"}</strong>
       </div>
-      {canViewAdmin ? (
-        <button type="button" className="secondary-button" onClick={onToggleAdmin}>
-          {adminOpen ? "Workspace" : "Admin"}
+      {canOpenSettings ? (
+        <button
+          type="button"
+          className="icon-button settings-button"
+          onClick={onToggleAdmin}
+          aria-label={adminOpen ? "Close settings" : "Open settings"}
+          aria-pressed={adminOpen}
+          title={adminOpen ? "Close settings" : "Settings"}
+        >
+          ⚙
         </button>
       ) : null}
       <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>

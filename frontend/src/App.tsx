@@ -1035,11 +1035,11 @@ export function App({ authMode }: AppProps) {
         onToggleAdmin={() => setAdminOpen((current) => !current)}
       />
 
-      {adminOpen && user?.role === "admin" ? <AdminWorkspacePanel user={user} /> : null}
+      {adminOpen && user ? <AdminWorkspacePanel user={user} /> : null}
 
       <section
         ref={workspaceGridRef}
-        className={`workspace-grid${adminOpen && user?.role === "admin" ? " admin-workspace-hidden" : ""}`}
+        className={`workspace-grid${adminOpen && user ? " admin-workspace-hidden" : ""}`}
         style={workspaceStyle}
         aria-label="Indexed file workspace"
       >
