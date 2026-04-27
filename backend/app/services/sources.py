@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 import logging
@@ -388,7 +388,7 @@ class SourceService:
                     or normalized_query in _virtual_path(source).casefold()
                     or normalized_query in source.media_type.casefold()
                     or normalized_query in source.source_kind.casefold()
-                    or normalized_query in _metadata_search_text(source.metadata_json)
+                    or normalized_query in _metadata_search_text(source.source_metadata)
                 ]
             if selected_tag_ids:
 
@@ -521,7 +521,7 @@ class SourceService:
                     or normalized_query in source.id.casefold()
                     or normalized_query in source.media_type.casefold()
                     or normalized_query in source.source_kind.casefold()
-                    or normalized_query in _metadata_search_text(source.metadata_json)
+                    or normalized_query in _metadata_search_text(source.source_metadata)
                     or source.id in vector_source_id_set
                 )
                 return name_matches or source_matches
@@ -1552,7 +1552,7 @@ class SourceService:
                 else:
                     source.openai_original_file_id = None
                     source.openai_vector_file_id = None
-                    source.vector_attributes_json = {}
+                    source.vector_attributes = {}
                     for chunk in source.chunks:
                         chunk.openai_file_id = None
                 source.status = "failed"
@@ -1612,7 +1612,7 @@ class SourceService:
             else:
                 source.openai_original_file_id = None
                 source.openai_vector_file_id = None
-                source.vector_attributes_json = {}
+                source.vector_attributes = {}
                 for chunk in source.chunks:
                     chunk.openai_file_id = None
             source.status = "failed"
@@ -1681,7 +1681,7 @@ class SourceService:
             source = await self._source_by_id(session, source_id=source_id)
             task = await self._task_by_id(session, task_id=task_id)
             library = source.library
-            task_input = _dict_payload(task.input_json)
+            task_input = task.input_object
             previous_status = str(task_input.get("previous_status") or "failed")
             previous_error_raw = task_input.get("previous_error_message")
             previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
@@ -1900,11 +1900,11 @@ class SourceService:
                 )
                 return
 
-            task_input = _dict_payload(task.input_json)
+            task_input = task.input_object
             previous_status = str(task_input.get("previous_status") or "failed")
             previous_error_raw = task_input.get("previous_error_message")
             previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
-            state = _dict_payload(task.state_json)
+            state = task.state_object
             old_chunks_replaced = state.get("stage") in {"replacing_old_chunks", "saving_semantic_chunks"}
             if old_chunks_replaced:
                 try:
@@ -1961,7 +1961,7 @@ class SourceService:
             source = await self._source_by_id(session, source_id=source_id)
             task = await self._task_by_id(session, task_id=task_id)
             library = source.library
-            task_input = _dict_payload(task.input_json)
+            task_input = task.input_object
             raw_tag_ids = task_input.get("tag_ids")
             tag_ids = (
                 [item.strip() for item in raw_tag_ids if isinstance(item, str) and item.strip()]
@@ -2092,13 +2092,13 @@ class SourceService:
                 )
                 return
 
-            task_input = _dict_payload(task.input_json)
+            task_input = task.input_object
             previous_status = str(task_input.get("previous_status") or "failed")
             if previous_status not in {"ready", "failed"}:
                 previous_status = "failed"
             previous_error_raw = task_input.get("previous_error_message")
             previous_error_message = previous_error_raw if isinstance(previous_error_raw, str) else None
-            state = _dict_payload(task.state_json)
+            state = task.state_object
             reindexed_source_file = state.get("stage") == "reindexing_source_file"
             source.status = previous_status
             source.error_message = previous_error_message
@@ -2576,7 +2576,7 @@ class SourceService:
             raise
 
         source.openai_vector_file_id = new_file_id
-        source.vector_attributes_json = {key: value for key, value in attributes.items()}
+        source.vector_attributes = attributes
         if old_file_id is not None and old_file_id != new_file_id:
             try:
                 await self._openai.detach_file_from_vector_store(vector_store_id=vector_store_id, file_id=old_file_id)
@@ -2792,7 +2792,7 @@ class SourceService:
         )
 
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
-        metadata = dict(source.metadata_json or {})
+        metadata = source.source_metadata
         return LibrarySourceSummary(
             id=source.id,
             filesystem_entry_id=source.filesystem_entry.id if source.filesystem_entry is not None else None,
@@ -2818,7 +2818,7 @@ class SourceService:
             openai_original_file_id=source.openai_original_file_id,
             openai_original_file_purpose=source.openai_original_file_purpose,
             openai_vector_file_id=source.openai_vector_file_id,
-            vector_attributes=cast(Any, dict(source.vector_attributes_json or {})) or None,
+            vector_attributes=source.vector_attributes or None,
         )
 
     def _source_detail(self, source: SourceFile) -> LibrarySourceDetail:
@@ -2828,7 +2828,7 @@ class SourceService:
             storage_provider=source.storage_provider,
             storage_key=source.storage_key,
             ingest_strategy=source.ingest_strategy,
-            metadata=dict(source.metadata_json or {}),
+            metadata=dict(source.source_metadata),
             chunks=[self._chunk_summary(chunk) for chunk in sorted(source.chunks, key=lambda item: item.sequence)],
         )
 
@@ -2844,7 +2844,7 @@ class SourceService:
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
             )
-        metadata = dict(source.metadata_json or {})
+        metadata = source.source_metadata
         return FilesystemEntrySummary(
             id=entry.id,
             kind=cast(Any, entry.kind),
@@ -3143,11 +3143,7 @@ def bounded_tag_ids(tag_ids: Sequence[str]) -> list[str]:
     return output
 
 
-def _dict_payload(value: object) -> dict[str, object]:
-    return value if isinstance(value, dict) else {}
-
-
-def _metadata_string(metadata: dict[str, object], key: str) -> str | None:
+def _metadata_string(metadata: Mapping[str, object], key: str) -> str | None:
     value = metadata.get(key)
     if not isinstance(value, str):
         return None
@@ -3155,16 +3151,14 @@ def _metadata_string(metadata: dict[str, object], key: str) -> str | None:
     return stripped or None
 
 
-def _metadata_string_list(metadata: dict[str, object], key: str) -> list[str]:
+def _metadata_string_list(metadata: Mapping[str, object], key: str) -> list[str]:
     value = metadata.get(key)
     if not isinstance(value, list):
         return []
     return [item.strip() for item in value if isinstance(item, str) and item.strip()]
 
 
-def _metadata_search_text(value: object) -> str:
-    if not isinstance(value, dict):
-        return ""
+def _metadata_search_text(value: Mapping[str, object]) -> str:
     parts: list[str] = []
     for key in ["description", "summary", "authors", "published_at", "doi", "arxiv_id", "suggested_tags"]:
         item = value.get(key)
@@ -3302,7 +3296,7 @@ def _library_supports_vector_created_at_filter(library: UserLibrary) -> bool:
     for source in library.sources:
         if source.openai_vector_file_id is None:
             continue
-        attributes = source.vector_attributes_json or {}
+        attributes = source.vector_attributes
         if attributes.get("attributes_version") != float(VECTOR_ATTRIBUTES_VERSION):
             return False
         if attributes.get("index_kind") != "source_file":

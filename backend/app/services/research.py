@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import base64
 import binascii
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 import hashlib
@@ -33,6 +33,7 @@ from backend.app.schemas import (
     ResearchImportCandidateSummary,
     ResearchImportCreateRequest,
     ResearchImportResponse,
+    ResearchProvenance,
     ResearchLibraryBuildRequest,
     ResearchLibraryBuildResponse,
     TaskSummary,
@@ -63,7 +64,7 @@ class ResearchMaterial:
     title: str
     normalized_url: str | None
     content_hash: str
-    provenance: dict[str, object]
+    provenance: ResearchProvenance
 
 
 @dataclass(frozen=True, slots=True)
@@ -667,7 +668,7 @@ class ResearchImportService:
                         )
                         current.status = "duplicate"
                         current.content_hash = material.content_hash
-                        current.provenance_json = dict(current.provenance_json or {}) | material.provenance
+                        current.provenance = current.provenance | material.provenance
                         current.error_message = duplicate_reason
                         current.updated_at = _utcnow()
                         await session.commit()
@@ -727,7 +728,7 @@ class ResearchImportService:
                     current.status = "ingesting"
                     current.linked_source_file_id = ingest_response.source.id
                     current.content_hash = material.content_hash
-                    current.provenance_json = dict(current.provenance_json or {}) | material.provenance
+                    current.provenance = current.provenance | material.provenance
                     current.error_message = None
                     current.updated_at = _utcnow()
                     await session.commit()
@@ -1071,7 +1072,7 @@ class ResearchImportService:
         )
 
     async def _material_from_candidate(self, candidate: ResearchImportCandidate) -> ResearchMaterial:
-        provenance = dict(candidate.provenance_json or {})
+        provenance = candidate.provenance
         content_text = provenance.get("content_text")
         if isinstance(content_text, str) and content_text.strip():
             payload = content_text.encode("utf-8")
@@ -1103,7 +1104,7 @@ class ResearchImportService:
         url: str,
         title: str | None,
         forced_source_type: ResearchCandidateSourceType | None,
-        candidate_provenance: dict[str, object] | None = None,
+        candidate_provenance: Mapping[str, object] | None = None,
     ) -> ResearchMaterial:
         normalized_url = _normalize_url(_arxiv_pdf_url(url) if forced_source_type == "arxiv" else url)
         fetch_url = normalized_url or url
@@ -1168,7 +1169,7 @@ class ResearchImportService:
         ]:
             if key in candidate_provenance and key not in merged_provenance:
                 merged_provenance[key] = candidate_provenance[key]
-        return replace(material, provenance=merged_provenance)
+        return replace(material, provenance=cast(ResearchProvenance, merged_provenance))
 
     async def _target_folder_for_request(
         self,
@@ -1283,20 +1284,20 @@ class ResearchImportService:
             url=candidate.url,
             normalized_url=candidate.normalized_url,
             title=candidate.title,
-            description=_provenance_string(candidate.provenance_json, "description"),
-            summary=_provenance_string(candidate.provenance_json, "summary"),
+            description=_provenance_string(candidate.provenance, "description"),
+            summary=_provenance_string(candidate.provenance, "summary"),
             suggested_tags=_candidate_suggested_tags(candidate),
-            authors=_provenance_string_list(candidate.provenance_json, "authors"),
-            published_at=_provenance_string(candidate.provenance_json, "published_at"),
-            doi=_provenance_string(candidate.provenance_json, "doi"),
-            arxiv_id=_provenance_string(candidate.provenance_json, "arxiv_id"),
+            authors=_provenance_string_list(candidate.provenance, "authors"),
+            published_at=_provenance_string(candidate.provenance, "published_at"),
+            doi=_provenance_string(candidate.provenance, "doi"),
+            arxiv_id=_provenance_string(candidate.provenance, "arxiv_id"),
             rationale=candidate.rationale,
             score=candidate.score,
             depth=candidate.depth,
             parent_candidate_id=candidate.parent_candidate_id,
             parent_source_file_id=candidate.parent_source_file_id,
             linked_source_file_id=candidate.linked_source_file_id,
-            provenance=dict(candidate.provenance_json or {}),
+            provenance=dict(candidate.provenance),
             content_hash=candidate.content_hash,
             error_message=error_message,
             created_at=candidate.created_at,
@@ -1565,17 +1566,15 @@ def _has_metadata_value(value: object) -> bool:
 
 
 def _candidate_target_folder_id(candidate: ResearchImportCandidate) -> str | None:
-    value = dict(candidate.provenance_json or {}).get("target_folder_id")
+    value = candidate.provenance.get("target_folder_id")
     return value if isinstance(value, str) and value.strip() else None
 
 
 def _candidate_suggested_tags(candidate: ResearchImportCandidate) -> list[str]:
-    return _provenance_string_list(candidate.provenance_json, "suggested_tags")
+    return _provenance_string_list(candidate.provenance, "suggested_tags")
 
 
-def _provenance_string(provenance: object, key: str) -> str | None:
-    if not isinstance(provenance, dict):
-        return None
+def _provenance_string(provenance: Mapping[str, object], key: str) -> str | None:
     value = provenance.get(key)
     if not isinstance(value, str):
         return None
@@ -1583,9 +1582,7 @@ def _provenance_string(provenance: object, key: str) -> str | None:
     return stripped or None
 
 
-def _provenance_string_list(provenance: object, key: str) -> list[str]:
-    if not isinstance(provenance, dict):
-        return []
+def _provenance_string_list(provenance: Mapping[str, object], key: str) -> list[str]:
     value = provenance.get(key)
     if not isinstance(value, list):
         return []

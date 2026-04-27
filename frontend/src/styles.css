@@ -1152,7 +1152,33 @@ kbd {
 }
 
 .filesystem-pane {
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+}
+
+.file-view-tabs {
+  display: flex;
+  gap: 0.25rem;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 0.3rem 0.45rem;
+  background: #ffffff;
+}
+
+.view-tab {
+  min-height: 1.8rem;
+  border-color: transparent;
+  padding: 0.24rem 0.65rem;
+  color: #334155;
+  background: transparent;
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.view-tab:hover:not(:disabled),
+.view-tab.active {
+  border-color: #bfdbfe;
+  color: #1d4ed8;
+  background: #eff6ff;
 }
 
 .explorer-commandbar {
@@ -1198,12 +1224,132 @@ kbd {
 
 .explorer-filterbar {
   display: grid;
-  grid-template-columns: minmax(14rem, 1.2fr) minmax(12rem, 1fr) auto minmax(11rem, 0.7fr);
+  grid-template-columns: minmax(14rem, 1fr) auto minmax(11rem, 0.55fr);
   gap: 0.4rem;
   align-items: center;
   border-bottom: 1px solid var(--line);
   padding: 0.35rem 0.45rem;
   background: #f6f9fc;
+}
+
+.library-search-view {
+  min-height: 0;
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  overflow: hidden;
+}
+
+.library-searchbar {
+  display: grid;
+  grid-template-columns: minmax(16rem, 1fr) auto auto;
+  gap: 0.5rem;
+  align-items: end;
+  border-bottom: 1px solid var(--line);
+  padding: 0.55rem;
+  background: #fbfdff;
+}
+
+.library-query-field {
+  display: grid;
+  gap: 0.25rem;
+  color: #334155;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.segmented-control {
+  display: inline-grid;
+  grid-template-columns: 1fr 1fr;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  background: #ffffff;
+}
+
+.segmented-control button {
+  min-height: 2rem;
+  border: 0;
+  border-radius: 0;
+  padding: 0.35rem 0.55rem;
+  color: #334155;
+  background: transparent;
+}
+
+.segmented-control button.active,
+.segmented-control button:hover:not(:disabled) {
+  color: #1d4ed8;
+  background: var(--blue-soft);
+}
+
+.library-tag-panel {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.45rem 0.55rem;
+  background: var(--panel-muted);
+}
+
+.library-result-summary {
+  display: flex;
+  gap: 0.55rem;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding: 0.38rem 0.55rem;
+  color: #475569;
+  font-size: 0.76rem;
+}
+
+.library-result-list {
+  min-height: 0;
+  display: grid;
+  align-content: start;
+  overflow: auto;
+}
+
+.library-result-row {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.8fr) 4rem minmax(12rem, 1.2fr);
+  gap: 0.65rem;
+  align-items: center;
+  min-height: 3.4rem;
+  border: 0;
+  border-bottom: 1px solid #edf1f6;
+  border-radius: 0;
+  padding: 0.45rem 0.6rem;
+  color: var(--ink);
+  background: #ffffff;
+  text-align: left;
+}
+
+.library-result-row:hover:not(:disabled),
+.library-result-row.selected-file-row {
+  background: #eef6ff;
+}
+
+.library-result-row strong,
+.library-result-row small,
+.library-hit-text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.library-result-row small,
+.library-hit-text {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.library-hit-score {
+  justify-self: end;
+  border-radius: 999px;
+  padding: 0.12rem 0.4rem;
+  color: #1d4ed8;
+  background: #eff6ff;
+  font-size: 0.72rem;
+  font-weight: 700;
 }
 
 .filesystem-query {

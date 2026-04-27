@@ -1,13 +1,66 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, TypeAlias
+from typing import Any, Literal, NotRequired, TypeAlias, TypedDict
 
 from pydantic import BaseModel, Field
 
-StructuredPayload: TypeAlias = dict[str, Any] | list[Any] | None
+StructuredObject: TypeAlias = dict[str, object]
+StructuredPayload: TypeAlias = StructuredObject | list[object] | None
 OpenAIAttributeValue: TypeAlias = str | float | bool
 OpenAIAttributes: TypeAlias = dict[str, OpenAIAttributeValue]
+
+
+class SourceMetadata(TypedDict, total=False):
+    description: str
+    summary: str
+    suggested_tags: list[str]
+    authors: list[str]
+    published_at: str
+    doi: str
+    arxiv_id: str
+    normalized_url: str | None
+    fetched_url: str
+    content_hash: str
+    fetched_at: str
+
+
+class ResearchProvenance(SourceMetadata, total=False):
+    seed_type: str
+    topic: str
+    filename: str
+    media_type: str
+    url: str
+    candidate_id: str
+    http_status: int
+    content_type: str
+    content_text: str
+    parent_candidate_id: str
+    parent_candidate_url: str
+    parent_source_file_id: str
+    target_folder_id: str
+    discovery_depth: int
+
+
+class OpenAIUsageDetails(TypedDict, total=False):
+    cached_tokens: int
+    reasoning_tokens: int
+
+
+class OpenAIUsagePayload(TypedDict, total=False):
+    requests: int
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    input_tokens_details: OpenAIUsageDetails
+    output_tokens_details: OpenAIUsageDetails
+
+
+class TaskPayload(TypedDict, total=False):
+    stage: str
+    source_id: str
+    tag_ids: list[str]
+    user_guidance: NotRequired[str | None]
 
 SourceKind: TypeAlias = Literal["pdf", "text", "conversation", "image", "audio", "video", "other"]
 SourceStatus: TypeAlias = Literal["processing", "ready", "failed"]

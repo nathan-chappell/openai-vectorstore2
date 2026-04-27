@@ -153,7 +153,9 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".filesystem-layout")).not.toHaveClass(/has-preview/);
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.locator("openai-chatkit")).toBeVisible();
-  await expect(page.getByPlaceholder("Find by name, path, tag, or indexed text")).toBeVisible();
+  await expect(page.getByPlaceholder("Find in this folder")).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Library" })).toBeVisible();
   await expect(page.getByText("0 indexed files selected")).toBeVisible();
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "New Folder" })).toBeEnabled();
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Up" })).toHaveCount(0);
@@ -175,6 +177,124 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   }
 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
+});
+
+test("explorer local search and library semantic append use separate views", async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== "chromium-desktop", "Dense search view coverage is desktop-focused.");
+
+  const rootEntry = filesystemEntry({ id: "root", kind: "folder", name: "Files", path: "/" });
+  const alphaEntry = filesystemEntry({
+    id: "entry-alpha",
+    kind: "file",
+    name: "alpha-notes.txt",
+    path: "/alpha-notes.txt",
+    parent_id: rootEntry.id,
+    source_id: "source-alpha",
+    source_kind: "text",
+    media_type: "text/plain",
+    status: "ready",
+    summary: "Notes about retrieval quality.",
+    tags: [{ id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 }],
+  });
+  const bravoEntry = filesystemEntry({
+    id: "entry-bravo",
+    kind: "file",
+    name: "bravo-plan.txt",
+    path: "/bravo-plan.txt",
+    parent_id: rootEntry.id,
+    source_id: "source-bravo",
+    source_kind: "text",
+    media_type: "text/plain",
+    status: "ready",
+    summary: "Roadmap for evals.",
+  });
+  const alphaSource = sourceSummary({
+    id: "source-alpha",
+    filesystem_entry_id: "entry-alpha",
+    virtual_name: "alpha-notes.txt",
+    virtual_path: "/alpha-notes.txt",
+    display_title: "Alpha Notes",
+    original_filename: "alpha-notes.txt",
+    summary: "Notes about retrieval quality.",
+    tags: [{ id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 }],
+  });
+  const bravoSource = sourceSummary({
+    id: "source-bravo",
+    filesystem_entry_id: "entry-bravo",
+    virtual_name: "bravo-plan.txt",
+    virtual_path: "/bravo-plan.txt",
+    display_title: "Bravo Plan",
+    original_filename: "bravo-plan.txt",
+    summary: "Roadmap for evals.",
+  });
+  const searchQueries: string[] = [];
+
+  await page.route("**/api/tags", async (route) => {
+    await route.fulfill({
+      json: [{ id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 }],
+    });
+  });
+  await page.route("**/api/filesystem**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/filesystem/search")) {
+      await route.fulfill({ json: { query: url.searchParams.get("query"), entries: [alphaEntry], total_count: 1, page: 1, page_size: 1, has_more: false } });
+      return;
+    }
+    await route.fulfill({
+      json: {
+        current: rootEntry,
+        breadcrumbs: [{ id: rootEntry.id, name: "Files", path: "/" }],
+        entries: [alphaEntry, bravoEntry],
+      },
+    });
+  });
+  await page.route("**/api/sources/source-alpha", async (route) => {
+    await route.fulfill({ json: { ...alphaSource, storage_provider: "local", storage_key: "alpha", ingest_strategy: "source", metadata: {}, chunks: [] } });
+  });
+  await page.route("**/api/search", async (route) => {
+    const payload = route.request().postDataJSON() as { query: string; tag_ids: string[] };
+    searchQueries.push(payload.query);
+    await route.fulfill({
+      json: {
+        query: payload.query,
+        hits: [
+          {
+            chunk_id: `source:${payload.query.includes("bravo") ? "source-bravo" : "source-alpha"}`,
+            source_file_id: payload.query.includes("bravo") ? "source-bravo" : "source-alpha",
+            source_title: payload.query.includes("bravo") ? "Bravo Plan" : "Alpha Notes",
+            original_filename: payload.query.includes("bravo") ? "bravo-plan.txt" : "alpha-notes.txt",
+            score: 0.91,
+            title: "Match",
+            summary: "Matched semantic text.",
+            text: "Matched semantic text.",
+            tags: payload.tag_ids,
+            locator: { type: "generated", start_page: null, end_page: null, start_line: null, end_line: null, start_seconds: null, end_seconds: null },
+            openai_file_id: null,
+            attributes: null,
+          },
+        ],
+      },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByPlaceholder("Find in this folder").fill("retrieval");
+  await expect(page.locator(".file-rows")).toContainText("alpha-notes.txt");
+  await expect(page.locator(".file-rows")).not.toContainText("bravo-plan.txt");
+
+  await page.getByRole("tab", { name: "Library" }).click();
+  await page.getByRole("button", { name: "RAG" }).click();
+  await page.getByPlaceholder("indexed files").fill("");
+  await page.keyboard.press("Enter");
+  await expect.poll(() => searchQueries).toEqual(["indexed files"]);
+  await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
+
+  await page.getByPlaceholder("indexed files").fill("bravo");
+  await page.keyboard.press("Control+Enter");
+  await expect.poll(() => searchQueries).toEqual(["indexed files", "bravo"]);
+  await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
+  await expect(page.locator(".library-result-list")).toContainText("bravo-plan.txt");
+  await page.screenshot({ path: testInfo.outputPath("workspace-library-search.png"), fullPage: true });
 });
 
 test("file explorer shortcuts rename, navigate up, and delete", async ({ page }, testInfo) => {

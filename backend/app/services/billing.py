@@ -10,7 +10,7 @@ from sqlalchemy import select
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
 from backend.app.models import CostEvent, CreditGrant, UserCreditBalance
-from backend.app.schemas import CostEventSummary, CreditBalanceSummary, CreditGrantSummary
+from backend.app.schemas import CostEventSummary, CreditBalanceSummary, CreditGrantSummary, OpenAIUsagePayload
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ class UsageCost:
     input_tokens: int
     cached_input_tokens: int
     output_tokens: int
-    raw_usage: dict[str, object]
+    raw_usage: OpenAIUsagePayload
     openai_cost_usd: float
     platform_multiplier: float
     platform_cost_usd: float
@@ -275,7 +275,7 @@ class BillingService:
         input_tokens: int,
         cached_input_tokens: int,
         output_tokens: int,
-        raw_usage: dict[str, object],
+        raw_usage: OpenAIUsagePayload,
         openai_cost_usd: float,
         platform_multiplier: float,
         platform_cost_usd: float,
@@ -312,13 +312,14 @@ class BillingService:
                 input_tokens=max(0, int(input_tokens)),
                 cached_input_tokens=max(0, int(cached_input_tokens)),
                 output_tokens=max(0, int(output_tokens)),
-                raw_usage_json=raw_usage,
+                raw_usage_json={},
                 openai_cost_usd=round(float(openai_cost_usd), 8),
                 platform_multiplier=round(float(platform_multiplier), 8),
                 platform_cost_usd=round(float(platform_cost_usd), 8),
                 note=_normalized_note(note),
                 created_at=_utcnow(),
             )
+            event.raw_usage = raw_usage
             session.add(event)
             if event.platform_cost_usd > 0:
                 balance.current_credit_usd = round(float(balance.current_credit_usd) - event.platform_cost_usd, 8)
@@ -370,10 +371,27 @@ class BillingService:
         )
 
 
-def usage_to_mapping(usage: object) -> dict[str, object]:
+def usage_to_mapping(usage: object) -> OpenAIUsagePayload:
     if isinstance(usage, Mapping):
-        return dict(usage)
-    output: dict[str, object] = {}
+        output: OpenAIUsagePayload = {}
+        for key in ("requests", "input_tokens", "output_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                output[key] = int(value)
+        input_details = usage.get("input_tokens_details")
+        if isinstance(input_details, Mapping):
+            cached_tokens = input_details.get("cached_tokens")
+            if isinstance(cached_tokens, (int, float)) and not isinstance(cached_tokens, bool):
+                output["input_tokens_details"] = {"cached_tokens": int(cached_tokens)}
+        output_details = usage.get("output_tokens_details")
+        if isinstance(output_details, Mapping):
+            reasoning_tokens = output_details.get("reasoning_tokens")
+            if isinstance(reasoning_tokens, (int, float)) and not isinstance(reasoning_tokens, bool):
+                output["output_tokens_details"] = {"reasoning_tokens": int(reasoning_tokens)}
+        return output
+    output: OpenAIUsagePayload = {}
     for key in ("requests", "input_tokens", "output_tokens", "total_tokens"):
         value = getattr(usage, key, None)
         if isinstance(value, (int, float)) and not isinstance(value, bool):

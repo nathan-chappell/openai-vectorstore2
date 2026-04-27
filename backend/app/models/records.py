@@ -1,14 +1,31 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import cast
 from uuid import uuid4
 
 from sqlalchemy import DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+from backend.app.schemas import OpenAIAttributes, OpenAIUsagePayload, ResearchProvenance, SourceMetadata, StructuredObject
+
 
 def new_id() -> str:
     return uuid4().hex
+
+
+def _object_payload(value: dict[str, object] | None) -> StructuredObject:
+    return dict(value or {})
+
+
+def _openai_attributes_payload(value: dict[str, object] | None) -> OpenAIAttributes:
+    attributes: OpenAIAttributes = {}
+    for key, item in (value or {}).items():
+        if isinstance(item, bool | str):
+            attributes[key] = item
+        elif isinstance(item, int | float):
+            attributes[key] = float(item)
+    return attributes
 
 
 class Base(DeclarativeBase):
@@ -89,6 +106,14 @@ class CostEvent(Base):
     platform_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
     note: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+
+    @property
+    def raw_usage(self) -> OpenAIUsagePayload:
+        return cast(OpenAIUsagePayload, _object_payload(self.raw_usage_json))
+
+    @raw_usage.setter
+    def raw_usage(self, value: OpenAIUsagePayload) -> None:
+        self.raw_usage_json = dict(value)
 
 
 class UserLibrary(Base):
@@ -179,6 +204,22 @@ class SourceFile(Base):
         foreign_keys=lambda: ResearchImportCandidate.linked_source_file_id,
     )
 
+    @property
+    def source_metadata(self) -> SourceMetadata:
+        return cast(SourceMetadata, _object_payload(self.metadata_json))
+
+    @source_metadata.setter
+    def source_metadata(self, value: SourceMetadata) -> None:
+        self.metadata_json = dict(value)
+
+    @property
+    def vector_attributes(self) -> OpenAIAttributes:
+        return _openai_attributes_payload(self.vector_attributes_json)
+
+    @vector_attributes.setter
+    def vector_attributes(self, value: OpenAIAttributes) -> None:
+        self.vector_attributes_json = dict(value)
+
 
 class FilesystemEntry(Base):
     __tablename__ = "filesystem_entry"
@@ -255,6 +296,14 @@ class SemanticChunk(Base):
 
     source_file: Mapped[SourceFile] = relationship(back_populates="chunks")
 
+    @property
+    def vector_attributes(self) -> OpenAIAttributes:
+        return _openai_attributes_payload(self.vector_attributes_json)
+
+    @vector_attributes.setter
+    def vector_attributes(self, value: OpenAIAttributes) -> None:
+        self.vector_attributes_json = dict(value)
+
 
 class StoredAsset(Base):
     __tablename__ = "stored_asset"
@@ -274,6 +323,14 @@ class StoredAsset(Base):
 
     library: Mapped[UserLibrary] = relationship(back_populates="assets")
     task: Mapped["AppTask | None"] = relationship(back_populates="assets")
+
+    @property
+    def asset_metadata(self) -> StructuredObject:
+        return _object_payload(self.metadata_json)
+
+    @asset_metadata.setter
+    def asset_metadata(self, value: StructuredObject) -> None:
+        self.metadata_json = dict(value)
 
 
 class AppTask(Base):
@@ -307,6 +364,18 @@ class AppTask(Base):
     source_file: Mapped[SourceFile | None] = relationship(back_populates="tasks")
     assets: Mapped[list[StoredAsset]] = relationship(back_populates="task")
     research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(back_populates="task")
+
+    @property
+    def input_object(self) -> StructuredObject:
+        return self.input_json if isinstance(self.input_json, dict) else {}
+
+    @property
+    def state_object(self) -> StructuredObject:
+        return self.state_json if isinstance(self.state_json, dict) else {}
+
+    @property
+    def result_object(self) -> StructuredObject:
+        return self.result_json if isinstance(self.result_json, dict) else {}
 
 
 class ResearchImportCandidate(Base):
@@ -358,6 +427,14 @@ class ResearchImportCandidate(Base):
         foreign_keys=[linked_source_file_id],
     )
 
+    @property
+    def provenance(self) -> ResearchProvenance:
+        return cast(ResearchProvenance, _object_payload(self.provenance_json))
+
+    @provenance.setter
+    def provenance(self, value: ResearchProvenance) -> None:
+        self.provenance_json = dict(value)
+
 
 class AppChatThread(Base):
     __tablename__ = "app_chat_thread"
@@ -375,6 +452,22 @@ class AppChatThread(Base):
 
     user: Mapped[AppUser] = relationship(back_populates="chat_threads")
     entries: Mapped[list["AppChatEntry"]] = relationship(back_populates="thread", cascade="all, delete-orphan")
+
+    @property
+    def thread_metadata(self) -> StructuredObject:
+        return _object_payload(self.metadata_json)
+
+    @thread_metadata.setter
+    def thread_metadata(self, value: StructuredObject) -> None:
+        self.metadata_json = dict(value)
+
+    @property
+    def status_payload(self) -> StructuredObject:
+        return _object_payload(self.status_json)
+
+    @status_payload.setter
+    def status_payload(self, value: StructuredObject) -> None:
+        self.status_json = dict(value)
 
 
 class AppChatEntry(Base):

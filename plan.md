@@ -14,9 +14,37 @@ The product is file-library first. Ingestion stores the original source file, pu
 
 ## Current Priorities
 
+### 0. Typed Payload And Legacy Compression Refactor
+
+Status: in progress.
+
+Goal:
+
+- Reduce code duplication, type drift, and bare-dict handling across app-core services.
+- Prefer `TypedDict` for compatibility payloads, Pydantic for validated API contracts, dataclasses for arbitrary runtime structures, and normal classes only where behavior is significant.
+- Keep SQLAlchemy JSON columns as database-native dictionaries, but access common shapes through typed properties so service code does not repeatedly cast or manually normalize the same payloads.
+- Remove compatibility, legacy, and migration-only code paths that are not needed before a production instance exists.
+
+Implementation plan:
+
+- Inventory JSON payload shapes used across `SourceFile`, `StoredAsset`, `ResearchImportCandidate`, `CostEvent`, `AppTask`, and ChatKit records.
+- Add shared typed-dict aliases for JSON scalar/object/list payloads and narrow domain shapes such as source metadata, research provenance, OpenAI usage, and vector attributes.
+- Add SQLAlchemy model accessors for common JSON columns, including `SourceFile.source_metadata`, `SourceFile.vector_attributes`, `ResearchImportCandidate.provenance`, `StoredAsset.asset_metadata`, `CostEvent.raw_usage`, and ChatKit metadata/status payloads.
+- Refactor service hotspots to use typed accessors instead of direct `*_json` reads/writes, with casts only at the boundary where SQLAlchemy/JSON loses shape.
+- Be careful with method covariance and invariant containers: build with narrow local types, then assign or cast at the final wider return/override boundary when required.
+- Remove helpers/normalizers made redundant by stronger typed boundaries, and drop legacy chunk/vector compatibility code where tests show the current source-level indexing flow no longer depends on it.
+- Keep edits incremental with integration-level coverage; add unit tests only for tricky parsing or normalization logic that remains.
+
+Acceptance criteria:
+
+- Pyright stays clean without `type: ignore`.
+- Common JSON shapes are named and reused instead of re-declared as `dict[str, object]` throughout services.
+- SQLAlchemy JSON payloads are read/written through typed properties where practical.
+- Removed legacy code has either no remaining call sites or a current test that proves the replacement path.
+
 ### 1. Split Explorer And Library Views
 
-Status: planned next browser cleanup.
+Status: in progress.
 
 Decision:
 
@@ -29,15 +57,24 @@ Implementation notes:
 
 - Add a clear view switcher or tabs for Explorer and Library.
 - Keep the existing virtual filesystem as the source of truth for folders and paths.
-- Reuse the same source/search APIs; change the browser layout and interaction model first.
+- Explorer search is local to the current folder and should be simple/fuzzy over entry name, path, description, summary, suggested tags, and source metadata that is already present in the folder listing. It must not call OpenAI vector search.
+- Reuse the same fuzzy matching behavior for ChatKit composer entity search so file tags feel consistent with the Explorer.
+- Library view is tag/semantic-search focused: start from a nonblank fallback query when the field is empty, show tags as pill-style multi-select controls, support `all` / `any` tag matching, and run OpenAI-backed source search from the query bar.
+- In Library view, `Enter` replaces the current result set and `Ctrl+Enter` appends/dedupes into it.
+- Results from Library view should be selectable as ChatKit file scope and reveal/open the corresponding file in Explorer.
+- ChatKit `set_file_search` should move the user to Library view and apply query/tag filters instead of crowding Explorer.
 - Preserve fast keyboard behavior in Explorer: `F2` rename, `Backspace` or `Alt+Left` go up, `Delete` delete, and Shift+arrow range selection.
 - Keep preview closable and resizable so file details stay readable.
 
 Acceptance criteria:
 
 - Explorer no longer needs prominent tag chips or dense search controls to feel complete.
+- Explorer search filters only the current folder and remains responsive without billing or OpenAI calls.
 - Library filtering has enough space to show tags, query, result status, and source metadata clearly.
+- Empty Library query submissions use a deliberate fallback query rather than sending a blank API request.
+- `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not lose existing selected chat scope.
 - Selecting or revealing a file from Library opens the correct file in Explorer.
+- Explorer hotkeys work when focus is inside the file list rows, including after mouse selection.
 - Playwright covers switching views, tag filtering, file reveal, selection, and preview behavior.
 
 ### 2. Evidence Annotations

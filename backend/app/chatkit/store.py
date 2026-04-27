@@ -76,8 +76,8 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
                 )
             else:
                 record.title = thread.title
-                record.metadata_json = metadata_json
-                record.status_json = thread.status.model_dump(mode="json")
+                record.thread_metadata = metadata_json
+                record.status_payload = thread.status.model_dump(mode="json")
                 record.allowed_image_domains_json = thread.allowed_image_domains
                 record.updated_sequence = next_sequence
                 record.updated_at = datetime.now(UTC)
@@ -330,8 +330,8 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
         return ThreadMetadata(
             id=record.id,
             title=record.title,
-            metadata=dict(record.metadata_json or {}),
-            status=ActiveStatus.model_validate(record.status_json or {}),
+            metadata=record.thread_metadata,
+            status=ActiveStatus.model_validate(record.status_payload),
             allowed_image_domains=record.allowed_image_domains_json,
             created_at=record.created_at,
         )

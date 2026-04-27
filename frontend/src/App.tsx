@@ -25,6 +25,7 @@ import {
   previewSemanticSplit,
   readSourceContentBlob,
   resplitSource,
+  searchChunks,
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
@@ -33,6 +34,7 @@ import {
 } from "./lib/api";
 import type {
   AuthUser,
+  ChunkHit,
   ChunkSummary,
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
@@ -84,6 +86,12 @@ type RevealTarget = {
   sourceId?: string | null;
   entryId?: string | null;
 };
+type WorkspaceFileView = "explorer" | "library";
+type LibrarySearchResult = {
+  hit: ChunkHit;
+  entry: FilesystemEntrySummary | null;
+};
+const DEFAULT_LIBRARY_QUERY = "indexed files";
 const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
   { id: "topic", label: "Topic" },
   { id: "paper", label: "Paper" },
@@ -191,13 +199,18 @@ function asResearchIngested(value: unknown): ResearchLibraryBuildResponse["inges
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
-  const [searchEntries, setSearchEntries] = useState<FilesystemEntrySummary[]>([]);
   const [knownEntries, setKnownEntries] = useState<Record<string, FilesystemEntrySummary>>({});
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [activeFileView, setActiveFileView] = useState<WorkspaceFileView>("explorer");
   const [sourceQuery, setSourceQuery] = useState("");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
+  const [libraryQuery, setLibraryQuery] = useState("");
+  const [libraryTagMatchMode, setLibraryTagMatchMode] = useState<"all" | "any">("all");
+  const [libraryResults, setLibraryResults] = useState<LibrarySearchResult[]>([]);
+  const [libraryResultCount, setLibraryResultCount] = useState(0);
+  const [librarySearching, setLibrarySearching] = useState(false);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
@@ -230,8 +243,12 @@ export function App({ authMode }: AppProps) {
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
   const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
   const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
-  const searching = Boolean(sourceQuery.trim() || selectedExplorerTagIds.length);
-  const visibleEntries = searching ? searchEntries : (filesystem?.entries ?? []);
+  const searching = Boolean(sourceQuery.trim());
+  const folderEntries = filesystem?.entries ?? [];
+  const visibleEntries = useMemo(
+    () => filterFilesystemEntries(folderEntries, sourceQuery),
+    [folderEntries, sourceQuery],
+  );
   const selectedFileEntries = useMemo(
     () =>
       selectedSourceIds.flatMap((sourceId) => {
@@ -305,28 +322,15 @@ export function App({ authMode }: AppProps) {
       setFilesystem(response);
       setCurrentFolderId(response.current.parent_id === null ? null : response.current.id);
       cacheEntries([response.current, ...response.entries]);
-      setSearchEntries([]);
       return response;
     },
     [cacheEntries],
   );
 
   const refreshExplorer = useCallback(async (): Promise<void> => {
-    if (sourceQuery.trim() || selectedExplorerTagIds.length) {
-      const response = await searchFilesystem({
-        query: sourceQuery,
-        tagIds: selectedExplorerTagIds,
-        tagMatchMode: "all",
-        pageSize: 100,
-      });
-      setSearchEntries(response.entries);
-      cacheEntries(response.entries);
-      setStatus(`Found ${response.total_count} matching entr${response.total_count === 1 ? "y" : "ies"}.`);
-      return;
-    }
     const response = await loadFolder(currentFolderId);
     setStatus(`${response.current.path} has ${response.entries.length} entr${response.entries.length === 1 ? "y" : "ies"}.`);
-  }, [cacheEntries, currentFolderId, loadFolder, selectedExplorerTagIds, sourceQuery]);
+  }, [currentFolderId, loadFolder]);
 
   const refreshAll = useCallback(async (): Promise<void> => {
     setBusy(true);
@@ -492,7 +496,6 @@ export function App({ authMode }: AppProps) {
     (entry: FilesystemEntrySummary): void => {
       if (entry.kind === "folder") {
         setSourceQuery("");
-        setSelectedExplorerTagIds([]);
         setSelectedEntryIds([]);
         setSelectedSourceIds([]);
         setFocusedEntryId(null);
@@ -511,7 +514,6 @@ export function App({ authMode }: AppProps) {
   const goToFolder = useCallback(
     (folderId: string | null): void => {
       setSourceQuery("");
-      setSelectedExplorerTagIds([]);
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
@@ -702,7 +704,6 @@ export function App({ authMode }: AppProps) {
       setResearchResult(response);
       setTasks((await listTasks()).tasks);
       setSourceQuery("");
-      setSelectedExplorerTagIds([]);
       setSelectedEntryIds([]);
       setSelectedSourceIds([]);
       setFocusedEntryId(null);
@@ -739,7 +740,6 @@ export function App({ authMode }: AppProps) {
 
   const clearExplorerFilters = useCallback((): void => {
     setSourceQuery("");
-    setSelectedExplorerTagIds([]);
   }, []);
 
   const createExplorerTag = useCallback(async (): Promise<void> => {
@@ -759,6 +759,55 @@ export function App({ authMode }: AppProps) {
       setBusy(false);
     }
   }, [newTagName]);
+
+  const runLibrarySearch = useCallback(
+    async (mode: "replace" | "append"): Promise<void> => {
+      const query = libraryQuery.trim() || DEFAULT_LIBRARY_QUERY;
+      setLibrarySearching(true);
+      setStatus(`${mode === "append" ? "Appending" : "Searching"} semantic results for "${query}".`);
+      try {
+        const response = await searchChunks({
+          query,
+          tagIds: selectedExplorerTagIds,
+          tagMatchMode: libraryTagMatchMode,
+          maxResults: 24,
+        });
+        const nextResults: LibrarySearchResult[] = [];
+        const seenSourceIds = new Set<string>();
+        for (const hit of response.hits) {
+          if (seenSourceIds.has(hit.source_file_id)) {
+            continue;
+          }
+          seenSourceIds.add(hit.source_file_id);
+          const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === hit.source_file_id) ?? null;
+          nextResults.push({ hit, entry });
+        }
+        setLibraryQuery(query);
+        setLibraryResultCount(response.hits.length);
+        setLibraryResults((current) => {
+          if (mode === "replace") {
+            return nextResults;
+          }
+          const bySourceId = new Map(current.map((result) => [result.hit.source_file_id, result]));
+          for (const result of nextResults) {
+            bySourceId.set(result.hit.source_file_id, result);
+          }
+          return Array.from(bySourceId.values());
+        });
+        setActiveFileView("library");
+        setStatus(
+          `${mode === "append" ? "Added" : "Found"} ${nextResults.length} semantic source${
+            nextResults.length === 1 ? "" : "s"
+          } from ${response.hits.length} hit${response.hits.length === 1 ? "" : "s"}.`,
+        );
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Semantic search failed.");
+      } finally {
+        setLibrarySearching(false);
+      }
+    },
+    [libraryQuery, libraryTagMatchMode, selectedExplorerTagIds],
+  );
 
   const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
@@ -827,6 +876,8 @@ export function App({ authMode }: AppProps) {
         if (searchedEntries.length) {
           cacheEntries(searchedEntries);
         }
+        setActiveFileView("explorer");
+        setSourceQuery("");
         await loadFolder(revealedEntry.parent_id);
         setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
         setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
@@ -849,9 +900,8 @@ export function App({ authMode }: AppProps) {
 
   const searchChatEntities = useCallback(
     async (query: string): Promise<Entity[]> => {
-      const response = await searchFilesystem({ query, pageSize: 12 });
-      cacheEntries(response.entries);
-      return response.entries.map((entry) => {
+      const entries = fuzzyRankFilesystemEntries(Object.values(knownEntriesRef.current), query).slice(0, 12);
+      return entries.map((entry) => {
         const data: Record<string, string> = {
           entry_id: entry.id,
           kind: entry.kind,
@@ -870,7 +920,7 @@ export function App({ authMode }: AppProps) {
         };
       });
     },
-    [cacheEntries],
+    [],
   );
 
   const revealChatEntity = useCallback(
@@ -920,7 +970,8 @@ export function App({ authMode }: AppProps) {
           return tag?.id ?? tagId;
         });
         scheduleClientToolUiUpdate(() => {
-          setSourceQuery((current) => current === query ? current : query);
+          setActiveFileView("library");
+          setLibraryQuery((current) => current === query ? current : query);
           setSelectedExplorerTagIds((current) => (sameStringArray(current, tagIds) ? current : tagIds));
         });
         return { ok: true, query, tag_ids: tagIds, requested_tags: rawTagIds };
@@ -1070,11 +1121,17 @@ export function App({ authMode }: AppProps) {
 
       <section ref={workspaceGridRef} className="workspace-grid" style={workspaceStyle} aria-label="Indexed file workspace">
         <FileExplorer
+          activeFileView={activeFileView}
           breadcrumbs={filesystem?.breadcrumbs ?? []}
           busy={busy}
           currentFolder={filesystem?.current ?? null}
           entries={visibleEntries}
           focusedEntryId={focusedEntryId}
+          libraryQuery={libraryQuery}
+          libraryResultCount={libraryResultCount}
+          libraryResults={libraryResults}
+          librarySearching={librarySearching}
+          libraryTagMatchMode={libraryTagMatchMode}
           newTagName={newTagName}
           pendingFiles={pendingFiles}
           previewGridRef={previewGridRef}
@@ -1100,6 +1157,7 @@ export function App({ authMode }: AppProps) {
           splitPreview={splitPreview}
           tags={tags}
           uploadGuidance={uploadGuidance}
+          onActiveFileViewChange={setActiveFileView}
           onChooseEntries={chooseEntries}
           onChooseFiles={chooseFiles}
           onClearFilters={clearExplorerFilters}
@@ -1111,6 +1169,7 @@ export function App({ authMode }: AppProps) {
           onNewTagNameChange={setNewTagName}
           onClosePreview={() => setSelectedSource(null)}
           onOpenEntry={openEntry}
+          onOpenSource={(sourceId) => void revealFileInExplorer({ sourceId })}
           onPreviewSplit={() => void previewPendingSplit()}
           onPreviewResize={beginPreviewResize}
           onResearchBuild={() => void buildResearchLibraryFromPanel()}
@@ -1120,11 +1179,14 @@ export function App({ authMode }: AppProps) {
           onResearchSeedTypeChange={setResearchSeedType}
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
+          onRunLibrarySearch={(mode) => void runLibrarySearch(mode)}
           onSaveTags={() => void saveSelectedSourceTags()}
           onSelectEntries={applyExplorerSelection}
           onShowShortcuts={() => setShortcutDialogOpen(true)}
           onSourceQueryChange={setSourceQuery}
           onTagToggle={toggleSelectedSourceTagDraft}
+          onLibraryQueryChange={setLibraryQuery}
+          onLibraryTagMatchModeChange={setLibraryTagMatchMode}
           onToggleExplorerTag={toggleExplorerTag}
           onUpload={() => void handleUpload()}
           onUploadGuidanceChange={setUploadGuidance}
@@ -1580,11 +1642,17 @@ function LegacyApp({ authMode }: AppProps) {
 }
 
 const FileExplorer = memo(function FileExplorer({
+  activeFileView,
   breadcrumbs,
   busy,
   currentFolder,
   entries,
   focusedEntryId,
+  libraryQuery,
+  libraryResultCount,
+  libraryResults,
+  librarySearching,
+  libraryTagMatchMode,
   newTagName,
   pendingFiles,
   previewGridRef,
@@ -1610,6 +1678,7 @@ const FileExplorer = memo(function FileExplorer({
   splitPreview,
   tags,
   uploadGuidance,
+  onActiveFileViewChange,
   onChooseEntries,
   onChooseFiles,
   onClearFilters,
@@ -1621,6 +1690,7 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange,
   onClosePreview,
   onOpenEntry,
+  onOpenSource,
   onPreviewSplit,
   onPreviewResize,
   onResearchBuild,
@@ -1630,20 +1700,29 @@ const FileExplorer = memo(function FileExplorer({
   onResearchSeedTypeChange,
   onRenameSelected,
   onResplit,
+  onRunLibrarySearch,
   onSaveTags,
   onSelectEntries,
   onShowShortcuts,
   onSourceQueryChange,
   onTagToggle,
+  onLibraryQueryChange,
+  onLibraryTagMatchModeChange,
   onToggleExplorerTag,
   onUpload,
   onUploadGuidanceChange,
 }: {
+  activeFileView: WorkspaceFileView;
   breadcrumbs: FilesystemBreadcrumb[];
   busy: boolean;
   currentFolder: FilesystemEntrySummary | null;
   entries: FilesystemEntrySummary[];
   focusedEntryId: string | null;
+  libraryQuery: string;
+  libraryResultCount: number;
+  libraryResults: LibrarySearchResult[];
+  librarySearching: boolean;
+  libraryTagMatchMode: "all" | "any";
   newTagName: string;
   pendingFiles: File[];
   previewGridRef: RefObject<HTMLDivElement | null>;
@@ -1669,6 +1748,7 @@ const FileExplorer = memo(function FileExplorer({
   splitPreview: SplitPreviewResponse | null;
   tags: TagSummary[];
   uploadGuidance: string;
+  onActiveFileViewChange: (view: WorkspaceFileView) => void;
   onChooseEntries: (entry: FilesystemEntrySummary, event: ReactMouseEvent) => void;
   onChooseFiles: (files: FileList | null) => void;
   onClearFilters: () => void;
@@ -1680,6 +1760,7 @@ const FileExplorer = memo(function FileExplorer({
   onNewTagNameChange: (value: string) => void;
   onClosePreview: () => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
+  onOpenSource: (sourceId: string) => void;
   onPreviewSplit: () => void;
   onPreviewResize: (event: ReactPointerEvent<HTMLButtonElement>) => void;
   onResearchBuild: () => void;
@@ -1689,11 +1770,14 @@ const FileExplorer = memo(function FileExplorer({
   onResearchSeedTypeChange: (value: ResearchBuilderSeedKind) => void;
   onRenameSelected: () => void;
   onResplit: () => void;
+  onRunLibrarySearch: (mode: "replace" | "append") => void;
   onSaveTags: () => void;
   onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
   onShowShortcuts: () => void;
   onSourceQueryChange: (value: string) => void;
   onTagToggle: (tagId: string) => void;
+  onLibraryQueryChange: (value: string) => void;
+  onLibraryTagMatchModeChange: (value: "all" | "any") => void;
   onToggleExplorerTag: (tagId: string) => void;
   onUpload: () => void;
   onUploadGuidanceChange: (value: string) => void;
@@ -1808,6 +1892,26 @@ const FileExplorer = memo(function FileExplorer({
   );
   return (
     <aside className="explorer-pane filesystem-pane" aria-label="Files" onKeyDown={handleExplorerKeyDown}>
+      <div className="file-view-tabs" role="tablist" aria-label="File views">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeFileView === "explorer"}
+          className={activeFileView === "explorer" ? "view-tab active" : "view-tab"}
+          onClick={() => onActiveFileViewChange("explorer")}
+        >
+          Explorer
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeFileView === "library"}
+          className={activeFileView === "library" ? "view-tab active" : "view-tab"}
+          onClick={() => onActiveFileViewChange("library")}
+        >
+          Library
+        </button>
+      </div>
       <div className="explorer-commandbar">
         <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy || searching}>
           New Folder
@@ -1830,23 +1934,9 @@ const FileExplorer = memo(function FileExplorer({
           <input
             value={sourceQuery}
             onChange={(event) => onSourceQueryChange(event.currentTarget.value)}
-            placeholder="Find by name, path, tag, or indexed text"
+            placeholder="Find in this folder"
           />
         </label>
-        <div className="tag-strip filesystem-tags" aria-label="Tags">
-          {tags.map((tag) => (
-            <button
-              key={tag.id}
-              type="button"
-              aria-pressed={selectedExplorerTagIdSet.has(tag.id)}
-              className={selectedExplorerTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
-              onClick={() => onToggleExplorerTag(tag.id)}
-            >
-              {tag.name}
-            </button>
-          ))}
-          {!tags.length ? <span>No tag filters</span> : null}
-        </div>
         <button type="button" className="secondary-button" onClick={onClearFilters} disabled={!searching}>
           Clear
         </button>
@@ -1868,6 +1958,33 @@ const FileExplorer = memo(function FileExplorer({
           </button>
         </div>
       </div>
+      {activeFileView === "library" ? (
+        <LibrarySearchView
+          busy={busy}
+          libraryQuery={libraryQuery}
+          libraryResultCount={libraryResultCount}
+          libraryResults={libraryResults}
+          librarySearching={librarySearching}
+          libraryTagMatchMode={libraryTagMatchMode}
+          selectedSourceIdSet={selectedSourceIdSet}
+          selectedTagIdSet={selectedExplorerTagIdSet}
+          tags={tags}
+          onOpenSource={(sourceId) => {
+            const entry = Object.values(sourceEntriesById).find((item) => item.source_id === sourceId) ?? null;
+            if (entry) {
+              onSelectEntries([entry.id], entry.id, entry.id);
+            }
+            onActiveFileViewChange("explorer");
+            onSourceQueryChange("");
+            onOpenSource(sourceId);
+          }}
+          onQueryChange={onLibraryQueryChange}
+          onRunSearch={onRunLibrarySearch}
+          onTagMatchModeChange={onLibraryTagMatchModeChange}
+          onToggleTag={onToggleExplorerTag}
+        />
+      ) : (
+        <>
 
       <nav className="breadcrumb-row" aria-label="Folder path">
         {breadcrumbs.map((crumb, index) => {
@@ -2000,9 +2117,131 @@ const FileExplorer = memo(function FileExplorer({
           </>
         ) : null}
       </div>
+        </>
+      )}
     </aside>
   );
 });
+
+function LibrarySearchView({
+  busy,
+  libraryQuery,
+  libraryResultCount,
+  libraryResults,
+  librarySearching,
+  libraryTagMatchMode,
+  selectedSourceIdSet,
+  selectedTagIdSet,
+  tags,
+  onOpenSource,
+  onQueryChange,
+  onRunSearch,
+  onTagMatchModeChange,
+  onToggleTag,
+}: {
+  busy: boolean;
+  libraryQuery: string;
+  libraryResultCount: number;
+  libraryResults: LibrarySearchResult[];
+  librarySearching: boolean;
+  libraryTagMatchMode: "all" | "any";
+  selectedSourceIdSet: Set<string>;
+  selectedTagIdSet: Set<string>;
+  tags: TagSummary[];
+  onOpenSource: (sourceId: string) => void;
+  onQueryChange: (value: string) => void;
+  onRunSearch: (mode: "replace" | "append") => void;
+  onTagMatchModeChange: (value: "all" | "any") => void;
+  onToggleTag: (tagId: string) => void;
+}) {
+  const disabled = busy || librarySearching;
+  return (
+    <section className="library-search-view" aria-label="Tag and semantic search">
+      <div className="library-searchbar">
+        <label className="library-query-field">
+          <span>Semantic query</span>
+          <input
+            value={libraryQuery}
+            onChange={(event) => onQueryChange(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") {
+                return;
+              }
+              event.preventDefault();
+              onRunSearch(event.ctrlKey || event.metaKey ? "append" : "replace");
+            }}
+            placeholder={DEFAULT_LIBRARY_QUERY}
+          />
+        </label>
+        <div className="segmented-control" aria-label="Tag match mode">
+          <button
+            type="button"
+            className={libraryTagMatchMode === "all" ? "active" : undefined}
+            aria-pressed={libraryTagMatchMode === "all"}
+            onClick={() => onTagMatchModeChange("all")}
+          >
+            All
+          </button>
+          <button
+            type="button"
+            className={libraryTagMatchMode === "any" ? "active" : undefined}
+            aria-pressed={libraryTagMatchMode === "any"}
+            onClick={() => onTagMatchModeChange("any")}
+          >
+            Any
+          </button>
+        </div>
+        <div className="button-row">
+          <button type="button" onClick={() => onRunSearch("replace")} disabled={disabled}>
+            Search
+          </button>
+          <button type="button" className="secondary-button" onClick={() => onRunSearch("append")} disabled={disabled}>
+            Append
+          </button>
+        </div>
+      </div>
+
+      <div className="library-tag-panel" aria-label="Tag filters">
+        {tags.map((tag) => (
+          <button
+            key={tag.id}
+            type="button"
+            aria-pressed={selectedTagIdSet.has(tag.id)}
+            className={selectedTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
+            onClick={() => onToggleTag(tag.id)}
+          >
+            {tag.name}
+          </button>
+        ))}
+        {!tags.length ? <span>No tags</span> : null}
+      </div>
+
+      <div className="library-result-summary">
+        <strong>{libraryResults.length} source{libraryResults.length === 1 ? "" : "s"}</strong>
+        <span>{libraryResultCount ? `${libraryResultCount} vector hit${libraryResultCount === 1 ? "" : "s"}` : "Press Enter to search."}</span>
+      </div>
+
+      <div className="library-result-list">
+        {libraryResults.map(({ hit, entry }) => (
+          <button
+            key={hit.source_file_id}
+            type="button"
+            className={selectedSourceIdSet.has(hit.source_file_id) ? "library-result-row selected-file-row" : "library-result-row"}
+            onClick={() => onOpenSource(hit.source_file_id)}
+          >
+            <span>
+              <strong>{entry?.name ?? hit.source_title}</strong>
+              <small>{entry?.path ?? hit.original_filename}</small>
+            </span>
+            <span className="library-hit-score">{Math.round(hit.score * 100)}%</span>
+            <span className="library-hit-text">{hit.text || hit.summary}</span>
+          </button>
+        ))}
+        {!libraryResults.length ? <div className="empty-file-list">No semantic results yet.</div> : null}
+      </div>
+    </section>
+  );
+}
 
 function DeleteEntriesDialog({
   busy,
@@ -3021,6 +3260,69 @@ function safeJsonStringArray(value: string): string[] {
   } catch {
     return [];
   }
+}
+
+function filterFilesystemEntries(entries: FilesystemEntrySummary[], query: string): FilesystemEntrySummary[] {
+  return fuzzyRankFilesystemEntries(entries, query);
+}
+
+function fuzzyRankFilesystemEntries(entries: FilesystemEntrySummary[], query: string): FilesystemEntrySummary[] {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return entries;
+  }
+  return entries
+    .map((entry) => ({ entry, score: fuzzyEntryScore(entry, normalizedQuery) }))
+    .filter((item) => item.score > 0)
+    .sort((left, right) => right.score - left.score || left.entry.name.localeCompare(right.entry.name))
+    .map((item) => item.entry);
+}
+
+function fuzzyEntryScore(entry: FilesystemEntrySummary, normalizedQuery: string): number {
+  const fields = [
+    entry.name,
+    entry.path,
+    entry.description,
+    entry.summary,
+    entry.source_kind,
+    entry.media_type,
+    ...entry.suggested_tags,
+    ...entry.tags.map((tag) => tag.name),
+  ];
+  let bestScore = 0;
+  for (const field of fields) {
+    const candidate = normalizeSearchText(field ?? "");
+    if (!candidate) {
+      continue;
+    }
+    if (candidate === normalizedQuery) {
+      bestScore = Math.max(bestScore, 100);
+    } else if (candidate.startsWith(normalizedQuery)) {
+      bestScore = Math.max(bestScore, 80);
+    } else if (candidate.includes(normalizedQuery)) {
+      bestScore = Math.max(bestScore, 60);
+    } else if (isOrderedSubsequence(normalizedQuery, candidate)) {
+      bestScore = Math.max(bestScore, 30 + Math.min(20, normalizedQuery.length));
+    }
+  }
+  return bestScore;
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+function isOrderedSubsequence(needle: string, haystack: string): boolean {
+  let needleIndex = 0;
+  for (const character of haystack) {
+    if (character === needle[needleIndex]) {
+      needleIndex += 1;
+      if (needleIndex === needle.length) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function sameStringSet(left: string[], right: string[]): boolean {
