@@ -277,7 +277,7 @@ Add Playwright coverage for normal file-library work:
 
 ### 7. On-Prem OSS Model Support
 
-Status: first compatibility foundation implemented; private companion repo initialized as `vendor/openai-vectorstore2-on-prem`.
+Status: first compatibility foundation implemented; private companion repo initialized as `vendor/openai-vectorstore2-on-prem`; first RunPod operator skeleton added and locally smoke-checked.
 
 Goal:
 
@@ -366,17 +366,17 @@ RunPod workflow conventions:
 
 Pod-ready implementation slice:
 
-- [ ] Add the first executable skeleton to `vendor/openai-vectorstore2-on-prem`: `docs/`, `skills/`, `scripts/`, `configs/`, `requirements/`, `artifacts/.gitkeep`, and a README update that names the parent-app boundary and default `/workspace` layout.
-- [ ] Add a stdlib-light RunPod bootstrap script that creates `/workspace/hf-cache`, `/workspace/sglang-storage`, `/workspace/triton-cache`, `/workspace/tmp`, `/workspace/venvs/openai-vectorstore2-on-prem`, `/workspace/datasets`, `/workspace/checkpoints`, `/workspace/adapters`, `/workspace/evals`, `/workspace/exfil`, and `/workspace/logs`, optionally invokes `/start.sh` when present, writes a small initialization manifest, and then stays alive for operator action.
-- [ ] Add RunPod operator docs and env examples covering pod host, SSH port, key path, workspace path, Hugging Face token/cache vars, model ID, optional adapter/checkpoint source paths, dataset source path such as local `./tmp`, SGLang port, and parent app `CHAT_COMPLETIONS_BASE_URL` wiring.
-- [ ] Add the first skill/operator guides for `runpod-connect`, `runpod-inspect`, `dataset-sync`, `sglang-control`, `sft-run`, `eval-run`, and `artifact-exfiltrate`, with transparent SSH/SCP commands, non-mutating health checks by default, and env-var based configuration rather than hidden state.
-- [ ] Add SGLang launch profiles for `openai/gpt-oss-20b`: base-only, base-plus-adapter when supported, conservative A100 smoke settings, and a more aggressive profile gated behind successful smoke runs; include start, stop, restart, tail-log, and health-check commands.
-- [ ] Add dataset sync conventions that upload curated SFT/eval data from local `./tmp` or generated dataset directories into `/workspace/datasets/<version>`, preserve manifests, refuse silent overwrites, and keep held-out subjective eval data separate from train data.
-- [ ] Add weight/artifact sync conventions that prefer RunPod-side base model downloads into `/workspace/hf-cache`, upload only local adapters or checkpoints when available, record `du -sh` sizes, and avoid transferring full base weights unless explicitly requested.
-- [ ] Add an exfiltration command that packages adapters, eval reports, dataset manifests/splits, training args, SGLang launch configs, selected logs, package/version summaries, GPU/hardware summaries, git SHAs, and a reproducibility manifest under `/workspace/exfil` for SCP back to the local machine.
-- [ ] Add a dataset-builder dry-run path that consumes OpenAI artifacts already fetched by `skills/openai-log-debugger`, stored ChatKit thread metadata, or curated fixtures, then writes reviewable candidate/train/eval JSONL plus rejected examples and manifests without requiring a RunPod pod.
-- [ ] Add a first eval harness that can run the 20-example subjective eval against either a base SGLang endpoint or a base-plus-adapter endpoint, save model outputs and critique notes, and keep showcase examples distinct from held-out/generalization examples.
-- [ ] Only after the pod-ready skeleton works locally, run a real RunPod smoke sequence: bootstrap pod, inspect GPU/disk/venv/cache state, launch base SGLang, point the parent app at the OpenAI-compatible endpoint, run one ChatKit compatibility smoke turn, upload a tiny dataset, run a tiny SFT/eval command if feasible, and exfiltrate the resulting manifest/log bundle.
+- [x] Add the first executable skeleton to `vendor/openai-vectorstore2-on-prem`: `docs/`, `skills/`, `scripts/`, `configs/`, `requirements/`, `artifacts/.gitkeep`, and a README update that names the parent-app boundary and default `/workspace` layout.
+- [x] Add a stdlib-light RunPod bootstrap script that creates `/workspace/hf-cache`, `/workspace/sglang-storage`, `/workspace/triton-cache`, `/workspace/tmp`, `/workspace/venvs/openai-vectorstore2-on-prem`, `/workspace/datasets`, `/workspace/checkpoints`, `/workspace/adapters`, `/workspace/evals`, `/workspace/exfil`, and `/workspace/logs`, writes a small initialization manifest, and can stay alive for operator action.
+- [x] Add RunPod operator docs and env examples covering pod host, SSH port, key path, workspace path, Hugging Face token/cache vars, model ID, dataset paths, SGLang port, and the live smoke path for parent app compatibility wiring.
+- [x] Add the first skill/operator guides for `runpod-connect`, `runpod-inspect`, `dataset-sync`, `sglang-control`, `sft-run`, `eval-run`, and `artifact-exfiltrate`, with transparent SSH/SCP commands, non-mutating health checks by default, and env-var based configuration rather than hidden state.
+- [x] Add first-pass SGLang launch profiles for `openai/gpt-oss-20b`: base-only and base-plus-adapter profiles with conservative A100-oriented settings, plus start, stop, restart, status, and tail-log commands. Still add an HTTP health-check subcommand and tune aggressive profiles after a real smoke run.
+- [x] Add first-pass dataset sync conventions that upload/download dataset directories into `/workspace/datasets/<version>`. Still add overwrite guards and explicit train/eval split validation once the dataset builder writes real split manifests.
+- [x] Add first-pass weight/artifact conventions that prefer RunPod-side base model downloads into `/workspace/hf-cache` and keep adapter paths under `/workspace/adapters`. Still add explicit `du -sh` recording and local-adapter upload helpers.
+- [x] Add a first-pass exfiltration command that packages adapters, eval reports, selected logs, manifests, and `/workspace/exfil` for SCP back to the local machine. Still add package/version summaries, GPU/hardware summaries, git SHAs, and a richer reproducibility manifest.
+- [x] Add a dataset-builder dry-run path that inventories likely parent-app OpenAI/ChatKit artifacts and writes a reviewable manifest without requiring a RunPod pod. Still turn this into candidate/train/eval/rejected JSONL generation with redaction and split controls.
+- [x] Add a first eval harness that can run smoke prompts against a base SGLang or adapter endpoint through `/v1/chat/completions`, saving outputs and raw response bodies. Still add the full 20-example subjective eval set with showcase versus held-out labels and critique notes.
+- [ ] Only after the pod-ready skeleton works locally and live RunPod connection values are available, run a real RunPod smoke sequence: bootstrap pod, inspect GPU/disk/venv/cache state, launch base SGLang, point the parent app at the OpenAI-compatible endpoint, run one ChatKit compatibility smoke turn, upload a tiny dataset, run a tiny SFT/eval command if feasible, and exfiltrate the resulting manifest/log bundle.
 
 Acceptance criteria:
 
