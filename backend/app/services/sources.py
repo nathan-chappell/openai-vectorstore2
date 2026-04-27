@@ -100,6 +100,7 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
+AUTO_TAG_LIMIT = 4
 VECTOR_ATTRIBUTES_VERSION = 3
 CHAT_FILE_INPUT_LIMIT = 10
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
@@ -1240,7 +1241,7 @@ class SourceService:
         )
         normalized_split = SemanticSplitResult(
             strategy_label=split_result.strategy_label,
-            tags=_dedupe_text_values(split_result.tags),
+            tags=_dedupe_text_values(split_result.tags, limit=AUTO_TAG_LIMIT),
             chunks=_normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text),
         )
         logger.info(
@@ -2613,7 +2614,7 @@ class SourceService:
 
     async def _ensure_auto_tags(self, session: Any, *, library: UserLibrary, tag_names: list[str]) -> list[Tag]:
         output: list[Tag] = []
-        for raw_name in tag_names[:TAG_SLOT_COUNT]:
+        for raw_name in tag_names[:AUTO_TAG_LIMIT]:
             name = _clean_tag_name(raw_name)
             if not name:
                 continue
@@ -2788,7 +2789,9 @@ class SourceService:
             len(chunks),
         )
         return SemanticSplitResult(
-            strategy_label="pdf_page_batched_semantic", tags=_dedupe_text_values(tags), chunks=chunks
+            strategy_label="pdf_page_batched_semantic",
+            tags=_dedupe_text_values(tags, limit=AUTO_TAG_LIMIT),
+            chunks=chunks,
         )
 
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
@@ -3123,7 +3126,7 @@ def _merge_tags(tags: list[Tag]) -> list[Tag]:
     return output[:TAG_SLOT_COUNT]
 
 
-def _dedupe_text_values(values: Sequence[str]) -> list[str]:
+def _dedupe_text_values(values: Sequence[str], *, limit: int | None = None) -> list[str]:
     output: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -3133,6 +3136,8 @@ def _dedupe_text_values(values: Sequence[str]) -> list[str]:
             continue
         seen.add(key)
         output.append(cleaned)
+        if limit is not None and len(output) >= limit:
+            break
     return output
 
 

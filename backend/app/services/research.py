@@ -53,6 +53,7 @@ WHITESPACE_RE = re.compile(r"[ \t\r\f\v\u00a0]+")
 ARXIV_ID_RE = re.compile(r"(?i)(?:arxiv\.org/(?:abs|pdf)/)?(?P<id>\d{4}\.\d{4,5}(?:v\d+)?)")
 NUMERIC_ARTICLE_ID_RE = re.compile(r"(?i)^\d{4}\.\d{4,5}(?:v\d+)?$")
 TRACKING_QUERY_KEYS = {"fbclid", "gclid", "dclid", "msclkid", "mc_cid", "mc_eid"}
+RESEARCH_SUGGESTED_TAG_LIMIT = 3
 
 
 @dataclass(frozen=True, slots=True)
@@ -1597,7 +1598,7 @@ def _provenance_string_list(provenance: Mapping[str, object], key: str) -> list[
             continue
         seen.add(key_value)
         output.append(cleaned)
-    return output[:8]
+    return output[:RESEARCH_SUGGESTED_TAG_LIMIT]
 
 
 def _seed_suggested_tags(topic: str) -> list[str]:
@@ -1610,6 +1611,6 @@ def _seed_suggested_tags(topic: str) -> list[str]:
             continue
         seen.add(cleaned)
         tags.append(cleaned)
-        if len(tags) >= 4:
+        if len(tags) >= RESEARCH_SUGGESTED_TAG_LIMIT:
             break
     return tags

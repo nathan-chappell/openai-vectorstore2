@@ -201,7 +201,8 @@ class OpenAIGateway:
                             "type": "input_text",
                             "text": (
                                 "Split this source into semantically meaningful retrieval chunks. "
-                                "Prefer complete ideas over fixed token windows. Return concise tags that help filtering. "
+                                "Prefer complete ideas over fixed token windows. Return at most 4 broad, reusable tags that help filtering. "
+                                "Avoid author names, venue names, generic words, and one-off phrases as tags. "
                                 "For PDFs use page ranges when page markers are present; for conversations use time ranges when timestamps exist; "
                                 "otherwise use line ranges. Keep chunk text faithful to the source.\n\n"
                                 f"Source title: {source_title}\n"
@@ -241,7 +242,8 @@ class OpenAIGateway:
                                 "If the seed is a paper title, include the likely primary paper first, then important cited or closely related public references. "
                                 "Return only candidates that are likely to be publicly reachable URLs. "
                                 "Prefer original sources, PDFs, arXiv pages, official docs, and high-signal articles. "
-                                "For each candidate, include a concise description, a useful summary, short suggested tags, authors, publication date, DOI, or arXiv ID when you can infer them from public metadata. "
+                                "For each candidate, include a concise description, a useful summary, 1-3 broad reusable suggested tags, authors, publication date, DOI, or arXiv ID when you can infer them from public metadata. "
+                                "Avoid one-off, author, venue, and generic suggested tags. "
                                 "Do not include login-gated or paywalled pages when a public alternative is available. "
                                 f"Return at most {max_candidates} candidates.\n\nSeed:\n{query}"
                             ),
