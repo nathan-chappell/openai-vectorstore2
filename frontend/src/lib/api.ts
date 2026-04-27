@@ -3,6 +3,11 @@ import type {
 } from "./appTypes";
 import type {
   ActionResponse,
+  AdminGrantCreditRequest,
+  AdminGrantCreditResponse,
+  AdminSetUserActiveRequest,
+  AdminSetUserActiveResponse,
+  AdminUserListResponse,
   AuthUser,
   BranchSearchRequest,
   BranchSearchResponse,
@@ -104,6 +109,34 @@ export async function getAuthenticatedUser(): Promise<AuthUser> {
 
 export async function getPaymentIntegrationStatus(): Promise<PaymentIntegrationResponse> {
   return apiRequest<PaymentIntegrationResponse>("/billing/payment-status");
+}
+
+export async function listAdminUsers(params: {
+  query?: string;
+  limit: number;
+  offset: number;
+}): Promise<AdminUserListResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("limit", String(params.limit));
+  searchParams.set("offset", String(params.offset));
+  if (params.query?.trim()) {
+    searchParams.set("query", params.query.trim());
+  }
+  return apiRequest<AdminUserListResponse>(`/admin/users?${searchParams.toString()}`);
+}
+
+export async function setAdminUserActive(payload: AdminSetUserActiveRequest): Promise<AdminSetUserActiveResponse> {
+  return apiRequest<AdminSetUserActiveResponse>("/admin/users/set-active", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function grantAdminCredit(payload: AdminGrantCreditRequest): Promise<AdminGrantCreditResponse> {
+  return apiRequest<AdminGrantCreditResponse>("/admin/credits/grant", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export async function listSources(params: SourceListParams): Promise<SourceListResponse> {

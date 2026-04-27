@@ -7,6 +7,7 @@ import type {
 } from "react";
 
 import { ChatPane } from "./components/ChatPane";
+import { AdminWorkspacePanel } from "./components/AdminWorkspacePanel";
 import { DeleteEntriesDialog, ExplorerShortcutDialog } from "./components/ExplorerDialogs";
 import { FileExplorer } from "./components/FileExplorer";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
@@ -110,6 +111,7 @@ export function App({ authMode }: AppProps) {
   const [researchResult, setResearchResult] = useState<ResearchLibraryBuildResponse | null>(null);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(false);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
@@ -1028,10 +1030,19 @@ export function App({ authMode }: AppProps) {
         status={status}
         tasks={tasks}
         user={user}
+        adminOpen={adminOpen}
         onRefresh={() => void refreshAll()}
+        onToggleAdmin={() => setAdminOpen((current) => !current)}
       />
 
-      <section ref={workspaceGridRef} className="workspace-grid" style={workspaceStyle} aria-label="Indexed file workspace">
+      {adminOpen && user?.role === "admin" ? <AdminWorkspacePanel user={user} /> : null}
+
+      <section
+        ref={workspaceGridRef}
+        className={`workspace-grid${adminOpen && user?.role === "admin" ? " admin-workspace-hidden" : ""}`}
+        style={workspaceStyle}
+        aria-label="Indexed file workspace"
+      >
         <FileExplorer
           activeFileView={activeFileView}
           breadcrumbs={filesystem?.breadcrumbs ?? []}

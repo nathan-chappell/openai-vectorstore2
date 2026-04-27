@@ -269,7 +269,7 @@ Add Playwright coverage for normal file-library work:
 
 ### 7. Shared Admin, Auth, And Payments Submodule
 
-Status: shared submodule foundation complete; host persistence/UI integration, free-credit request storage, and provider-backed payments remain planned.
+Status: shared submodule foundation and host admin UI wiring complete; free-credit request storage and provider-backed payments remain planned.
 
 Goal:
 
@@ -295,10 +295,11 @@ Completed:
 - Completed submodule dependency pass: this repo and PlodAI now mount `git@github.com:nathan-chappell/ai-portfolio-admin.git` at `vendor/ai-portfolio-admin`; Python metadata points at that local package; this repo's shared-adapter test loads the submodule path; and PlodAI's duplicated Clerk metadata/`UserRole` helpers now delegate to the shared package while preserving its current API surface.
 - Completed circularity cleanup: `ai-portfolio-admin` no longer imports host apps. Host-specific adapters live in each host repo; this repo uses `backend.app.admin.shared_adapter`.
 - Completed shared contract/interface foundation: shared package now owns generic user/admin/credit/free-credit/payment receipt contracts, Clerk metadata helpers, policy evaluators, a credit workflow protocol, and callback-driven frontend admin types/components.
+- Completed shared admin UI wiring: `ai-portfolio-admin` now owns the callback-driven admin panel for user search, activation/deactivation, manual credit grants, free-credit review, and payment-attempt review; this repo mounts it through `frontend/src/components/AdminWorkspacePanel.tsx`; PlodAI mounts the same panel through its admin page and removed its duplicated local credit-panel implementation.
 
 Remaining implementation plan:
 
-- Wire this repo's admin UI to either the shared callback-driven admin panel or a local panel that uses the shared frontend contracts. It should support user search, activation/deactivation, manual credit grants, free-credit request review, payment attempt review, and audit/decision notes.
+- Extend host endpoints for the shared panel's free-credit and payment-attempt review callbacks once persistence exists. User search, activation/deactivation, and manual credit grants are wired now; review sections remain callback-ready but hidden until host callbacks are provided.
 - Add host-owned persistence for free-credit requests: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, resulting credit grant ID, idempotency key, and duplicate/active-request checks.
 - Use shared free-credit policy evaluation from `ai-portfolio-admin` in host endpoints. The shared package decides from typed evidence and policy; host apps own persistence and external evidence verification.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.

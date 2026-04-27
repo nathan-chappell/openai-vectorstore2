@@ -7,16 +7,21 @@ export function WorkspaceHeader({
   status,
   tasks,
   user,
+  adminOpen,
   onRefresh,
+  onToggleAdmin,
 }: {
   authMode: AppProps["authMode"];
   busy: boolean;
   status: string;
   tasks: TaskSummary[];
   user: AuthUser | null;
+  adminOpen: boolean;
   onRefresh: () => void;
+  onToggleAdmin: () => void;
 }) {
   const latestTask = tasks[0] ?? null;
+  const canViewAdmin = user?.role === "admin";
   return (
     <header className="app-bar">
       <div className="app-identity">
@@ -31,6 +36,11 @@ export function WorkspaceHeader({
         <span>Recent Tasks</span>
         <strong>{latestTask ? `${latestTask.kind} | ${latestTask.status}` : "No tasks yet"}</strong>
       </div>
+      {canViewAdmin ? (
+        <button type="button" className="secondary-button" onClick={onToggleAdmin}>
+          {adminOpen ? "Workspace" : "Admin"}
+        </button>
+      ) : null}
       <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
         Refresh
       </button>

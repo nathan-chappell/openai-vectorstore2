@@ -1864,6 +1864,127 @@ kbd {
   }
 }
 
+.admin-workspace-hidden {
+  display: none;
+}
+
+.admin-workspace-panel {
+  min-height: 0;
+  overflow: auto;
+  padding: 1rem;
+  background: var(--panel-muted);
+  border-top: 1px solid var(--line);
+}
+
+.admin-portfolio-panel {
+  display: grid;
+  gap: 1rem;
+  max-width: 1120px;
+  margin: 0 auto;
+}
+
+.admin-portfolio-panel__header,
+.admin-portfolio-panel__toolbar,
+.admin-portfolio-panel__pager,
+.admin-portfolio-panel__review header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.admin-portfolio-panel__header p,
+.admin-portfolio-panel__grant p,
+.admin-portfolio-panel__review p,
+.admin-portfolio-panel td span {
+  color: var(--muted);
+}
+
+.admin-portfolio-panel__toolbar input,
+.admin-portfolio-panel__grant input,
+.admin-portfolio-panel__grant textarea,
+.admin-portfolio-panel__review select {
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: 6px;
+  padding: 0.55rem 0.65rem;
+}
+
+.admin-portfolio-panel button {
+  border: 1px solid var(--line);
+  background: var(--blue);
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 0.5rem 0.7rem;
+}
+
+.admin-portfolio-panel button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.admin-portfolio-panel__table-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.admin-portfolio-panel table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.admin-portfolio-panel th,
+.admin-portfolio-panel td {
+  padding: 0.75rem;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.admin-portfolio-panel td {
+  min-width: 7rem;
+}
+
+.admin-portfolio-panel td:first-child,
+.admin-portfolio-panel td:nth-child(4) {
+  display: grid;
+  gap: 0.2rem;
+}
+
+.admin-portfolio-panel td:last-child {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.admin-portfolio-panel__grant,
+.admin-portfolio-panel__review {
+  display: grid;
+  gap: 0.7rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.9rem;
+  background: var(--panel);
+}
+
+.admin-portfolio-panel__grant label {
+  display: grid;
+  gap: 0.35rem;
+}
+
+.admin-portfolio-panel__grant textarea {
+  min-height: 5rem;
+  resize: vertical;
+}
+
+.admin-portfolio-panel__review article {
+  display: grid;
+  gap: 0.4rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.75rem;
+}
+
 @media (max-width: 860px) {
   .app-shell {
     grid-template-rows: auto minmax(0, 1fr);
