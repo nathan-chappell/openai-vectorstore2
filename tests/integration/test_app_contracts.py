@@ -1516,6 +1516,12 @@ async def test_mcp_server_exposes_app_first_tools(
     assert tools["search_chunks"].parameters["required"] == ["query"]
     assert tools["sources"].meta is not None
     assert tools["sources"].meta["ui"]["resourceUri"].startswith("ui://")
+    assert tools["source_search"].meta is not None
+    assert tools["source_search"].meta["ui"]["resourceUri"].startswith("ui://")
+    assert tools["research_libraries"].meta is not None
+    assert tools["research_libraries"].meta["ui"]["resourceUri"].startswith("ui://")
+    assert tools["activity"].meta is not None
+    assert tools["activity"].meta["ui"]["resourceUri"].startswith("ui://")
 
 
 @pytest.mark.asyncio
@@ -1550,19 +1556,30 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
     server = create_mcp_server(configured_settings, services)
     try:
         result = await server.call_tool("sources", {}, run_middleware=False)
+        serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
+        assert "Indexed Files" in serialized
+        assert "Query files, filenames, kinds, status" in serialized
+        assert "selectedTagIds" in serialized
+
+        search_result = await server.call_tool("source_search", {}, run_middleware=False)
+        serialized = json.dumps(search_result.structured_content, sort_keys=True, default=str)
+        assert "Library Search" in serialized
+        assert "Search indexed files with the selected tag scope" in serialized
+        assert "selectedTagIds" in serialized
+
+        research_result = await server.call_tool("research_libraries", {}, run_middleware=False)
+        serialized = json.dumps(research_result.structured_content, sort_keys=True, default=str)
+        assert "Research Library Builder" in serialized
+        assert "Build library" in serialized
+        assert "Candidates" in serialized
+        assert "researchCandidates" in serialized
+
+        activity_result = await server.call_tool("activity", {}, run_middleware=False)
+        serialized = json.dumps(activity_result.structured_content, sort_keys=True, default=str)
+        assert "Recent Tasks" in serialized
+        assert "tasks" in serialized
     finally:
         await services.close()
-
-    serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
-    assert "Indexed Files" in serialized
-    assert "Query files, filenames, kinds, status" in serialized
-    assert "Research Library Builder" in serialized
-    assert "Build library" in serialized
-    assert "Research Candidates" in serialized
-    assert "Search indexed files with the selected tag scope" in serialized
-    assert "Recent Tasks" in serialized
-    assert "selectedTagIds" in serialized
-    assert "researchCandidates" in serialized
 
 
 @pytest.mark.asyncio

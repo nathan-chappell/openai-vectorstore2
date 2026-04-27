@@ -315,6 +315,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
     ) -> AsyncIterator[ThreadStreamEvent]:
         started_at = perf_counter()
         requested_model = self._resolve_requested_model(input_user_message=input_user_message)
+        requested_tool_choice = self._resolve_requested_tool_choice(input_user_message=input_user_message)
         provider = self._settings.agent_model_provider
         await self._billing.assert_can_start_billable_operation(
             clerk_user_id=context.clerk_user_id,
@@ -366,7 +367,11 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         agent = Agent[ChatKitAgentContext[VectorstoreChatContext]](
             name="indexed_file_vectorstore_agent",
             model=self._agent_model_for_provider(provider=provider, model=requested_model),
-            model_settings=self._agent_model_settings_for_provider(provider=provider, model=requested_model),
+            model_settings=self._agent_model_settings_for_provider(
+                provider=provider,
+                model=requested_model,
+                tool_choice=requested_tool_choice,
+            ),
             tools=self._build_tools(),
             instructions=self._agent_instructions,
             tool_use_behavior=StopAtTools(stop_at_tool_names=STOP_AT_TOOL_NAMES),
@@ -480,13 +485,15 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             return OpenAIChatCompletionsModel(model=model, openai_client=self._chat_completions_client)
         return model
 
-    def _agent_model_settings_for_provider(self, *, provider: str, model: str) -> ModelSettings:
+    def _agent_model_settings_for_provider(self, *, provider: str, model: str, tool_choice: str | None) -> ModelSettings:
         if provider == "chat_completions_v1":
-            return ModelSettings()
-        return chatkit_model_settings_for_model(
+            return ModelSettings(tool_choice=tool_choice)
+        settings = chatkit_model_settings_for_model(
             model,
             compact_threshold=self._settings.openai_context_compact_threshold,
         )
+        settings.tool_choice = tool_choice
+        return settings
 
     async def _create_openai_conversation(
         self,
@@ -1592,6 +1599,18 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 return self._settings.chat_completions_model
             return self._settings.openai_fast_model
         return MODEL_ALIASES.get(requested_model.strip(), requested_model.strip())
+
+    def _resolve_requested_tool_choice(self, *, input_user_message: UserMessageItem | None) -> str | None:
+        if input_user_message is None or input_user_message.inference_options.tool_choice is None:
+            return None
+        tool_id = input_user_message.inference_options.tool_choice.id.strip()
+        if not tool_id:
+            return None
+        available_tools = set(self.tool_names())
+        if tool_id not in available_tools:
+            logger.warning("chatkit_ignored_unknown_tool_choice tool_id=%s", tool_id)
+            return None
+        return tool_id
 
     @staticmethod
     async def _agent_instructions(_context: Any, _agent: Any) -> str:

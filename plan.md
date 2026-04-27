@@ -583,6 +583,7 @@ Status: complete for the current baseline.
 - ChatKit threads persist OpenAI conversation state without carrying browser file-selection scope.
 - ChatKit agent runs use OpenAI conversation IDs for durable context and track response IDs for logs/debugging.
 - Client-tool calls coordinate file reveal, search changes, entity references, and research builder state.
+- ChatKit composer exposes pinned/focused app tools for research build, library search, grounded answers, split preview, and report saving; selected composer tools are forwarded as forced tool choices to the agent server when valid.
 - ChatKit treats explicit `@` file references and tool-provided source IDs as retrieval scope; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
 - ChatKit Responses requests enable server-side context compaction with a configurable compact threshold.
 - ChatKit can name threads early through a side-effect tool that updates thread title metadata.
@@ -598,7 +599,7 @@ Final MCP verification follow-ups:
 - FastMCP Inspector command should be documented as `./.venv/bin/fastmcp dev inspector backend/app/mcp/dev_server.py:mcp --ui-port 6274 --server-port 6277 --no-reload`.
 - Production/deployed HTTP MCP remains the FastAPI-mounted server at `/mcp/`; local FastMCP dev tooling should use `create_dev_mcp_server` because `create_mcp_server` includes the production token verifier.
 - MCP Apps UI should expose screenshot-worthy flows for research-library building/status, semantic search, tag filtering, source detail/preview, and recent task state.
-- Completed follow-up: the single MCP Apps `sources` UI is now optimized for a smaller ChatGPT side-panel viewport with internal Files/Search/Research/Activity tabs and smaller initial source/task/candidate payloads.
+- Completed follow-up: MCP Apps UI is split into targeted render tools for `sources`, `source_search`, `research_libraries`, and `activity`, with smaller initial source/task/candidate payloads for ChatGPT side-panel use.
 - MCP tools/resources should expose research actions and semantic/tag search clearly enough for ChatGPT hosts to use them without relying on the web frontend.
 - After an MCP file search, ChatGPT should be able to request and receive the raw file content or appropriate extracted text for selected results, subject to size/safety limits and without leaking unrelated files.
 - Final screenshots should include the MCP Apps UI in ChatGPT or FastMCP dev tooling, plus at least one successful search-to-content retrieval flow.

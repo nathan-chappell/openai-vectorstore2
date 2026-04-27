@@ -324,7 +324,7 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
     ),
 )
 
-MCP_RENDER_TOOLS: tuple[str, ...] = ("sources",)
+MCP_RENDER_TOOLS: tuple[str, ...] = ("sources", "source_search", "research_libraries", "activity")
 
 
 def capability_by_operation() -> dict[AppOperation, AppCapability]:

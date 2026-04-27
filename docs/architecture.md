@@ -32,6 +32,7 @@ The web UI is a Vite/React app served by FastAPI after build.
 
 - ChatKit receives selected source IDs through request metadata and persists them to thread metadata.
 - Tools map directly to app-core operations: list/inspect sources, manage tags, preview split, ingest text, re-split, search, branch, QA, freeform, image, voice, list tasks, and inspect tasks.
+- The frontend composer lists common app tools such as research build, library search, grounded answer, split preview, and report saving; ChatKit forwards a selected composer tool as `inference_options.tool_choice`, and the server validates it against registered tools before forcing that tool choice on the agent run.
 - Long-running ChatKit tools emit progress updates with useful counts, task IDs, and generated asset IDs.
 
 ## Reports
@@ -47,7 +48,7 @@ Structured report documents live in `backend/app/schemas/reports.py` and render 
 `backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.
 
 - Data tools return structured JSON for hosts.
-- The `sources` render tool exposes one compact Prefab MCP Apps UI resource, internally split into Files, Search, Research, and Activity tabs so it fits better inside a ChatGPT side-panel view.
+- MCP Apps render tools are split by capability: `sources` for file browsing/detail, `source_search` for retrieval, `research_libraries` for research build/candidate review, and `activity` for recent task state.
 - HTTP MCP is mounted at `/mcp`; stdio is available through `openai-vectorstore2-stdio`.
 - Local FastMCP Apps and Inspector workflows use `backend/app/mcp/dev_server.py:mcp`, which builds the same services with the dev MCP server factory and no production token verifier.
 

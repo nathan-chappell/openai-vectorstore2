@@ -37,8 +37,6 @@ from prefab_ui.components import (
     Row,
     Separator,
     Small,
-    Tab,
-    Tabs,
     Text,
 )
 from pydantic import BaseModel, Field
@@ -105,8 +103,6 @@ Separator: Any = Separator
 SetState: Any = SetState
 ShowToast: Any = ShowToast
 Small: Any = Small
-Tab: Any = Tab
-Tabs: Any = Tabs
 Text: Any = Text
 
 logger = logging.getLogger(__name__)
@@ -1243,14 +1239,12 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
     async def sources(ctx: Context) -> PrefabApp:
         initial_sources = await refresh_sources_tool(ctx)
         initial_tags = await refresh_tags_tool(ctx)
-        initial_tasks = await refresh_tasks_tool(ctx)
-        initial_research_candidates = await refresh_research_candidates_for_ui_tool(ctx)
         with Card(css_class="w-full max-w-2xl mx-auto") as view:
             with CardHeader(), Column(gap=1):
                 CardTitle("Indexed Files")
-                CardDescription("Compact library controls for the ChatGPT side panel.")
-            with CardContent(), Tabs(value="files", variant="line", css_class="w-full"):
-                with Tab("Files", value="files"), Column(gap=2):
+                CardDescription("Browse indexed files, filter by tags, and inspect source detail.")
+            with CardContent(), Column(gap=2):
+                with Column(gap=2):
                     with Row(gap=2, align="center"):
                         h3("Files")
                         Button(
@@ -1372,148 +1366,218 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                             Small(chunk.title)  # ty:ignore[invalid-argument-type]
                                             Muted(chunk.summary)  # ty:ignore[invalid-argument-type]
 
-                with Tab("Search", value="search"), Column(gap=2):
-                    h3("Chunk Query")
-                    with Form(
-                        on_submit=CallTool(
-                            "search_sources_for_ui",
-                            arguments={
-                                "query": EVENT.formData.chunk_query,
-                                "tag_ids": STATE.selectedTagIds,
-                                "max_results": 6,
-                            },
-                            on_success=SetState("searchResults", RESULT),
-                            on_error=ShowToast(ERROR, variant="error"),
-                        )
-                    ):
-                        with Column(gap=2):
-                            Input(
-                                name="chunk_query",
-                                input_type="search",
-                                placeholder="Search indexed files with the selected tag scope",
-                            )
-                            Button("Search chunks", button_type="submit", size="sm")
-                    with If(STATE.searchResults):
-                        with ForEach(STATE.searchResults.hits) as hit:
-                            with Card(css_class="border border-slate-200"):
-                                with CardContent(), Column(gap=1):
-                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
-                                    Small(hit.source_title)  # ty:ignore[invalid-argument-type]
-                                    Muted(hit.summary)  # ty:ignore[invalid-argument-type]
-
-                with Tab("Research", value="research"), Column(gap=2):
-                    with Row(gap=2, align="center"):
-                        h3("Research Library Builder")
-                        Button(
-                            "Refresh",
-                            variant="secondary",
-                            size="sm",
-                            on_click=CallTool(
-                                "refresh_research_candidates_for_ui",
-                                on_success=SetState("researchCandidates", RESULT),
-                                on_error=ShowToast(ERROR, variant="error"),
-                            ),
-                        )
-                    with Form(
-                        on_submit=CallTool(
-                            "build_research_library_for_ui",
-                            arguments={
-                                "query": EVENT.formData.research_query,
-                                "seed_type": EVENT.formData.research_seed_type,
-                                "max_depth": EVENT.formData.research_max_depth,
-                                "max_sources": EVENT.formData.research_max_sources,
-                            },
-                            on_success=[
-                                SetState("researchBuild", RESULT),
-                                CallTool(
-                                    "refresh_research_candidates_for_ui",
-                                    arguments={"task_id": RESULT.task.id},  # ty:ignore[invalid-argument-type]
-                                    on_success=SetState("researchCandidates", RESULT),
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
-                                ShowToast("Research library build complete", variant="success"),
-                            ],
-                            on_error=ShowToast(ERROR, variant="error"),
-                        )
-                    ):
-                        with Column(gap=2):
-                            Input(
-                                name="research_query",
-                                input_type="search",
-                                placeholder="Topic or paper title",
-                            )
-                            with Row(gap=1, align="center"):
-                                Input(
-                                    name="research_seed_type",
-                                    placeholder="topic or paper",
-                                    value="topic",
-                                )
-                                Input(
-                                    name="research_max_sources",
-                                    input_type="number",
-                                    value="12",
-                                )
-                                Input(
-                                    name="research_max_depth",
-                                    input_type="number",
-                                    value="2",
-                                )
-                            Button("Build library", button_type="submit", size="sm")
-                    with If(STATE.researchBuild):
-                        with Card(css_class="border border-slate-200"):
-                            with CardContent(), Column(gap=1):
-                                with Row(gap=1, align="center"):
-                                    Text(STATE.researchBuild.task.title)  # ty:ignore[invalid-argument-type]
-                                    Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
-                    with Row(gap=1, align="center"):
-                        h3("Research Candidates")
-                        Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
-                    with ForEach(STATE.researchCandidates.candidates) as candidate:
-                        with Card(css_class="border border-slate-200"):
-                            with CardContent(), Column(gap=1):
-                                with Row(gap=1, align="center"):
-                                    Text(candidate.title)  # ty:ignore[invalid-argument-type]
-                                    Badge(candidate.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                    Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
-                                Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
-
-                with Tab("Activity", value="activity"), Column(gap=2):
-                    with Row(gap=2, align="center"):
-                        h3("Recent Tasks")
-                        Button(
-                            "Refresh",
-                            variant="secondary",
-                            size="sm",
-                            on_click=CallTool(
-                                "refresh_tasks",
-                                on_success=SetState("tasks", RESULT),
-                                on_error=ShowToast(ERROR, variant="error"),
-                            ),
-                        )
-                    with ForEach(STATE.tasks.tasks) as task:
-                        with Card(css_class="border border-slate-200"):
-                            with CardContent(), Row(gap=1, align="center"):
-                                Text(task.title)  # ty:ignore[invalid-argument-type]
-                                Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                    Separator()
-                    Muted("Use search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
         return PrefabApp(
             title="Indexed Files",
             view=view,
             state={
                 "sources": initial_sources,
                 "tags": initial_tags,
-                "tasks": initial_tasks,
                 "selectedTagIds": [],
                 "selectedSource": None,
+            },
+        )
+
+    @sources_app.ui(
+        name="source_search",
+        title="Library Search",
+        description="Search indexed source chunks and inspect retrieved references.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
+    async def source_search(ctx: Context) -> PrefabApp:
+        initial_tags = await refresh_tags_tool(ctx)
+        with Card(css_class="w-full max-w-2xl mx-auto") as view:
+            with CardHeader(), Column(gap=1):
+                CardTitle("Library Search")
+                CardDescription("Run targeted vector searches over indexed source files.")
+            with CardContent(), Column(gap=2):
+                with Row(gap=1, align="center"):
+                    Small("Scope")
+                    Button(
+                        "All tags",
+                        variant="secondary",
+                        size="sm",
+                        on_click=SetState("selectedTagIds", []),
+                    )
+                    with ForEach(STATE.tags) as tag:
+                        Button(
+                            tag.name,  # ty:ignore[invalid-argument-type]
+                            variant="outline",
+                            size="sm",
+                            on_click=SetState("selectedTagIds", [tag.id]),  # ty:ignore[invalid-argument-type]
+                        )
+                with Form(
+                    on_submit=CallTool(
+                        "search_sources_for_ui",
+                        arguments={
+                            "query": EVENT.formData.chunk_query,
+                            "tag_ids": STATE.selectedTagIds,
+                            "max_results": 8,
+                        },
+                        on_success=SetState("searchResults", RESULT),
+                        on_error=ShowToast(ERROR, variant="error"),
+                    )
+                ):
+                    with Column(gap=2):
+                        Input(
+                            name="chunk_query",
+                            input_type="search",
+                            placeholder="Search indexed files with the selected tag scope",
+                        )
+                        Button("Search chunks", button_type="submit", size="sm")
+                with If(STATE.searchResults):
+                    with ForEach(STATE.searchResults.hits) as hit:
+                        with Card(css_class="border border-slate-200"):
+                            with CardContent(), Column(gap=1):
+                                with Row(gap=1, align="center"):
+                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
+                                    Badge(hit.score, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Small(hit.source_title)  # ty:ignore[invalid-argument-type]
+                                Muted(hit.summary)  # ty:ignore[invalid-argument-type]
+        return PrefabApp(
+            title="Library Search",
+            view=view,
+            state={
+                "tags": initial_tags,
+                "selectedTagIds": [],
                 "searchResults": None,
+            },
+        )
+
+    @sources_app.ui(
+        name="research_libraries",
+        title="Research Libraries",
+        description="Build research libraries and review discovered candidates.",
+        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
+    )
+    async def research_libraries(ctx: Context) -> PrefabApp:
+        initial_research_candidates = await refresh_research_candidates_for_ui_tool(ctx)
+        with Card(css_class="w-full max-w-2xl mx-auto") as view:
+            with CardHeader(), Column(gap=1):
+                CardTitle("Research Libraries")
+                CardDescription("Create a bounded research library from a topic or paper and inspect candidates.")
+            with CardContent(), Column(gap=2):
+                with Row(gap=2, align="center"):
+                    h3("Research Library Builder")
+                    Button(
+                        "Refresh",
+                        variant="secondary",
+                        size="sm",
+                        on_click=CallTool(
+                            "refresh_research_candidates_for_ui",
+                            on_success=SetState("researchCandidates", RESULT),
+                            on_error=ShowToast(ERROR, variant="error"),
+                        ),
+                    )
+                with Form(
+                    on_submit=CallTool(
+                        "build_research_library_for_ui",
+                        arguments={
+                            "query": EVENT.formData.research_query,
+                            "seed_type": EVENT.formData.research_seed_type,
+                            "max_depth": EVENT.formData.research_max_depth,
+                            "max_sources": EVENT.formData.research_max_sources,
+                        },
+                        on_success=[
+                            SetState("researchBuild", RESULT),
+                            CallTool(
+                                "refresh_research_candidates_for_ui",
+                                arguments={"task_id": RESULT.task.id},  # ty:ignore[invalid-argument-type]
+                                on_success=SetState("researchCandidates", RESULT),
+                                on_error=ShowToast(ERROR, variant="error"),
+                            ),
+                            ShowToast("Research library build complete", variant="success"),
+                        ],
+                        on_error=ShowToast(ERROR, variant="error"),
+                    )
+                ):
+                    with Column(gap=2):
+                        Input(
+                            name="research_query",
+                            input_type="search",
+                            placeholder="Topic or paper title",
+                        )
+                        with Row(gap=1, align="center"):
+                            Input(
+                                name="research_seed_type",
+                                placeholder="topic or paper",
+                                value="topic",
+                            )
+                            Input(
+                                name="research_max_sources",
+                                input_type="number",
+                                value="12",
+                            )
+                            Input(
+                                name="research_max_depth",
+                                input_type="number",
+                                value="2",
+                            )
+                        Button("Build library", button_type="submit", size="sm")
+                with If(STATE.researchBuild):
+                    with Card(css_class="border border-slate-200"):
+                        with CardContent(), Column(gap=1):
+                            with Row(gap=1, align="center"):
+                                Text(STATE.researchBuild.task.title)  # ty:ignore[invalid-argument-type]
+                                Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                            Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
+                with Row(gap=1, align="center"):
+                    h3("Candidates")
+                    Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
+                with ForEach(STATE.researchCandidates.candidates) as candidate:
+                    with Card(css_class="border border-slate-200"):
+                        with CardContent(), Column(gap=1):
+                            with Row(gap=1, align="center"):
+                                Text(candidate.title)  # ty:ignore[invalid-argument-type]
+                                Badge(candidate.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
+                            Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
+                            Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
+        return PrefabApp(
+            title="Research Libraries",
+            view=view,
+            state={
                 "researchBuild": None,
                 "researchCandidates": initial_research_candidates,
-                "researchIngest": None,
             },
+        )
+
+    @sources_app.ui(
+        name="activity",
+        title="Activity",
+        description="Inspect recent app tasks and indexing status.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
+    async def activity(ctx: Context) -> PrefabApp:
+        initial_tasks = await refresh_tasks_tool(ctx)
+        with Card(css_class="w-full max-w-2xl mx-auto") as view:
+            with CardHeader(), Column(gap=1):
+                CardTitle("Activity")
+                CardDescription("Recent ingest, search, research, and generation tasks.")
+            with CardContent(), Column(gap=2):
+                with Row(gap=2, align="center"):
+                    h3("Recent Tasks")
+                    Button(
+                        "Refresh",
+                        variant="secondary",
+                        size="sm",
+                        on_click=CallTool(
+                            "refresh_tasks",
+                            on_success=SetState("tasks", RESULT),
+                            on_error=ShowToast(ERROR, variant="error"),
+                        ),
+                    )
+                with ForEach(STATE.tasks.tasks) as task:
+                    with Card(css_class="border border-slate-200"):
+                        with CardContent(), Row(gap=1, align="center"):
+                            Text(task.title)  # ty:ignore[invalid-argument-type]
+                            Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                            Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                Separator()
+                Muted("Use search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
+        return PrefabApp(
+            title="Activity",
+            view=view,
+            state={"tasks": initial_tasks},
         )
 
     server.add_provider(sources_app)
