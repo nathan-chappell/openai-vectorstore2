@@ -165,13 +165,17 @@ Next:
 
 - Completed follow-up: Library rows fall back to vector-result attributes such as `virtual_name` and `virtual_path` when a semantic hit is not already in the local entry cache.
 - Completed follow-up: Library rows now have direct chat-scope checkboxes plus a bulk “Select results” action.
-- Consider moving research builder into Library view or a third task-focused area so Explorer stays purely file-browser oriented.
+- Completed follow-up: add-file, split-preview, and research-builder workflows moved out of the Explorer pane and into ChatKit starter prompts/attachments/tooling, leaving Explorer and Library less crowded.
+- Current follow-up: Library tag filtering is too visually noisy with realistic auto-generated tags. Compact the tag display, prioritize selected/relevant tags, make tag clicks rerun the current Library search immediately, and reduce model/app auto-tag creation so future libraries do not accumulate excessive one-off tags.
+- Consider a later tag-management view for merge/delete/rename workflows if realistic libraries still accumulate noisy tags after generation limits.
 
 Acceptance criteria:
 
 - Explorer no longer needs prominent tag chips or dense search controls to feel complete.
 - Explorer search filters only the current folder and remains responsive without billing or OpenAI calls.
 - Library filtering has enough space to show tags, query, result status, and source metadata clearly.
+- Tag pills in Library stay readable with large tag vocabularies, selected tags remain visible, and clicking a tag immediately refreshes the Library result set.
+- Auto-generated tags are bounded and broad enough for retrieval filtering rather than creating many narrow one-off topic tags.
 - Empty Library query submissions use a deliberate fallback query rather than sending a blank API request.
 - `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not lose existing selected chat scope.
 - Selecting or revealing a file from Library opens the correct file in Explorer.
@@ -358,6 +362,20 @@ RunPod workflow conventions:
 - Bootstrap should be stdlib-light, create cache directories such as Hugging Face cache, SGLang storage, Triton cache, temp, checkpoints, and artifacts, start RunPod base services through `/start.sh` when present, then hand off to a typed workflow CLI.
 - Workflow should support dry-run, download-only, baseline-eval, train, serve, post-train-eval, and exit-or-stay-alive modes.
 - Artifacts to exfiltrate should include dataset snapshots, eval reports, critique logs, adapter/checkpoint metadata, SGLang launch config, server logs, and a small reproducibility manifest.
+
+Pod-ready implementation slice:
+
+- [ ] Add the first executable skeleton to `vendor/openai-vectorstore2-on-prem`: `docs/`, `skills/`, `scripts/`, `configs/`, `requirements/`, `artifacts/.gitkeep`, and a README update that names the parent-app boundary and default `/workspace` layout.
+- [ ] Add a stdlib-light RunPod bootstrap script that creates `/workspace/hf-cache`, `/workspace/sglang-storage`, `/workspace/triton-cache`, `/workspace/tmp`, `/workspace/venvs/openai-vectorstore2-on-prem`, `/workspace/datasets`, `/workspace/checkpoints`, `/workspace/adapters`, `/workspace/evals`, `/workspace/exfil`, and `/workspace/logs`, optionally invokes `/start.sh` when present, writes a small initialization manifest, and then stays alive for operator action.
+- [ ] Add RunPod operator docs and env examples covering pod host, SSH port, key path, workspace path, Hugging Face token/cache vars, model ID, optional adapter/checkpoint source paths, dataset source path such as local `./tmp`, SGLang port, and parent app `CHAT_COMPLETIONS_BASE_URL` wiring.
+- [ ] Add the first skill/operator guides for `runpod-connect`, `runpod-inspect`, `dataset-sync`, `sglang-control`, `sft-run`, `eval-run`, and `artifact-exfiltrate`, with transparent SSH/SCP commands, non-mutating health checks by default, and env-var based configuration rather than hidden state.
+- [ ] Add SGLang launch profiles for `openai/gpt-oss-20b`: base-only, base-plus-adapter when supported, conservative A100 smoke settings, and a more aggressive profile gated behind successful smoke runs; include start, stop, restart, tail-log, and health-check commands.
+- [ ] Add dataset sync conventions that upload curated SFT/eval data from local `./tmp` or generated dataset directories into `/workspace/datasets/<version>`, preserve manifests, refuse silent overwrites, and keep held-out subjective eval data separate from train data.
+- [ ] Add weight/artifact sync conventions that prefer RunPod-side base model downloads into `/workspace/hf-cache`, upload only local adapters or checkpoints when available, record `du -sh` sizes, and avoid transferring full base weights unless explicitly requested.
+- [ ] Add an exfiltration command that packages adapters, eval reports, dataset manifests/splits, training args, SGLang launch configs, selected logs, package/version summaries, GPU/hardware summaries, git SHAs, and a reproducibility manifest under `/workspace/exfil` for SCP back to the local machine.
+- [ ] Add a dataset-builder dry-run path that consumes OpenAI artifacts already fetched by `skills/openai-log-debugger`, stored ChatKit thread metadata, or curated fixtures, then writes reviewable candidate/train/eval JSONL plus rejected examples and manifests without requiring a RunPod pod.
+- [ ] Add a first eval harness that can run the 20-example subjective eval against either a base SGLang endpoint or a base-plus-adapter endpoint, save model outputs and critique notes, and keep showcase examples distinct from held-out/generalization examples.
+- [ ] Only after the pod-ready skeleton works locally, run a real RunPod smoke sequence: bootstrap pod, inspect GPU/disk/venv/cache state, launch base SGLang, point the parent app at the OpenAI-compatible endpoint, run one ChatKit compatibility smoke turn, upload a tiny dataset, run a tiny SFT/eval command if feasible, and exfiltrate the resulting manifest/log bundle.
 
 Acceptance criteria:
 
