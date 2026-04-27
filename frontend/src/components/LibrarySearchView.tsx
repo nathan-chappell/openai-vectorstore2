@@ -1,7 +1,11 @@
+import { useMemo, useState } from "react";
+
 import { DEFAULT_LIBRARY_QUERY } from "../lib/appConstants";
 import type { LibrarySearchResult } from "../lib/appTypes";
 import type { TagMatchMode, TagSummary } from "../lib/types";
 import { stringAttribute } from "../lib/uiFormat";
+
+const TAG_PREVIEW_LIMIT = 36;
 
 export function LibrarySearchView({
   busy,
@@ -39,6 +43,24 @@ export function LibrarySearchView({
   onToggleTag: (tagId: string) => void;
 }) {
   const disabled = busy || librarySearching;
+  const [showAllTags, setShowAllTags] = useState(false);
+  const visibleTags = useMemo(() => {
+    const sortedTags = [...tags].sort((left, right) => {
+      const leftSelected = selectedTagIdSet.has(left.id);
+      const rightSelected = selectedTagIdSet.has(right.id);
+      if (leftSelected !== rightSelected) {
+        return leftSelected ? -1 : 1;
+      }
+      return left.name.localeCompare(right.name);
+    });
+    if (showAllTags || sortedTags.length <= TAG_PREVIEW_LIMIT) {
+      return sortedTags;
+    }
+    const selectedTags = sortedTags.filter((tag) => selectedTagIdSet.has(tag.id));
+    const unselectedLimit = Math.max(TAG_PREVIEW_LIMIT, selectedTags.length) - selectedTags.length;
+    return [...selectedTags, ...sortedTags.filter((tag) => !selectedTagIdSet.has(tag.id)).slice(0, unselectedLimit)];
+  }, [selectedTagIdSet, showAllTags, tags]);
+  const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
   return (
     <section className="library-search-view" aria-label="Tag and semantic search">
       <div className="library-searchbar">
@@ -85,19 +107,32 @@ export function LibrarySearchView({
         </div>
       </div>
 
-      <div className="library-tag-panel" aria-label="Tag filters">
-        {tags.map((tag) => (
-          <button
-            key={tag.id}
-            type="button"
-            aria-pressed={selectedTagIdSet.has(tag.id)}
-            className={selectedTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
-            onClick={() => onToggleTag(tag.id)}
-          >
-            {tag.name}
-          </button>
-        ))}
-        {!tags.length ? <span>No tags</span> : null}
+      <div className={showAllTags ? "library-tag-panel expanded" : "library-tag-panel"} aria-label="Tag filters">
+        <div className="library-tag-list">
+          {visibleTags.map((tag) => (
+            <button
+              key={tag.id}
+              type="button"
+              aria-pressed={selectedTagIdSet.has(tag.id)}
+              className={selectedTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
+              onClick={() => onToggleTag(tag.id)}
+              disabled={disabled}
+            >
+              {tag.name}
+            </button>
+          ))}
+          {hiddenTagCount ? (
+            <button type="button" className="tag-chip tag-chip-more" onClick={() => setShowAllTags(true)} disabled={disabled}>
+              +{hiddenTagCount} more
+            </button>
+          ) : null}
+          {showAllTags && tags.length > TAG_PREVIEW_LIMIT ? (
+            <button type="button" className="tag-chip tag-chip-more" onClick={() => setShowAllTags(false)} disabled={disabled}>
+              Less
+            </button>
+          ) : null}
+          {!tags.length ? <span>No tags</span> : null}
+        </div>
       </div>
 
       <div className="library-result-summary">

@@ -496,12 +496,6 @@ export function App({ authMode }: AppProps) {
     [refreshExplorer],
   );
 
-  const toggleExplorerTag = useCallback((tagId: string): void => {
-    setSelectedExplorerTagIds((current) =>
-      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
-    );
-  }, []);
-
   const createExplorerTag = useCallback(async (): Promise<void> => {
     const name = newTagName.trim();
     if (!name) {
@@ -521,15 +515,20 @@ export function App({ authMode }: AppProps) {
   }, [newTagName]);
 
   const runLibrarySearch = useCallback(
-    async (mode: "replace" | "append"): Promise<void> => {
-      const query = libraryQuery.trim() || DEFAULT_LIBRARY_QUERY;
+    async (
+      mode: "replace" | "append",
+      options: { query?: string; tagIds?: string[]; tagMatchMode?: TagMatchMode } = {},
+    ): Promise<void> => {
+      const query = (options.query ?? libraryQuery).trim() || DEFAULT_LIBRARY_QUERY;
+      const tagIds = options.tagIds ?? selectedExplorerTagIds;
+      const tagMatchMode = options.tagMatchMode ?? libraryTagMatchMode;
       setLibrarySearching(true);
       setStatus(`${mode === "append" ? "Appending" : "Searching"} semantic results for "${query}".`);
       try {
         const response = await searchChunks({
           query,
-          tagIds: selectedExplorerTagIds,
-          tagMatchMode: libraryTagMatchMode,
+          tagIds,
+          tagMatchMode,
           maxResults: 24,
         });
         const nextResults: LibrarySearchResult[] = [];
@@ -567,6 +566,27 @@ export function App({ authMode }: AppProps) {
       }
     },
     [libraryQuery, libraryTagMatchMode, selectedExplorerTagIds],
+  );
+
+  const toggleExplorerTag = useCallback(
+    (tagId: string): void => {
+      const nextTagIds = selectedExplorerTagIds.includes(tagId)
+        ? selectedExplorerTagIds.filter((id) => id !== tagId)
+        : [...selectedExplorerTagIds, tagId];
+      setSelectedExplorerTagIds(nextTagIds);
+      void runLibrarySearch("replace", { tagIds: nextTagIds });
+    },
+    [runLibrarySearch, selectedExplorerTagIds],
+  );
+
+  const changeLibraryTagMatchMode = useCallback(
+    (value: TagMatchMode): void => {
+      setLibraryTagMatchMode(value);
+      if (selectedExplorerTagIds.length) {
+        void runLibrarySearch("replace", { tagMatchMode: value });
+      }
+    },
+    [runLibrarySearch, selectedExplorerTagIds],
   );
 
   const toggleLibrarySourceSelection = useCallback((sourceId: string): void => {
@@ -938,7 +958,7 @@ export function App({ authMode }: AppProps) {
           onShowShortcuts={() => setShortcutDialogOpen(true)}
           onTagToggle={toggleSelectedSourceTagDraft}
           onLibraryQueryChange={setLibraryQuery}
-          onLibraryTagMatchModeChange={setLibraryTagMatchMode}
+          onLibraryTagMatchModeChange={changeLibraryTagMatchMode}
           onSelectLibraryResults={selectLibraryResultsForChat}
           onToggleLibrarySourceSelection={toggleLibrarySourceSelection}
           onToggleExplorerTag={toggleExplorerTag}

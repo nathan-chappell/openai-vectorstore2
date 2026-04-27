@@ -644,16 +644,19 @@ kbd {
 .tag-chip {
   border: 1px solid var(--line);
   border-radius: 999px;
-  padding: 0.15rem 0.45rem;
+  padding: 0.12rem 0.38rem;
   color: #334155;
   background: #f8fafc;
-  font-size: 0.72rem;
+  font-size: 0.7rem;
   white-space: nowrap;
 }
 
 .tag-chip {
-  min-height: 1.75rem;
+  max-width: 12rem;
+  min-height: 1.55rem;
   color: #334155;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .tag-chip:hover:not(:disabled),
@@ -661,6 +664,11 @@ kbd {
   border-color: #93c5fd;
   color: #1d4ed8;
   background: var(--blue-soft);
+}
+
+.tag-chip-more {
+  color: #475569;
+  background: #ffffff;
 }
 
 .file-table-wrap {
@@ -1257,12 +1265,23 @@ kbd {
 }
 
 .library-tag-panel {
+  border-bottom: 1px solid var(--line);
+  padding: 0.35rem 0.55rem;
+  background: var(--panel-muted);
+}
+
+.library-tag-list {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.35rem;
-  border-bottom: 1px solid var(--line);
-  padding: 0.45rem 0.55rem;
-  background: var(--panel-muted);
+  gap: 0.25rem;
+  align-items: center;
+  max-height: 5.9rem;
+  overflow: hidden;
+}
+
+.library-tag-panel.expanded .library-tag-list {
+  max-height: 12rem;
+  overflow: auto;
 }
 
 .library-result-summary {
