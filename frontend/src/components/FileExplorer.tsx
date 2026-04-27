@@ -54,6 +54,8 @@ export const FileExplorer = memo(function FileExplorer({
   onCreateTag,
   onDeleteSelected,
   onDropEntries,
+  onGoBackFolder,
+  onGoForwardFolder,
   onGoToFolder,
   onNewTagNameChange,
   onClosePreview,
@@ -73,6 +75,8 @@ export const FileExplorer = memo(function FileExplorer({
   onToggleLibrarySourceSelection,
   onToggleExplorerTag,
   onUploadGuidanceChange,
+  canGoBackFolder,
+  canGoForwardFolder,
 }: {
   activeFileView: WorkspaceFileView;
   breadcrumbs: FilesystemBreadcrumb[];
@@ -107,6 +111,8 @@ export const FileExplorer = memo(function FileExplorer({
   onCreateTag: () => void;
   onDeleteSelected: () => void;
   onDropEntries: (entryIds: string[], folderId: string) => void;
+  onGoBackFolder: () => void;
+  onGoForwardFolder: () => void;
   onGoToFolder: (folderId: string | null) => void;
   onNewTagNameChange: (value: string) => void;
   onClosePreview: () => void;
@@ -126,6 +132,8 @@ export const FileExplorer = memo(function FileExplorer({
   onToggleLibrarySourceSelection: (sourceId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;
   onUploadGuidanceChange: (value: string) => void;
+  canGoBackFolder: boolean;
+  canGoForwardFolder: boolean;
 }) {
   const selectedCount = selectedEntryIdSet.size;
   const selectedFileLabel =
@@ -171,6 +179,16 @@ export const FileExplorer = memo(function FileExplorer({
       if ((event.key === "Backspace" || (event.altKey && event.key === "ArrowLeft")) && currentFolder?.parent_id) {
         event.preventDefault();
         onGoToFolder(currentFolder.parent_id);
+        return;
+      }
+      if (event.key === "ArrowLeft" && !event.shiftKey && !event.altKey && canGoBackFolder) {
+        event.preventDefault();
+        onGoBackFolder();
+        return;
+      }
+      if (event.key === "ArrowRight" && !event.shiftKey && !event.altKey && canGoForwardFolder) {
+        event.preventDefault();
+        onGoForwardFolder();
         return;
       }
       if (event.key === "?" || (event.shiftKey && event.key === "/")) {
@@ -224,6 +242,8 @@ export const FileExplorer = memo(function FileExplorer({
       focusedEntryId,
       onClosePreview,
       onDeleteSelected,
+      onGoBackFolder,
+      onGoForwardFolder,
       onGoToFolder,
       onOpenEntry,
       onRenameSelected,
@@ -233,6 +253,8 @@ export const FileExplorer = memo(function FileExplorer({
       selectedEntryIds,
       selectedSource,
       selectionAnchorEntryId,
+      canGoBackFolder,
+      canGoForwardFolder,
     ],
   );
   return (
@@ -263,7 +285,7 @@ export const FileExplorer = memo(function FileExplorer({
         </button>
         <div
           className="explorer-selection-summary"
-          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "Arrow keys move, Shift extends, F2 renames, Alt+Left goes up, Delete removes"}
+          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "Arrow keys move, Left/Right navigate folder history, F2 renames, Delete removes"}
         >
           <strong>{selectedFileLabel}</strong>
           <span>{selectedFileEntries.slice(0, 3).map((entry) => entry.name).join(", ") || "No ready files"}</span>

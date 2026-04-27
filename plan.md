@@ -167,6 +167,7 @@ Next:
 - Completed follow-up: Library rows now have direct chat-scope checkboxes plus a bulk “Select results” action.
 - Completed follow-up: add-file, split-preview, and research-builder workflows moved out of the Explorer pane and into ChatKit starter prompts/attachments/tooling, leaving Explorer and Library less crowded.
 - Current follow-up: Library tag filtering is too visually noisy with realistic auto-generated tags. Compact the tag display, prioritize selected/relevant tags, make tag clicks rerun the current Library search immediately, and reduce model/app auto-tag creation so future libraries do not accumulate excessive one-off tags.
+- Completed follow-up: Explorer Left/Right folder-history navigation is wired and covered by the desktop browser shortcut spec; Backspace/Alt+Left still navigate to the parent folder.
 - Consider a later tag-management view for merge/delete/rename workflows if realistic libraries still accumulate noisy tags after generation limits.
 
 Acceptance criteria:

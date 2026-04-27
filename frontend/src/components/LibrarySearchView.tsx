@@ -51,6 +51,12 @@ export function LibrarySearchView({
       if (leftSelected !== rightSelected) {
         return leftSelected ? -1 : 1;
       }
+      if (left.source !== right.source) {
+        return left.source === "manual" ? -1 : 1;
+      }
+      if (left.source_count !== right.source_count) {
+        return right.source_count - left.source_count;
+      }
       return left.name.localeCompare(right.name);
     });
     if (showAllTags || sortedTags.length <= TAG_PREVIEW_LIMIT) {

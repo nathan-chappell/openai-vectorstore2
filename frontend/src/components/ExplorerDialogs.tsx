@@ -80,6 +80,7 @@ export function ExplorerShortcutDialog({ onClose }: { onClose: () => void }) {
     ["Shift + Home / End", "Extend to first or last item"],
     ["Enter", "Open the focused file or folder"],
     ["F2", "Rename the selected item"],
+    ["Left / Right", "Move through folder history"],
     ["Alt + Left", "Go to the parent folder"],
     ["Backspace", "Go to the parent folder"],
     ["Delete", "Delete selected items"],

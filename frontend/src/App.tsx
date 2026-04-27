@@ -78,6 +78,8 @@ export function App({ authMode }: AppProps) {
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
   const [currentFolderId, setCurrentFolderId] = useState<string | null>(null);
+  const [folderBackStack, setFolderBackStack] = useState<Array<string | null>>([]);
+  const [folderForwardStack, setFolderForwardStack] = useState<Array<string | null>>([]);
   const [activeFileView, setActiveFileView] = useState<WorkspaceFileView>("explorer");
   const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
   const [libraryQuery, setLibraryQuery] = useState("");
@@ -106,6 +108,8 @@ export function App({ authMode }: AppProps) {
   const clientToolUiFlushRef = useRef<number | null>(null);
   const [workspaceSplitPercent, setWorkspaceSplitPercent] = useState(() => readStoredWorkspaceSplit());
   const [previewSplitPercent, setPreviewSplitPercent] = useState(() => readStoredPreviewSplit());
+  const canGoBackFolder = folderBackStack.length > 0;
+  const canGoForwardFolder = folderForwardStack.length > 0;
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
@@ -190,6 +194,54 @@ export function App({ authMode }: AppProps) {
     },
     [cacheEntries],
   );
+
+  const focusFirstExplorerRow = useCallback((): void => {
+    window.requestAnimationFrame(() => {
+      document.querySelector<HTMLElement>(".file-rows [role='row']")?.focus();
+    });
+  }, []);
+
+  const clearExplorerSelection = useCallback((): void => {
+    setSelectedEntryIds([]);
+    setSelectedSourceIds([]);
+    setFocusedEntryId(null);
+    setSelectionAnchorEntryId(null);
+    setSelectedSource(null);
+  }, []);
+
+  const navigateToFolder = useCallback(
+    (folderId: string | null): void => {
+      clearExplorerSelection();
+      if (folderId !== currentFolderId) {
+        setFolderBackStack((current) => [...current, currentFolderId]);
+        setFolderForwardStack([]);
+      }
+      void loadFolder(folderId).then(focusFirstExplorerRow);
+    },
+    [clearExplorerSelection, currentFolderId, focusFirstExplorerRow, loadFolder],
+  );
+
+  const goBackFolder = useCallback((): void => {
+    const targetFolderId = folderBackStack.at(-1);
+    if (targetFolderId === undefined) {
+      return;
+    }
+    clearExplorerSelection();
+    setFolderBackStack((current) => current.slice(0, -1));
+    setFolderForwardStack((current) => [currentFolderId, ...current]);
+    void loadFolder(targetFolderId).then(focusFirstExplorerRow);
+  }, [clearExplorerSelection, currentFolderId, focusFirstExplorerRow, folderBackStack, loadFolder]);
+
+  const goForwardFolder = useCallback((): void => {
+    const targetFolderId = folderForwardStack[0];
+    if (targetFolderId === undefined) {
+      return;
+    }
+    clearExplorerSelection();
+    setFolderForwardStack((current) => current.slice(1));
+    setFolderBackStack((current) => [...current, currentFolderId]);
+    void loadFolder(targetFolderId).then(focusFirstExplorerRow);
+  }, [clearExplorerSelection, currentFolderId, focusFirstExplorerRow, folderForwardStack, loadFolder]);
 
   const refreshExplorer = useCallback(async (): Promise<void> => {
     const response = await loadFolder(currentFolderId);
@@ -359,31 +411,21 @@ export function App({ authMode }: AppProps) {
   const openEntry = useCallback(
     (entry: FilesystemEntrySummary): void => {
       if (entry.kind === "folder") {
-        setSelectedEntryIds([]);
-        setSelectedSourceIds([]);
-        setFocusedEntryId(null);
-        setSelectionAnchorEntryId(null);
-        setSelectedSource(null);
-        void loadFolder(entry.id);
+        navigateToFolder(entry.id);
         return;
       }
       if (entry.source_id) {
         void openSource(entry.source_id);
       }
     },
-    [loadFolder, openSource],
+    [navigateToFolder, openSource],
   );
 
   const goToFolder = useCallback(
     (folderId: string | null): void => {
-      setSelectedEntryIds([]);
-      setSelectedSourceIds([]);
-      setFocusedEntryId(null);
-      setSelectionAnchorEntryId(null);
-      setSelectedSource(null);
-      void loadFolder(folderId);
+      navigateToFolder(folderId);
     },
-    [loadFolder],
+    [navigateToFolder],
   );
 
   const createFolderInCurrentFolder = useCallback(async (): Promise<void> => {
@@ -687,6 +729,10 @@ export function App({ authMode }: AppProps) {
           cacheEntries(searchedEntries);
         }
         setActiveFileView("explorer");
+        if (revealedEntry.parent_id !== currentFolderId) {
+          setFolderBackStack((current) => [...current, currentFolderId]);
+          setFolderForwardStack([]);
+        }
         await loadFolder(revealedEntry.parent_id);
         setSelectedEntryIds((current) => (sameStringArray(current, [revealedEntry.id]) ? current : [revealedEntry.id]));
         setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
@@ -704,7 +750,7 @@ export function App({ authMode }: AppProps) {
       });
       return { ok: true, entry_id: revealedEntry.id, source_id: revealedEntry.source_id, path: revealedEntry.path };
     },
-    [cacheEntries, loadFolder, openSource, scheduleClientToolUiUpdate],
+    [cacheEntries, currentFolderId, loadFolder, openSource, scheduleClientToolUiUpdate],
   );
 
   const searchChatEntities = useCallback(
@@ -810,6 +856,10 @@ export function App({ authMode }: AppProps) {
             setFocusedEntryId(null);
             setSelectionAnchorEntryId(null);
             setSelectedSource(null);
+            if (targetFolderId !== currentFolderId) {
+              setFolderBackStack((current) => [...current, currentFolderId]);
+              setFolderForwardStack([]);
+            }
             await loadFolder(targetFolderId);
           }
           if (candidates.length || result) {
@@ -828,7 +878,7 @@ export function App({ authMode }: AppProps) {
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },
-    [loadFolder, revealFileInExplorer, scheduleClientToolUiUpdate],
+    [currentFolderId, loadFolder, revealFileInExplorer, scheduleClientToolUiUpdate],
   );
 
   const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -944,6 +994,8 @@ export function App({ authMode }: AppProps) {
           onCreateTag={() => void createExplorerTag()}
           onDeleteSelected={requestDeleteSelectedEntries}
           onDropEntries={(entryIds, folderId) => void moveEntriesToFolder(entryIds, folderId)}
+          onGoBackFolder={goBackFolder}
+          onGoForwardFolder={goForwardFolder}
           onGoToFolder={goToFolder}
           onNewTagNameChange={setNewTagName}
           onClosePreview={() => setSelectedSource(null)}
@@ -963,6 +1015,8 @@ export function App({ authMode }: AppProps) {
           onToggleLibrarySourceSelection={toggleLibrarySourceSelection}
           onToggleExplorerTag={toggleExplorerTag}
           onUploadGuidanceChange={setUploadGuidance}
+          canGoBackFolder={canGoBackFolder}
+          canGoForwardFolder={canGoForwardFolder}
         />
 
         <button

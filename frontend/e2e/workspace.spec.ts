@@ -1,5 +1,6 @@
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { basename, resolve } from "node:path";
 
 const BACKEND_URL = `http://127.0.0.1:${process.env.PLAYWRIGHT_BACKEND_PORT ?? "8000"}`;
 const AUTH_HEADERS = { Authorization: "Bearer local-dev" };
@@ -26,10 +27,6 @@ type SourceDetail = {
   status: string;
   display_title: string;
   original_filename: string;
-};
-
-type SourceListResponse = {
-  sources: SourceDetail[];
 };
 
 type FixtureRecord = Record<string, unknown>;
@@ -87,57 +84,6 @@ function sourceSummary(overrides: FixtureRecord = {}): FixtureRecord {
   };
 }
 
-function taskSummary(overrides: FixtureRecord = {}): FixtureRecord {
-  return {
-    id: "task",
-    kind: "research_import",
-    status: "completed",
-    title: "Task",
-    origin_surface: "web",
-    origin_thread_id: null,
-    source_file_id: null,
-    input_json: {},
-    result_json: {},
-    error_message: null,
-    started_at: FIXTURE_NOW,
-    completed_at: FIXTURE_NOW,
-    created_at: FIXTURE_NOW,
-    updated_at: FIXTURE_NOW,
-    ...overrides,
-  };
-}
-
-function researchCandidate(overrides: FixtureRecord = {}): FixtureRecord {
-  return {
-    id: "candidate",
-    task_id: "task",
-    status: "pending",
-    source_type: "url",
-    url: "https://example.com/reference.txt",
-    normalized_url: "https://example.com/reference.txt",
-    title: "Reference",
-    description: "Candidate description.",
-    summary: "Candidate summary.",
-    suggested_tags: ["research"],
-    authors: ["Ada Lovelace"],
-    published_at: "2024",
-    doi: null,
-    arxiv_id: null,
-    rationale: "Relevant public source.",
-    score: 0.86,
-    depth: 1,
-    parent_candidate_id: null,
-    parent_source_file_id: null,
-    linked_source_file_id: null,
-    provenance: {},
-    content_hash: null,
-    error_message: null,
-    created_at: FIXTURE_NOW,
-    updated_at: FIXTURE_NOW,
-    ...overrides,
-  };
-}
-
 test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => {
   await page.addInitScript(() => {
     window.localStorage.removeItem("openai-vectorstore2.workspaceSplitPercent");
@@ -153,7 +99,6 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".filesystem-layout")).not.toHaveClass(/has-preview/);
   await expect(page.locator(".chat-panel")).toBeVisible();
   await expect(page.locator("openai-chatkit")).toBeVisible();
-  await expect(page.getByPlaceholder("Find in this folder")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "Library" })).toBeVisible();
   await expect(page.getByText("0 indexed files selected")).toBeVisible();
@@ -161,10 +106,8 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Up" })).toHaveCount(0);
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Rename" })).toHaveCount(0);
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Delete" })).toHaveCount(0);
-  await expect(page.getByText("Add files")).toBeVisible();
-  await expect(page.locator(".research-builder-strip")).toBeVisible();
-  await expect(page.getByPlaceholder("Topic or paper title")).toBeVisible();
-  await expect(page.getByRole("button", { name: "Build" })).toBeDisabled();
+  await expect(page.locator(".filesystem-upload")).toHaveCount(0);
+  await expect(page.locator(".research-builder-strip")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh" })).toBeEnabled();
   if (testInfo.project.name === "chromium-desktop") {
     await dragWorkspaceSplitter(page, 52);
@@ -179,7 +122,7 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await page.screenshot({ path: testInfo.outputPath("workspace-shell.png"), fullPage: true });
 });
 
-test("explorer local search and library semantic append use separate views", async ({ page }, testInfo) => {
+test("library semantic append and tag clicks use the Library view", async ({ page }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop", "Dense search view coverage is desktop-focused.");
 
   const rootEntry = filesystemEntry({ id: "root", kind: "folder", name: "Files", path: "/" });
@@ -218,20 +161,23 @@ test("explorer local search and library semantic append use separate views", asy
     summary: "Notes about retrieval quality.",
     tags: [{ id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 }],
   });
-  const bravoSource = sourceSummary({
-    id: "source-bravo",
-    filesystem_entry_id: "entry-bravo",
-    virtual_name: "bravo-plan.txt",
-    virtual_path: "/bravo-plan.txt",
-    display_title: "Bravo Plan",
-    original_filename: "bravo-plan.txt",
-    summary: "Roadmap for evals.",
-  });
   const searchPayloads: Array<{ query: string; tag_ids: string[] }> = [];
+
+  const tags = [
+    { id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 },
+    ...Array.from({ length: 42 }, (_, index) => ({
+      id: `tag-extra-${index + 1}`,
+      name: `Extra ${String(index + 1).padStart(2, "0")}`,
+      slug: `extra-${index + 1}`,
+      color: null,
+      source: "auto",
+      source_count: 1,
+    })),
+  ];
 
   await page.route("**/api/tags", async (route) => {
     await route.fulfill({
-      json: [{ id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 }],
+      json: tags,
     });
   });
   await page.route("**/api/filesystem**", async (route) => {
@@ -286,16 +232,16 @@ test("explorer local search and library semantic append use separate views", asy
   });
 
   await page.goto("/");
-  await page.getByPlaceholder("Find in this folder").fill("retrieval");
   await expect(page.locator(".file-rows")).toContainText("alpha-notes.txt");
-  await expect(page.locator(".file-rows")).not.toContainText("bravo-plan.txt");
+  await expect(page.locator(".file-rows")).toContainText("bravo-plan.txt");
 
   await page.getByRole("tab", { name: "Library" }).click();
+  await expect(page.locator(".library-tag-panel")).toContainText("+7 more");
+  await expect(page.getByRole("button", { name: "Extra 42" })).toHaveCount(0);
   await page.getByRole("button", { name: "RAG" }).click();
-  await page.getByPlaceholder("indexed files").fill("");
-  await page.keyboard.press("Enter");
   await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files"]);
   expect(searchPayloads[0].tag_ids).toEqual(["tag-rag"]);
+  await expect(page.getByRole("button", { name: "RAG" })).toHaveAttribute("aria-pressed", "true");
   await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
 
   await page.getByPlaceholder("indexed files").fill("bravo");
@@ -423,7 +369,13 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   await expect(page.locator(".file-rows")).toContainText("renamed-shortcut-note.txt");
 
   await shortcutFileRow.click();
-  await page.keyboard.press("Alt+ArrowLeft");
+  await page.keyboard.press("ArrowLeft");
+  await expect(page.locator(".breadcrumb-row")).not.toContainText("Shortcuts");
+  await shortcutFolderRow.click();
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator(".breadcrumb-row")).toContainText("Shortcuts");
+  await shortcutFileRow.click();
+  await page.keyboard.press("Backspace");
   await expect(page.locator(".breadcrumb-row")).not.toContainText("Shortcuts");
 
   await shortcutFolderRow.dblclick();
@@ -447,167 +399,24 @@ test("file explorer shortcuts rename, navigate up, and delete", async ({ page },
   await page.screenshot({ path: testInfo.outputPath("workspace-shortcuts.png"), fullPage: true });
 });
 
-test("research library builder directly indexes a candidate", async ({ page }, testInfo) => {
-  test.skip(testInfo.project.name !== "chromium-desktop", "Dense build flow is covered on desktop.");
-
-  let ingested = false;
-  const rootEntry = filesystemEntry({
-    id: "root",
-    kind: "folder",
-    name: "Files",
-    path: "/",
-  });
-  const researchParent = filesystemEntry({
-    id: "folder-research",
-    kind: "folder",
-    name: "Research",
-    path: "/Research",
-    parent_id: "root",
-  });
-  const targetFolder = filesystemEntry({
-    id: "folder-attention",
-    kind: "folder",
-    name: "Attention Is All You Need",
-    path: "/Research/Attention Is All You Need",
-    parent_id: "folder-research",
-  });
-  const ingestedFile = filesystemEntry({
-    id: "entry-transformer-pdf",
-    kind: "file",
-    name: "attention-reference.txt",
-    path: "/Research/Attention Is All You Need/attention-reference.txt",
-    parent_id: "folder-attention",
-    source_id: "source-transformer-reference",
-    source_kind: "text",
-    media_type: "text/plain",
-    status: "ready",
-    byte_size: 4096,
-    summary: "A public reference about transformer attention.",
-    suggested_tags: ["attention", "transformers"],
-  });
-  const task = taskSummary({
-    id: "task-research-build",
-    kind: "research_import",
-    status: "completed",
-    title: "Research import: Attention Is All You Need",
-    result_json: { candidate_count: 1, target_folder_id: targetFolder.id },
-  });
-  const pendingCandidate = researchCandidate({
-    id: "candidate-attention-reference",
-    task_id: task.id,
-    status: "pending",
-    title: "Attention reference",
-    summary: "A candidate public reference for the Transformer paper.",
-  });
-  const ingestedCandidate = {
-    ...pendingCandidate,
-    status: "ingested",
-    linked_source_file_id: "source-transformer-reference",
-  };
-  const source = sourceSummary({
-    id: "source-transformer-reference",
-    filesystem_entry_id: ingestedFile.id,
-    virtual_name: ingestedFile.name,
-    virtual_path: ingestedFile.path,
-    display_title: "Attention reference",
-    original_filename: "attention-reference.txt",
-  });
-  const ingestTask = taskSummary({
-    id: "task-ingest-reference",
-    kind: "ingest",
-    status: "completed",
-    title: "Ingest: attention-reference.txt",
-    source_file_id: source.id,
-  });
-
-  await page.route("**/api/filesystem**", async (route) => {
-    const url = new URL(route.request().url());
-    const folderId = url.searchParams.get("folder_id");
-    if (folderId === targetFolder.id) {
-      await route.fulfill({
-        json: {
-          current: targetFolder,
-          breadcrumbs: [
-            { id: rootEntry.id, name: "Files", path: "/" },
-            { id: researchParent.id, name: "Research", path: "/Research" },
-            { id: targetFolder.id, name: targetFolder.name, path: targetFolder.path },
-          ],
-          entries: ingested ? [ingestedFile] : [],
-        },
-      });
-      return;
-    }
-    await route.fulfill({
-      json: {
-        current: rootEntry,
-        breadcrumbs: [{ id: rootEntry.id, name: "Files", path: "/" }],
-        entries: [researchParent],
-      },
-    });
-  });
-  await page.route("**/api/research/library-builds", async (route) => {
-    expect(route.request().method()).toBe("POST");
-    const payload = route.request().postDataJSON() as { query: string; seed_type: string; auto_ingest: boolean };
-    expect(payload.query).toBe("Attention Is All You Need");
-    expect(payload.seed_type).toBe("paper");
-    expect(payload.auto_ingest).toBe(true);
-    ingested = true;
-    await route.fulfill({
-      json: {
-        task,
-        target_folder_id: targetFolder.id,
-        seed_source: null,
-        candidates: [ingestedCandidate],
-        ingested: [{ source, task: ingestTask }],
-        duplicate_count: 0,
-      },
-    });
-  });
-  await page.route("**/api/tasks**", async (route) => {
-    await route.fulfill({ json: { tasks: ingested ? [ingestTask, task] : [task] } });
-  });
-
-  await page.goto("/");
-  await expect(page.getByText("Local dev auth")).toBeVisible();
-  await page.getByPlaceholder("Topic or paper title").fill("Attention Is All You Need");
-  await page.locator(".research-builder-controls select").selectOption("paper");
-  await page.locator(".research-builder-controls input[type='number']").first().fill("1");
-  await page.locator(".research-builder-controls input[type='number']").nth(1).fill("1");
-  await page.locator(".research-builder-strip").getByRole("button", { name: "Build" }).click();
-
-  await expect(page.locator(".breadcrumb-row")).toContainText("Attention Is All You Need");
-  await expect(page.locator(".research-candidate-list")).toContainText("Attention reference");
-  await expect(page.locator(".research-candidate-list")).toContainText("indexed");
-  await expect(page.locator(".research-candidate-row").getByRole("button", { name: "Approve" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: "Ingest approved" })).toHaveCount(0);
-  await expect(page.locator(".research-progress-track")).toBeVisible();
-  await expect(page.locator(".research-result-summary")).toContainText("1 indexed");
-  await expect(page.locator(".file-rows")).toContainText("attention-reference.txt");
-  await page.screenshot({ path: testInfo.outputPath("research-builder-direct-flow.png"), fullPage: true });
-});
-
 test("explorer-selected file answers through chatkit and deletes cleanly", async ({ page, request }, testInfo) => {
   test.skip(testInfo.project.name !== "chromium-desktop", "Run the live ChatKit flow once.");
   test.setTimeout(420_000);
 
   const samplePaths = [resolve("sample_sources/rag-field-notes.txt"), resolve("sample_sources/research-index.json")];
-  const sampleFilenames = ["rag-field-notes.txt", "research-index.json"];
 
   const sourceIds: string[] = [];
   try {
     await page.goto("/");
     await expect(page.getByText("Local dev auth")).toBeVisible();
     await waitForChatKit(page);
-    await page.locator(".filesystem-upload textarea").fill("Preserve the named fields and short notes as retrievable facts.");
-
-    await page.locator(".filesystem-upload input[type='file']").setInputFiles(samplePaths);
-    await expect(page.getByText("2 staged")).toBeVisible();
-    await page.locator(".filesystem-upload").getByRole("button", { name: "Index" }).click();
-
-    const queuedSources = await Promise.all(
-      sampleFilenames.map((filename) => waitForSourceRecordByFilename(request, filename, 60_000)),
+    sourceIds.push(
+      ...(await Promise.all(
+        samplePaths.map((path) =>
+          uploadSourceFixture(request, path, "Preserve the named fields and short notes as retrievable facts."),
+        ),
+      )),
     );
-    sourceIds.push(...queuedSources.map((source) => source.id));
     const readySources = await Promise.all(sourceIds.map((id) => waitForSourceReady(request, id, 240_000)));
     for (const source of readySources) {
       expect(source.status).toBe("ready");
@@ -789,26 +598,28 @@ async function waitForTaskMatching(
   throw new Error("Timed out waiting for a matching task.");
 }
 
-async function waitForSourceRecordByFilename(
+async function uploadSourceFixture(
   request: APIRequestContext,
-  filename: string,
-  timeoutMs: number,
-): Promise<SourceDetail> {
-  const startedAt = Date.now();
-  while (Date.now() - startedAt < timeoutMs) {
-    const response = await request.get(`${BACKEND_URL}/api/sources?query=${encodeURIComponent(filename)}&page_size=50`, {
-      headers: AUTH_HEADERS,
-    });
-    if (response.ok()) {
-      const payload = (await response.json()) as SourceListResponse;
-      const source = payload.sources.find((candidate) => candidate.original_filename === filename);
-      if (source) {
-        return source;
-      }
-    }
-    await delay(1_000);
+  path: string,
+  userGuidance: string,
+): Promise<string> {
+  const filename = basename(path);
+  const response = await request.post(`${BACKEND_URL}/api/sources`, {
+    headers: AUTH_HEADERS,
+    multipart: {
+      file: {
+        name: filename,
+        mimeType: filename.endsWith(".json") ? "application/json" : "text/plain",
+        buffer: readFileSync(path),
+      },
+      user_guidance: userGuidance,
+    },
+  });
+  if (!response.ok()) {
+    throw new Error(`Failed to upload ${filename}: ${response.status()} ${await response.text()}`);
   }
-  throw new Error(`Timed out waiting for ${filename} to appear.`);
+  const payload = (await response.json()) as { source: SourceDetail };
+  return payload.source.id;
 }
 
 async function waitForSourceReady(
