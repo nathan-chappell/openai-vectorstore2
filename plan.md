@@ -25,6 +25,7 @@ Release scope:
 - Version starts at `1.0.0` for both Python and frontend package metadata.
 - Primary demo path: upload/build a small research library, inspect files, run tag and semantic search, ask grounded questions with evidence, generate a structured report, render/preview/export it, and show logs/progress/cost tracking for OpenAI-backed work.
 - The project should demonstrate source-level OpenAI vector-store RAG, ChatKit agent tools, MCP surface area, task/progress updates, generated artifacts, billing/usage accounting foundations, and deployable app architecture.
+- Longer-term extension: demonstrate a credible on-prem mode where the app can run against a self-hosted OpenAI-compatible OSS model service instead of making OpenAI API calls for agent turns.
 
 Functional final checks:
 
@@ -47,6 +48,7 @@ Deployment checklist:
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
 - Completed docs pass for mandatory env vars: `OPENAI_API_KEY`, app signing secret, database URL, app base URL, Clerk values when auth is enabled, storage backend/S3-compatible values, billing/admin settings, and ChatKit domain key are documented in `.env.example` and `docs/deployment.md`.
 - Decide whether beta admin/auth/payments come from this repo's default implementation or the private shared `ai-portfolio-admin` submodule; either path must leave the app bootable and demoable.
+- Track the private on-prem companion repo as `vendor/openai-vectorstore2-on-prem`, sourced from `git@github.com:nathan-chappell/openai-vectorstore2-on-prem.git`, for RunPod/SGLang/fine-tuning work that should not live in the base app until the boundary is proven.
 - Decide beta storage explicitly: local container storage is acceptable only for throwaway demos; persistent Railway volume or S3-compatible storage is preferred for a live resume link.
 - Confirm logs work in Railway without leaking prompts, secrets, or bulky content, and that enough IDs are present to debug OpenAI API calls from platform logs.
 
@@ -268,7 +270,71 @@ Add Playwright coverage for normal file-library work:
 - Reveal a source from ChatKit or Library view.
 - Delete files and folders with progress/status feedback.
 
-### 7. Shared Admin, Auth, And Payments Submodule
+### 7. On-Prem OSS Model Support
+
+Status: planned; private companion repo initialized as `vendor/openai-vectorstore2-on-prem`.
+
+Goal:
+
+- Generalize the app so agentic workflows can run either through OpenAI Responses/Conversations or through an on-prem-style OpenAI-compatible model endpoint.
+- For this project, "on-prem" means deployed on infrastructure under our control, likely Railway for the app/database and RunPod for model serving/training, without external model API calls for the agent path.
+- Target `gpt-oss-20b` first as the practical small OSS model. An A100-class GPU should be the initial target for LoRA SFT and SGLang serving, with smoke tests confirming memory/runtime settings before serious runs.
+- Keep the base repo focused on provider abstraction, contracts, and compatibility mode; keep RunPod images, SFT scripts, SGLang launchers, model caches, and fine-tune artifacts in the private on-prem submodule.
+
+Feasibility notes:
+
+- OpenAI's gpt-oss models are open-weight and intended for infrastructure controlled by the developer; they are not served through the OpenAI API or ChatGPT, and fine-tuning uses open tooling rather than OpenAI API fine-tuning.
+- `gpt-oss-20b` is the right first target for this repo's on-prem story because it is the lower-latency/local/specialized variant and supports agentic capabilities such as function calling and structured outputs.
+- SGLang is a plausible serving layer because it supports GPT-OSS models, OpenAI-compatible API surfaces, reasoning/tool parsers, and MCP tool-server integration.
+- The OpenAI-direct path should remain the highest-capability default. On-prem mode is a compatibility/deployment track, not a reason to give up Responses/Conversations when those are available.
+
+Submodule structure:
+
+- Use `vendor/openai-vectorstore2-on-prem` from `git@github.com:nathan-chappell/openai-vectorstore2-on-prem.git` as the private companion repo.
+- The submodule may assume the parent checkout exists and provides the main app files, schemas, tool contracts, prompts, logs, and fixtures.
+- Keep private deployment and model work there: RunPod Dockerfiles, bootstrap scripts, SGLang launch manifests, model download/cache conventions, SFT dataset builders, training scripts, eval harnesses, and artifact exfiltration helpers.
+- Keep the parent-to-submodule interface narrow: provider contracts, prompt/tool schemas, dataset/export inputs, and generated artifacts. Avoid making the base app depend on submodule imports at runtime.
+
+Provider/agent architecture:
+
+- Add an app-level model-provider abstraction for agent turns with at least two implementations: `openai_responses` and `openai_compatible_completions_v1`.
+- Preserve the current OpenAI Responses/Conversations ChatKit implementation for best capability, tracing, server-side state, and advanced tool use.
+- Add a "completions-v1 compatibility mode" for OpenAI-compatible chat/completions providers such as SGLang. This mode should support messages, streaming when available, tool definitions, tool call parsing, structured output where practical, and explicit conversation-state storage in the app.
+- ChatKit should be able to route through either provider while preserving app-owned progress events, tool execution boundaries, selected-file scope, citation/link behavior, and cost/log metadata where applicable.
+- Tool calling should be normalized at the app boundary: the model provider proposes tool calls; app services execute them; results are serialized back in a provider-compatible shape.
+- Add clear capability flags so on-prem mode can expose unsupported features honestly, such as no managed vector stores, weaker structured-output enforcement, different reasoning traces, or missing image/voice features.
+
+Fine-tuning and dataset builder:
+
+- Add a local skill or script workflow for building SFT examples from existing OpenAI platform logs, response logs, and stored conversation artifacts.
+- The dataset builder should convert multi-turn conversations into one or more supervised examples, controlled by parameters such as window size, target assistant turns, include/exclude tool calls, include system/developer messages, and redact/scrub sensitive fields.
+- Examples should preserve the production shape as much as possible: developer instructions, user request, selected context, tool calls/results, final assistant answer, and metadata about source workflow.
+- Build a small subjective eval set first: roughly 20 interesting examples, with about 5 "showcase" examples that demonstrate known-good behavior and about 15 held-out/generalization examples that are not used for training feedback.
+- The eval should be intentionally subjective and product-centered: quality of agent behavior, tool-use choices, evidence/citation behavior, refusal/defer behavior, report/search usefulness, and whether the answer feels like this app's agent.
+- Keep eval examples and rubrics versioned. Use model-graded critique only as a helper; final acceptability should be based on human review for the initial small set.
+- SFT should start with LoRA/QLoRA style training in BF16 or 4-bit where supported, then serve either base+adapter if SGLang supports it cleanly or merge/export a deployment artifact after training.
+- Do not train directly in deployment quantization formats unless the toolchain explicitly supports it; use a BF16/LoRA training path and quantize/export only after adapter merge when needed.
+
+RunPod workflow conventions:
+
+- Follow `../runpod-nlsh` as the working inspiration: choose a RunPod base image aligned to the target GPU, CUDA, PyTorch, and attention/runtime stack; bake stable system and Python dependencies into the image where possible; use `/workspace` as a mounted volume for caches, model weights, checkpoints, state, and artifacts.
+- Prefer letting RunPod download model parameters and install/cache heavy runtime pieces on the mounted volume rather than pulling massive artifacts locally.
+- Treat the mounted volume as durable-ish cache, not source of truth. Every serious run should write enough manifests, logs, state files, and artifact summaries to resume or exfiltrate with `scp`.
+- Use a strict venv convention on the mounted volume when runtime package iteration is needed, while keeping the base image stable for CUDA/PyTorch/SGLang compatibility.
+- Bootstrap should be stdlib-light, create cache directories such as Hugging Face cache, SGLang storage, Triton cache, temp, checkpoints, and artifacts, start RunPod base services through `/start.sh` when present, then hand off to a typed workflow CLI.
+- Workflow should support dry-run, download-only, baseline-eval, train, serve, post-train-eval, and exit-or-stay-alive modes.
+- Artifacts to exfiltrate should include dataset snapshots, eval reports, critique logs, adapter/checkpoint metadata, SGLang launch config, server logs, and a small reproducibility manifest.
+
+Acceptance criteria:
+
+- The on-prem submodule is registered at `vendor/openai-vectorstore2-on-prem` and has a README explaining that it assumes the parent app checkout.
+- The base app has a documented provider boundary between OpenAI Responses/Conversations and OpenAI-compatible completions/chat mode.
+- ChatKit can run a smoke agent flow through the OpenAI-compatible provider without losing app-owned tool execution, progress, or selected-file behavior.
+- The submodule contains a RunPod plan/script scaffold for SGLang serving of `gpt-oss-20b` and a dataset/eval workflow inspired by `../runpod-nlsh`.
+- A dataset-builder skill/script can produce reviewable SFT examples from logged OpenAI conversations with redaction and multi-turn example splitting.
+- A 20-example subjective eval set exists before fine-tuning work is considered successful.
+
+### 8. Shared Admin, Auth, And Payments Submodule
 
 Status: shared submodule foundation and host admin UI wiring complete; free-credit request storage and provider-backed payments remain planned.
 
@@ -351,7 +417,7 @@ Acceptance criteria:
 - Payment-provider events are idempotent, auditable, and can grant credits without duplicating balances.
 - Free-credit requests and PayPal receipt reviews are persisted, reviewable by admins, and can result in audited credit grants.
 
-### 8. Usage Credits And Provider-Ready Billing
+### 9. Usage Credits And Provider-Ready Billing
 
 Status: first backend pass implemented; shared-admin foundation complete; admin UI, free-credit/payment funding, and complete usage coverage remain planned.
 
