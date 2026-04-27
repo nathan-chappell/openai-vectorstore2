@@ -41,7 +41,7 @@ Acceptance criteria:
 
 ### 1. TypeScript Contract And Legacy Cleanup
 
-Status: first foundation pass implemented.
+Status: planned.
 
 Goal:
 
@@ -53,6 +53,7 @@ Goal:
 Implementation plan:
 
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
+- First pass should focus on low-risk extraction from the current large `App.tsx`: shared ID aliases, source/filesystem/library result types, ChatKit client-tool payload types, and pure utility modules for fuzzy matching and selection derivation.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
 - Keep runtime parsing at API boundaries explicit and lightweight. Use structured guards only where external or optional data genuinely needs narrowing; do not add a heavy validation library unless the codebase has a clear need.
 - Prefer discriminated unions for task states, artifact kinds, source kinds, ChatKit client-tool events, and render/export statuses so switch statements become exhaustive and UI state cannot silently drift.
@@ -68,6 +69,11 @@ Acceptance criteria:
 - Important UI state machines use discriminated unions or equivalent exhaustive typing for impossible-state reduction.
 - Legacy/compat TypeScript code has either no remaining call sites or a current test proving the replacement behavior.
 - Frontend types stay aligned with backend schemas and generated/handwritten API contracts; mismatches are caught at compile time where practical.
+
+Non-goals for the first pass:
+
+- Do not introduce generated TypeScript contracts, runtime validation libraries, or a new state-management framework until the hand-written contracts and module boundaries are cleaned up.
+- Do not restyle the UI while extracting types and helpers except where necessary to preserve behavior.
 
 ### 2. Split Explorer And Library Views
 
@@ -136,7 +142,7 @@ Next:
 
 ### 4. Report Compilation And Export
 
-Status: planned.
+Status: first foundation pass implemented.
 
 Goal:
 
