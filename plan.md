@@ -29,7 +29,7 @@ Release scope:
 
 Functional final checks:
 
-- Verify tag filtering and semantic Library search with a realistic library: all/any tag mode, nonblank fallback query, source metadata display, explicit `@` file references, file reveal, and evidence links.
+- Verify single-tag filtering and semantic Library search with a realistic library: representative tag select, nonblank fallback query, source metadata display, explicit `@` file references, file reveal, and evidence links.
 - Verify grounded ChatKit answers from explicit Explorer/Library file references and Library search results, including citation clicks and browser-side reveal behavior.
 - Verify research-builder flow on a small topic: discovery, ingest, vector indexing, scoped answer, progress visibility, and log traceability.
 - Verify report generation end to end: structured draft, Markdown render with KaTeX-compatible math/evidence links, saved library artifact, PDF render path when implemented, PDF inspection/retry behavior, and download links that point at saved artifacts.
@@ -138,7 +138,7 @@ Non-goals for the first pass:
 
 ### 2. Split Explorer And Library Views
 
-Status: first pass implemented; needs browser polish and follow-up coverage.
+Status: first pass implemented; single representative tag model implemented; needs browser polish and follow-up coverage.
 
 Decision:
 
@@ -149,11 +149,11 @@ Decision:
 
 Implementation notes:
 
-- Completed first pass: added Explorer/Library tabs, local current-folder fuzzy filtering for Explorer, a semantic Library query surface with tag pills and `all` / `any` mode, Enter replace search, Ctrl+Enter append/dedupe search, ChatKit `set_file_search` routing to Library, and fuzzy ChatKit composer entity search over known file entries.
+- Completed first pass: added Explorer/Library tabs, local current-folder fuzzy filtering for Explorer, a semantic Library query surface with a single representative tag filter, Enter replace search, Ctrl+Enter append/dedupe search, ChatKit `set_file_search` routing to Library, and fuzzy ChatKit composer entity search over known file entries.
 - Keep the existing virtual filesystem as the source of truth for folders and paths.
 - Explorer search is local to the current folder and should be simple/fuzzy over entry name, path, description, summary, suggested tags, and source metadata that is already present in the folder listing. It must not call OpenAI vector search.
 - Reuse the same fuzzy matching behavior for ChatKit composer entity search so file tags feel consistent with the Explorer.
-- Library view is tag/semantic-search focused: start from a nonblank fallback query when the field is empty, show tags as pill-style multi-select controls, support `all` / `any` tag matching, and run OpenAI-backed source search from the query bar.
+- Library view is tag/semantic-search focused: start from a nonblank fallback query when the field is empty, show a single tag select, and run OpenAI-backed source search from the query bar.
 - In Library view, `Enter` replaces the current result set and `Ctrl+Enter` appends/dedupes into it.
 - Results from Library view should preview in place and remain discoverable through ChatKit `@` file references; explicit citation/entity clicks should still reveal/open the corresponding file in Explorer.
 - ChatKit `set_file_search` should move the user to Library view and apply query/tag filters instead of crowding Explorer.
@@ -166,7 +166,7 @@ Next:
 - Completed follow-up: Library rows fall back to vector-result attributes such as `virtual_name` and `virtual_path` when a semantic hit is not already in the local entry cache.
 - Completed follow-up: removed the confusing visible chat-scope file selection path; ChatKit now relies on `@` file references and a rolling entity-search history of currently/recently shown files.
 - Completed follow-up: add-file, split-preview, and research-builder workflows moved out of the Explorer pane and into ChatKit starter prompts/attachments/tooling, leaving Explorer and Library less crowded.
-- Completed follow-up: Library tag filtering now caps the default visible pill set, prioritizes selected/relevant tags, reruns the current Library search when tags are clicked, and asks semantic splitting to produce fewer broad auto-tags.
+- Completed follow-up: Library tag filtering now uses one representative source tag, reruns the current Library search when changed, and asks semantic splitting to produce one broad reusable auto-tag.
 - Completed follow-up: Explorer Left/Right folder-history navigation is wired and covered by the desktop browser shortcut spec; Backspace/Alt+Left still navigate to the parent folder.
 - Completed follow-up: Explorer and Library rows now use denser name-first columns with a compact type/icon column, size/date/relevance context, and status/relevance near the end instead of path subtitles under every row.
 - Completed follow-up: full path/context moved into the preview/details pane, including a dedicated path metadata field.
@@ -183,9 +183,9 @@ Acceptance criteria:
 - Markdown previews render through the app renderer with scoped styles that look professional inside the split preview pane and do not inherit oversized document defaults.
 - Explorer search filters only the current folder and remains responsive without billing or OpenAI calls.
 - Library filtering has enough space to show tags, query, result status, and source metadata clearly.
-- Normal users cannot manually add tags from the Explorer/Library UI; tags remain AI-managed metadata while tag filters and tag visibility still support discovery.
-- Tag pills in Library stay readable with large tag vocabularies, selected tags remain visible, and clicking a tag immediately refreshes the Library result set.
-- Auto-generated tags are bounded and broad enough for retrieval filtering rather than creating many narrow one-off topic tags.
+- Normal users can set one representative alphanumeric-hyphenated tag per file from source detail; automatic tagging should prefer an existing broad tag when one fits.
+- Library tag filtering stays readable because it is a single-select filter, and changing it immediately refreshes the Library result set.
+- Auto-generated tags are single, bounded, and broad enough for retrieval filtering rather than creating many narrow one-off topic tags.
 - Empty Library query submissions use a deliberate fallback query rather than sending a blank API request.
 - `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not disturb ChatKit entity-reference behavior.
 - Revealing a file from ChatKit opens the correct file in Explorer; clicking a Library result previews it in place without stealing Explorer focus.
@@ -404,7 +404,7 @@ Acceptance criteria:
 
 ### 8. Shared Admin, Auth, And Payments Submodule
 
-Status: shared submodule foundation and host admin UI wiring complete; PayPal receipt temporary-credit flow implemented; free-credit request storage and full provider checkout/webhook payments remain planned.
+Status: shared submodule foundation and host admin UI wiring complete; PayPal receipt credit flow implemented; host free-credit request storage/review implemented; full provider checkout/webhook payments remain planned.
 
 Goal:
 
@@ -435,9 +435,8 @@ Completed:
 Remaining implementation plan:
 
 - Completed PayPal receipt pass: users can create a PayPal payment reference, upload text/PDF/email-style receipt evidence, receive temporary credit when amount/currency/recipient/reference checks pass, and admins can review/confirm/reject payment attempts from the shared admin panel.
-- Extend host endpoints for the shared panel's free-credit review callbacks once persistence exists. User search, activation/deactivation, manual credit grants, and payment-attempt review are wired now.
-- Add host-owned persistence for free-credit requests: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, resulting credit grant ID, idempotency key, and duplicate/active-request checks.
-- Use shared free-credit policy evaluation from `ai-portfolio-admin` in host endpoints. The shared package decides from typed evidence and policy; host apps own persistence and external evidence verification.
+- Completed follow-up: host endpoints now persist free-credit requests, expose user request creation/listing, wire shared admin-panel review callbacks, grant approved request credit, preserve idempotency keys, and block duplicate active requests.
+- Completed follow-up: shared free-credit policy evaluation from `ai-portfolio-admin` is used as the host request pre-check while host apps own persistence and external evidence verification.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
 - Expand host-local adapters only where they compose local services with shared contracts. Do not add host imports back into `ai-portfolio-admin`.
 - Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
@@ -473,7 +472,7 @@ PayPal receipt-based temporary access:
 - Fraud controls: unique reference per attempt, no reused transaction IDs, no reused receipt evidence across accounts, automatic temporary expiry, stronger confirmation for permanent access, manual review for suspicious uploads, logged AI decisions, logged admin decisions, rate/attempt limits for temporary access, and automatic blocking for mismatched amount/currency/recipient or stale payment date.
 - Risk flags include missing transaction ID, missing/wrong recipient, wrong amount, wrong currency, old payment date, reused transaction ID, visible screenshot edits, cropped/incomplete receipt, payer identity mismatch, missing reference code, and multiple failed attempts by one user.
 - User messaging should be explicit: uploaded proof may grant temporary access while payment is verified; temporary approval can expire; confirmed payment activates access normally; rejection should tell the user to check amount, currency, recipient, and reference code.
-- Current MVP scope implemented without PayPal API/webhooks: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, local text/PDF plausibility review, temporary credit grants, admin review dashboard, manual confirm/reject/manual-review actions, and audit logging. Still add automatic expiry enforcement/revocation and image/OCR or model-assisted receipt extraction later if needed.
+- Current MVP scope implemented without PayPal API/webhooks: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, local text/PDF plausibility review, immediate receipt credit grants that remain until confirmed or revoked, admin review dashboard, manual confirm/reject/manual-review actions, rejection reversal entries, and audit logging. Still add image/OCR or model-assisted receipt extraction later if needed.
 - Out of MVP scope: full Stripe integration, full PayPal Checkout integration, subscriptions, refunds, tax handling, invoice generation, chargeback/dispute workflows, and fully automated permanent confirmation.
 
 Acceptance criteria:
@@ -488,7 +487,7 @@ Acceptance criteria:
 
 ### 9. Usage Credits And Provider-Ready Billing
 
-Status: first backend pass implemented; shared-admin foundation complete; PayPal receipt funding implemented; free-credit request flow and complete usage coverage remain planned.
+Status: backend ledger implemented; shared-admin foundation complete; PayPal receipt funding and free-credit request review implemented; broader non-ChatKit usage event coverage implemented with configurable placeholder rates; checkout/webhook grants remain planned.
 
 Reference `../plodai` directly during implementation and align models/services/schemas with it where the concepts match, adapting names only where this app's library/task surfaces need richer references.
 
@@ -524,7 +523,8 @@ Implementation notes:
 - Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding checkout flows until the ledger and shared-admin boundary are proven.
 - Prepare provider integrations by reserving fields for payment provider, checkout/session/order/payment intent IDs, payment status, and credit amount, then later add webhook/callback-driven credit grants with idempotency.
 - Completed PayPal receipt funding pass: added payment-attempt persistence, receipt upload/review, temporary PayPal credit grants, account-panel payment instructions, and admin payment-attempt review.
-- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add free-credit requests; and add checkout/webhook-created credit grants once the manual and receipt ledgers have been exercised.
+- Completed follow-up: records post-completion cost events for semantic split/tagging, research discovery, source vector indexing/search, image, and voice paths using configurable placeholder rates where direct token usage is unavailable. Transcription remains a TODO once audio workflows are exercised with real pricing/usage data.
+- Next pass: add checkout/webhook-created credit grants once the manual, free-credit, and receipt ledgers have been exercised.
 
 Acceptance criteria:
 
@@ -636,7 +636,7 @@ Status: mostly complete; view split first pass implemented.
 - OpenAI file IDs, vector-store file IDs, bucket keys, and response/conversation IDs are implementation details tracked in app records or logs.
 - Virtual paths are app-owned and should stay stable across REST, ChatKit, MCP, and frontend behavior.
 - Prefer passing app IDs, source IDs, task IDs, and resource URLs between surfaces; fetch full resource content through APIs, tools, or cache lookups instead of copying bulky content through chat state.
-- Tags remain source-level metadata. OpenAI vector filtering uses canonical `tags` plus bounded exact-match tag slots.
+- Tags remain source-level metadata. Each source has at most one representative `tag_slug`; OpenAI vector filtering uses a single scalar `tag` metadata value.
 - New schema changes require Alembic migrations and drift tests.
 - New app operations should update the capability matrix, Pydantic contracts, frontend types, ChatKit tools, MCP tools, and tests together.
 - Prefer integration tests for behavior. Add unit tests only for tricky parsing, normalization, or selection logic.

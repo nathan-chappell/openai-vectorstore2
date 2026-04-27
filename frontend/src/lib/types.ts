@@ -143,6 +143,51 @@ export type PaymentAttemptListResponse = {
   attempts: PaymentAttemptSummary[];
 };
 
+export type FreeCreditSource = "general" | "linkedin_connection" | "beta_tester" | "manual_admin";
+export type FreeCreditRequestStatus = "pending" | "approved" | "rejected" | "manual_review_required" | "expired";
+
+export type FreeCreditRequestCreate = {
+  requested_amount_usd?: number | null;
+  source?: FreeCreditSource;
+  reason: string;
+  linkedin_profile_url?: string | null;
+  relationship_note?: string | null;
+  intended_use?: string | null;
+  idempotency_key?: string | null;
+};
+
+export type FreeCreditRequestSummary = {
+  id: string;
+  clerk_user_id: string;
+  requested_amount_usd: number | null;
+  source: FreeCreditSource;
+  reason: string;
+  linkedin_profile_url: string | null;
+  relationship_note: string | null;
+  intended_use: string | null;
+  evidence_verified: boolean;
+  idempotency_key: string | null;
+  status: FreeCreditRequestStatus;
+  decided_amount_usd: number | null;
+  decision_note: string | null;
+  reviewer_clerk_user_id: string | null;
+  credit_grant_id: string | null;
+  created_at: string;
+  updated_at: string;
+  decided_at: string | null;
+};
+
+export type FreeCreditRequestListResponse = {
+  requests: FreeCreditRequestSummary[];
+};
+
+export type AdminFreeCreditDecisionRequest = {
+  request_id: string;
+  status: Extract<FreeCreditRequestStatus, "approved" | "rejected" | "manual_review_required">;
+  credit_amount_usd?: number | null;
+  decision_note: string;
+};
+
 export type PayPalPaymentAttemptCreateRequest = {
   expected_amount_usd: number;
 };

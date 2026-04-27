@@ -80,7 +80,7 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
     ),
     AppCapability(
         operation="search_filesystem",
-        summary="Find virtual files and folders by path, tags, and vector-store retrieval.",
+        summary="Find virtual files and folders by path, representative tag, and vector-store retrieval.",
         rest_routes=("GET /api/filesystem/search",),
         chatkit_tool="find_files",
         mcp_tools=("search_filesystem",),
@@ -118,7 +118,7 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
     ),
     AppCapability(
         operation="list_tags",
-        summary="List available auto and manual tags for retrieval filtering.",
+        summary="List available representative source tags for retrieval filtering.",
         rest_routes=("GET /api/tags",),
         chatkit_tool="list_tags",
         mcp_tools=("list_tags",),

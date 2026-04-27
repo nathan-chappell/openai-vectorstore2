@@ -79,11 +79,16 @@ class AppSettings(BaseSettings):
     billing_default_credit_floor_usd: float = -1.0
     billing_platform_markup_multiplier: float = 1.3
     billing_unknown_model_policy: Literal["block", "zero"] = "zero"
+    billing_semantic_split_cost_usd: float = 0.002
+    billing_research_discovery_cost_usd: float = 0.01
+    billing_vector_search_cost_usd: float = 0.0005
+    billing_vector_index_file_cost_usd: float = 0.002
+    billing_image_generation_cost_usd: float = 0.04
+    billing_voice_generation_cost_per_1k_chars_usd: float = 0.02
     paypal_recipient_email: str | None = None
     paypal_payment_url: AnyHttpUrl | None = None
     paypal_min_payment_usd: float = 5.0
     paypal_max_payment_usd: float = 250.0
-    paypal_temporary_access_days: int = 14
     admin_integration_provider: Literal["default", "ai_portfolio_admin"] = "default"
     admin_shared_module: str = "backend.app.admin.shared_adapter"
 

@@ -148,6 +148,95 @@ class BillingService:
                 _grant_summary(grant),
             )
 
+    async def adjust_credit(
+        self,
+        *,
+        clerk_user_id: str,
+        credit_amount_usd: float,
+        admin_clerk_user_id: str | None,
+        note: str | None,
+        source: str,
+        payment_provider: str | None,
+        payment_reference: str | None,
+        credit_floor_usd: float,
+        role: str | None,
+    ) -> tuple[CreditBalanceSummary, CreditGrantSummary]:
+        amount = round(float(credit_amount_usd), 8)
+        if amount == 0:
+            raise ValueError("Credit adjustment amount must be nonzero.")
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            balance = await self._get_or_create_balance(session, clerk_user_id=clerk_user_id)
+            grant = CreditGrant(
+                clerk_user_id=clerk_user_id,
+                admin_clerk_user_id=admin_clerk_user_id,
+                credit_amount_usd=amount,
+                source=source,
+                note=_normalized_note(note),
+                payment_provider=_normalized_note(payment_provider),
+                payment_reference=_normalized_note(payment_reference),
+                created_at=_utcnow(),
+            )
+            session.add(grant)
+            balance.current_credit_usd = round(float(balance.current_credit_usd) + amount, 8)
+            balance.updated_at = _utcnow()
+            await session.commit()
+            await session.refresh(balance)
+            await session.refresh(grant)
+            logger.info(
+                "credit_adjusted clerk_user_id=%s admin_clerk_user_id=%s amount_usd=%.8f balance_usd=%.8f source=%s",
+                clerk_user_id,
+                admin_clerk_user_id,
+                amount,
+                balance.current_credit_usd,
+                source,
+            )
+            return (
+                self._balance_summary(balance, credit_floor_usd=credit_floor_usd, role=role),
+                _grant_summary(grant),
+            )
+
+    async def record_fixed_cost_event(
+        self,
+        *,
+        clerk_user_id: str,
+        operation_kind: str,
+        origin_surface: str,
+        platform_cost_usd: float,
+        event_key: str | None = None,
+        thread_id: str | None = None,
+        task_id: str | None = None,
+        source_file_id: str | None = None,
+        model: str | None = None,
+        note: str | None = None,
+    ) -> CostEventSummary:
+        platform_cost = round(max(float(platform_cost_usd), 0.0), 8)
+        openai_cost = round(
+            platform_cost / self._settings.billing_platform_markup_multiplier
+            if self._settings.billing_platform_markup_multiplier > 0
+            else platform_cost,
+            8,
+        )
+        return await self.record_cost_event(
+            clerk_user_id=clerk_user_id,
+            operation_kind=operation_kind,
+            origin_surface=origin_surface,
+            event_key=event_key,
+            thread_id=thread_id,
+            task_id=task_id,
+            source_file_id=source_file_id,
+            model=model,
+            pricing_version=PRICING_VERSION,
+            input_tokens=0,
+            cached_input_tokens=0,
+            output_tokens=0,
+            raw_usage={"requests": 1},
+            openai_cost_usd=openai_cost,
+            platform_multiplier=self._settings.billing_platform_markup_multiplier,
+            platform_cost_usd=platform_cost,
+            note=note,
+        )
+
     async def assert_can_start_billable_operation(
         self,
         *,

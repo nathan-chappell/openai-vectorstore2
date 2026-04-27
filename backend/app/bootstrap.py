@@ -11,7 +11,15 @@ from backend.app.core.config import AppSettings
 from backend.app.core.logging import configure_logging
 from backend.app.db.session import DatabaseManager
 from backend.app.integrations.openai_gateway import OpenAIGateway
-from backend.app.services import ActionService, AuthService, BillingService, PaymentService, ResearchImportService, SourceService
+from backend.app.services import (
+    ActionService,
+    AuthService,
+    BillingService,
+    FreeCreditService,
+    PaymentService,
+    ResearchImportService,
+    SourceService,
+)
 from backend.app.storage import StorageService, build_storage_service
 
 
@@ -21,6 +29,7 @@ class AppServices:
     database: DatabaseManager
     auth: AuthService
     billing: BillingService
+    free_credits: FreeCreditService
     payments: PaymentService
     storage: StorageService
     openai: OpenAIGateway
@@ -53,6 +62,7 @@ def create_services(settings: AppSettings) -> AppServices:
     database = DatabaseManager(settings)
     auth = build_auth_service(settings)
     billing = BillingService(settings=settings, database=database)
+    free_credits = FreeCreditService(settings=settings, database=database, auth=auth, billing=billing)
     payments = PaymentService(settings=settings, database=database, auth=auth, billing=billing)
     storage = build_storage_service(settings)
     openai = OpenAIGateway(settings)
@@ -62,6 +72,7 @@ def create_services(settings: AppSettings) -> AppServices:
         auth=auth,
         storage=storage,
         openai=openai,
+        billing=billing,
     )
     actions = ActionService(
         settings=settings,
@@ -76,6 +87,7 @@ def create_services(settings: AppSettings) -> AppServices:
         database=database,
         sources=sources,
         openai=openai,
+        billing=billing,
     )
     chat_store = VectorstoreChatStore(database=database, sources=sources)
     chatkit_server = VectorstoreChatKitServer(
@@ -92,6 +104,7 @@ def create_services(settings: AppSettings) -> AppServices:
         database=database,
         auth=auth,
         billing=billing,
+        free_credits=free_credits,
         payments=payments,
         storage=storage,
         openai=openai,

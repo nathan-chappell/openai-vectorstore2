@@ -94,6 +94,7 @@ class ActionService:
                     tag_match_mode=payload.tag_match_mode,
                     max_results=payload.max_results,
                 ),
+                origin_surface=origin_surface,
             )
             answer = await self._openai.answer_with_chunks(prompt=payload.prompt, hits=hits)
             await self._record_text_usage(
@@ -133,6 +134,7 @@ class ActionService:
                     tag_match_mode=payload.tag_match_mode,
                     max_results=payload.max_results,
                 ),
+                origin_surface=origin_surface,
             )
             answer = await self._openai.freeform_with_chunks(prompt=payload.prompt, hits=hits, mode=payload.mode)
             await self._record_text_usage(
@@ -178,6 +180,7 @@ class ActionService:
                     tag_match_mode=payload.tag_match_mode,
                     max_results=4,
                 ),
+                origin_surface=origin_surface,
             )
             image_prompt = payload.prompt
             if hits:
@@ -185,6 +188,17 @@ class ActionService:
                     f"- {hit.source_title} ({hit.locator.label()}): {hit.summary}" for hit in hits
                 )
             image_bytes, metadata = await self._openai.generate_image_bytes(prompt=image_prompt, size=payload.size)
+            await self._billing.record_fixed_cost_event(
+                clerk_user_id=clerk_user_id,
+                operation_kind="image_gen",
+                origin_surface=origin_surface,
+                platform_cost_usd=self._settings.billing_image_generation_cost_usd,
+                event_key=f"action:{task.id}:image",
+                thread_id=payload.origin_thread_id,
+                task_id=task.id,
+                model=str(metadata.get("model") or self._settings.openai_image_generation_model),
+                note=f"Image generation size={payload.size}.",
+            )
             asset = await self._store_asset(
                 library=library,
                 task_id=task.id,
@@ -227,6 +241,7 @@ class ActionService:
                     tag_match_mode=payload.tag_match_mode,
                     max_results=4,
                 ),
+                origin_surface=origin_surface,
             )
             speech_text = (
                 payload.source_text.strip()
@@ -238,6 +253,21 @@ class ActionService:
                 text=speech_text,
                 voice=voice,
                 response_format=payload.response_format,
+            )
+            voice_cost = (
+                max(1, (len(speech_text) + 999) // 1000)
+                * self._settings.billing_voice_generation_cost_per_1k_chars_usd
+            )
+            await self._billing.record_fixed_cost_event(
+                clerk_user_id=clerk_user_id,
+                operation_kind="voice_gen",
+                origin_surface=origin_surface,
+                platform_cost_usd=voice_cost,
+                event_key=f"action:{task.id}:voice",
+                thread_id=payload.origin_thread_id,
+                task_id=task.id,
+                model=str(metadata.get("model") or self._settings.openai_speech_model),
+                note=f"Voice generation chars={len(speech_text)} format={payload.response_format}.",
             )
             media_type = {"mp3": "audio/mpeg", "wav": "audio/wav", "opus": "audio/opus"}[payload.response_format]
             asset = await self._store_asset(

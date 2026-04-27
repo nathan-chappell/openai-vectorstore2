@@ -39,6 +39,7 @@ from backend.app.schemas import (
     TaskSummary,
 )
 from backend.app.services.sources import SourceService
+from backend.app.services.billing import BillingService
 
 logger = logging.getLogger(__name__)
 ResearchProgressCallback = Callable[[str, str], Awaitable[None]]
@@ -94,11 +95,13 @@ class ResearchImportService:
         database: DatabaseManager,
         sources: SourceService,
         openai: OpenAIGateway,
+        billing: BillingService,
     ) -> None:
         self._settings = settings
         self._database = database
         self._sources = sources
         self._openai = openai
+        self._billing = billing
 
     async def create_import(
         self,
@@ -168,6 +171,9 @@ class ResearchImportService:
 
             await _emit_research_progress(progress_callback, "search", "Discovering primary references.")
             candidate_inputs = await self._candidate_inputs_from_seed(
+                clerk_user_id=clerk_user_id,
+                task_id=task.id,
+                origin_surface=origin_surface,
                 seed_material=seed_material,
                 request=payload,
                 progress_callback=progress_callback,
@@ -235,6 +241,9 @@ class ResearchImportService:
                     f"Looking for another layer of references from {len(frontier)} promising source{'' if len(frontier) == 1 else 's'}.",
                 )
                 followup_inputs = await self._candidate_inputs_from_frontier(
+                    clerk_user_id=clerk_user_id,
+                    task_id=task.id,
+                    origin_surface=origin_surface,
                     parents=frontier,
                     request=payload,
                     depth=next_depth,
@@ -761,6 +770,9 @@ class ResearchImportService:
     async def _candidate_inputs_from_seed(
         self,
         *,
+        clerk_user_id: str,
+        task_id: str,
+        origin_surface: str,
         seed_material: ResearchMaterial,
         request: ResearchImportCreateRequest,
         progress_callback: ResearchProgressCallback | None = None,
@@ -805,6 +817,16 @@ class ResearchImportService:
                     self._settings.research_import_max_candidates_per_source,
                 ),
             )
+            await self._billing.record_fixed_cost_event(
+                clerk_user_id=clerk_user_id,
+                operation_kind="research_discovery",
+                origin_surface=origin_surface,
+                platform_cost_usd=self._settings.billing_research_discovery_cost_usd,
+                event_key=f"research:{task_id}:seed_discovery",
+                task_id=task_id,
+                model=self._settings.openai_fast_model,
+                note="OpenAI web-search research discovery.",
+            )
             for item in discovery.candidates:
                 candidates.append(
                     {
@@ -836,6 +858,9 @@ class ResearchImportService:
     async def _candidate_inputs_from_frontier(
         self,
         *,
+        clerk_user_id: str,
+        task_id: str,
+        origin_surface: str,
         parents: list[ResearchImportCandidateSummary],
         request: ResearchImportCreateRequest,
         depth: int,
@@ -861,6 +886,16 @@ class ResearchImportService:
             discovery = await self._openai.discover_research_candidates(
                 query=query,
                 max_candidates=min(per_parent_limit, remaining_slots - len(candidates)),
+            )
+            await self._billing.record_fixed_cost_event(
+                clerk_user_id=clerk_user_id,
+                operation_kind="research_discovery",
+                origin_surface=origin_surface,
+                platform_cost_usd=self._settings.billing_research_discovery_cost_usd,
+                event_key=f"research:{task_id}:frontier:{depth}:{parent.id}",
+                task_id=task_id,
+                model=self._settings.openai_fast_model,
+                note="OpenAI web-search follow-up research discovery.",
             )
             count_before_parent = len(candidates)
             for item in discovery.candidates:

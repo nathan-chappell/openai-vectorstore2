@@ -42,8 +42,8 @@ The test upgrades a temporary SQLite database to Alembic head and compares migra
 The initial migration is `migrations/versions/20260425_0001_initial_schema.py`. It covers:
 
 - app users and libraries
-- tags and source tag links
-- source files and optional semantic chunks
+- legacy tags and source tag links, later collapsed into `source_file.tag_slug`
+- source files with one representative tag slug and optional semantic chunks
 - generated assets
 - app tasks
 - ChatKit threads, entries, and attachments

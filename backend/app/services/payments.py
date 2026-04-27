@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from io import BytesIO
 import logging
 import re
@@ -241,6 +241,20 @@ class PaymentService:
                 if refreshed is None:
                     raise FileNotFoundError("Payment attempt was not found after confirmation.")
                 return _payment_attempt_summary(refreshed)
+        if status == "rejected_payment" and attempt.credit_grant_id is not None:
+            await self._revoke_attempt_credit(
+                attempt_id=attempt.id,
+                clerk_user_id=attempt.clerk_user_id,
+                amount_usd=float(attempt.expected_amount_usd),
+                note=f"Revoked PayPal receipt credit: {attempt.reference_code}. {decision_note.strip()}",
+                admin_clerk_user_id=admin_clerk_user_id,
+                provider_reference=attempt.provider_reference,
+            )
+            async with self._database.session() as session:
+                refreshed = await session.get(PaymentAttempt, attempt.id)
+                if refreshed is None:
+                    raise FileNotFoundError("Payment attempt was not found after rejection.")
+                return _payment_attempt_summary(refreshed)
         return _payment_attempt_summary(attempt)
 
     async def _grant_attempt_credit(
@@ -271,8 +285,7 @@ class PaymentService:
             if attempt is None:
                 raise FileNotFoundError("Payment attempt was not found after credit grant.")
             attempt.credit_grant_id = grant.id
-            if temporary:
-                attempt.temporary_access_expires_at = _utcnow() + timedelta(days=self._settings.paypal_temporary_access_days)
+            attempt.temporary_access_expires_at = None
             attempt.updated_at = _utcnow()
             await session.commit()
         logger.info(
@@ -282,6 +295,36 @@ class PaymentService:
             amount_usd,
             grant.id,
             temporary,
+        )
+
+    async def _revoke_attempt_credit(
+        self,
+        *,
+        attempt_id: str,
+        clerk_user_id: str,
+        amount_usd: float,
+        note: str,
+        admin_clerk_user_id: str,
+        provider_reference: str | None,
+    ) -> None:
+        target = await self._auth.get_user_record(clerk_user_id)
+        _, reversal = await self._billing.adjust_credit(
+            clerk_user_id=clerk_user_id,
+            credit_amount_usd=-abs(amount_usd),
+            admin_clerk_user_id=admin_clerk_user_id,
+            note=note,
+            source="paypal_reversal",
+            payment_provider="paypal",
+            payment_reference=provider_reference or attempt_id,
+            credit_floor_usd=target.credit_floor_usd,
+            role=target.role,
+        )
+        logger.info(
+            "payment_credit_revoked attempt_id=%s clerk_user_id=%s amount_usd=%.2f reversal_grant_id=%s",
+            attempt_id,
+            clerk_user_id,
+            amount_usd,
+            reversal.id,
         )
 
     def _require_paypal_recipient(self) -> str:

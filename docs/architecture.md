@@ -13,7 +13,7 @@ OpenAI Vectorstore2 is organized around an app-core service layer. REST, ChatKit
 
 The ORM models live in `backend/app/models/records.py`.
 
-- App-core tables: users, libraries, tags, sources, source-tag links, optional semantic chunks, tasks, and generated assets.
+- App-core tables: users, libraries, sources with one representative tag slug, optional semantic chunks, tasks, billing records, payment/free-credit requests, and generated assets.
 - ChatKit tables: threads, entries, and attachments.
 - The important linkage points are `AppTask.origin_thread_id`, `AppChatThread.metadata_json.selected_source_ids`, and `AppChatAttachment.payload.metadata.source_id/task_id`.
 
@@ -21,8 +21,8 @@ The ORM models live in `backend/app/models/records.py`.
 
 The web UI is a Vite/React app served by FastAPI after build.
 
-- The left explorer is the primary file input surface: files, tags, query, and selected ChatKit scope.
-- Row click opens preview; checkboxes select the files ChatKit should treat as the default retrieval scope.
+- The file workspace is split into Explorer, Library, and Results views. Explorer handles folder navigation, Library handles semantic search plus one tag filter, and Results aggregates ChatKit/tool references.
+- Row click opens preview; ChatKit retrieval scope comes from explicit `@` file references, tool-provided source IDs, or current search/reveal actions rather than a persistent checkbox selection.
 - ChatKit composer attachments are disabled in the current UX. The backend attachment endpoint remains compatibility plumbing and still turns uploads into normal app-core sources if used by an older host.
 - Background ingest, re-split, and reindex tasks are polled while active so file readiness updates without manual refresh.
 
@@ -30,8 +30,8 @@ The web UI is a Vite/React app served by FastAPI after build.
 
 `backend/app/chatkit/server.py` implements the custom ChatKit backend.
 
-- ChatKit receives selected source IDs through request metadata and persists them to thread metadata.
-- Tools map directly to app-core operations: list/inspect sources, manage tags, preview split, ingest text, re-split, search, branch, QA, freeform, image, voice, list tasks, and inspect tasks.
+- ChatKit receives explicit source IDs and entity references through request/tool metadata.
+- Tools map directly to app-core operations: list/inspect sources, manage the representative source tag, preview split, ingest text, re-split, search, branch, QA, freeform, image, voice, list tasks, and inspect tasks.
 - The frontend composer lists common app tools such as research build, library search, grounded answer, split preview, and report saving; ChatKit forwards a selected composer tool as `inference_options.tool_choice`, and the server validates it against registered tools before forcing that tool choice on the agent run.
 - Long-running ChatKit tools emit progress updates with useful counts, task IDs, and generated asset IDs.
 
@@ -60,7 +60,6 @@ OpenAI vector-store attributes are denormalized on each indexed source file. Sem
 - `index_kind=source_file`
 - `source_id`, `source_kind`, `virtual_path`, `virtual_name`
 - numeric `created_at`
-- canonical comma-separated `tags`
-- bounded `tag_1` through `tag_8` for exact tag pre-filtering
+- scalar `tag` containing the source's representative tag slug when present
 
-Eight source tags is the current product limit because OpenAI vector-store attributes are scalar and bounded.
+Each source currently has at most one representative alphanumeric-hyphenated tag. The model should prefer an existing broad tag when it fits, otherwise create one concise reusable slug.

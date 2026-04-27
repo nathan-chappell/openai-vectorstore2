@@ -110,6 +110,34 @@ class PaymentAttempt(Base):
         self.review_json = dict(value)
 
 
+class FreeCreditRequest(Base):
+    __tablename__ = "free_credit_requests"
+    __table_args__ = (
+        Index("ix_free_credit_requests_user_created_at", "clerk_user_id", "created_at"),
+        Index("ix_free_credit_requests_status_created_at", "status", "created_at"),
+        Index("ix_free_credit_requests_idempotency_key", "idempotency_key"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
+    clerk_user_id: Mapped[str] = mapped_column(String(128), nullable=False, index=True)
+    requested_amount_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[str] = mapped_column(String(48), nullable=False, default="general")
+    reason: Mapped[str] = mapped_column(Text, nullable=False)
+    linkedin_profile_url: Mapped[str | None] = mapped_column(String(2048), nullable=True)
+    relationship_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    intended_use: Mapped[str | None] = mapped_column(Text, nullable=True)
+    evidence_verified: Mapped[bool] = mapped_column(nullable=False, default=False)
+    idempotency_key: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), nullable=False, default="pending")
+    decided_amount_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    reviewer_clerk_user_id: Mapped[str | None] = mapped_column(String(128), nullable=True, index=True)
+    credit_grant_id: Mapped[str | None] = mapped_column(String(32), nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class CostEvent(Base):
     __tablename__ = "cost_events"
     __table_args__ = (

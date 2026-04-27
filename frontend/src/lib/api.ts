@@ -3,6 +3,7 @@ import type {
 } from "./appTypes";
 import type {
   ActionResponse,
+  AdminFreeCreditDecisionRequest,
   AdminGrantCreditRequest,
   AdminGrantCreditResponse,
   AdminPaymentAttemptDecisionRequest,
@@ -23,6 +24,10 @@ import type {
   FreeformActionRequest,
   ImageActionRequest,
   FilesystemUpdateEntryRequest,
+  FreeCreditRequestCreate,
+  FreeCreditRequestListResponse,
+  FreeCreditRequestStatus,
+  FreeCreditRequestSummary,
   IngestFinalizeResponse,
   PaginationParams,
   PaymentAttemptListResponse,
@@ -139,6 +144,17 @@ export async function uploadPayPalReceipt(attemptId: string, file: File): Promis
   });
 }
 
+export async function listFreeCreditRequests(): Promise<FreeCreditRequestListResponse> {
+  return apiRequest<FreeCreditRequestListResponse>("/billing/free-credit-requests");
+}
+
+export async function createFreeCreditRequest(payload: FreeCreditRequestCreate): Promise<FreeCreditRequestSummary> {
+  return apiRequest<FreeCreditRequestSummary>("/billing/free-credit-requests", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export async function listAdminUsers(params: {
   query?: string;
   limit: number;
@@ -175,6 +191,19 @@ export async function listAdminPaymentAttempts(status: PaymentAttemptStatus): Pr
 
 export async function decideAdminPaymentAttempt(payload: AdminPaymentAttemptDecisionRequest): Promise<PaymentAttemptSummary> {
   return apiRequest<PaymentAttemptSummary>("/admin/payments/decide", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function listAdminFreeCreditRequests(status: FreeCreditRequestStatus): Promise<FreeCreditRequestListResponse> {
+  const searchParams = new URLSearchParams();
+  searchParams.set("status", status);
+  return apiRequest<FreeCreditRequestListResponse>(`/admin/free-credit-requests?${searchParams.toString()}`);
+}
+
+export async function decideAdminFreeCreditRequest(payload: AdminFreeCreditDecisionRequest): Promise<FreeCreditRequestSummary> {
+  return apiRequest<FreeCreditRequestSummary>("/admin/free-credit-requests/decide", {
     method: "POST",
     body: JSON.stringify(payload),
   });

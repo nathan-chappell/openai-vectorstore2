@@ -6,7 +6,7 @@ export const MODEL_CHOICES = [
 
 export const TEXT_PREVIEW_LIMIT = 40_000;
 export const CHUNK_PREVIEW_LIMIT = 40;
-export const SOURCE_TAG_LIMIT = 8;
+export const SOURCE_TAG_LIMIT = 1;
 export const ENTITY_FILE_HISTORY_LIMIT = 100;
 export const EXPLORER_RENDER_LIMIT = 250;
 export const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";

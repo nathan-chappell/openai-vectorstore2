@@ -48,6 +48,7 @@ from backend.app.schemas import (
     IngestFinalizeResponse,
     LibrarySourceDetail,
     LibrarySourceSummary,
+    OpenAIAttributes,
     SearchRequest,
     SearchResponse,
     SemanticChunkDraft,
@@ -63,6 +64,7 @@ from backend.app.schemas import (
     TaskSummary,
 )
 from backend.app.services.auth import AuthService
+from backend.app.services.billing import BillingService
 from backend.app.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -163,12 +165,14 @@ class SourceService:
         auth: AuthService,
         storage: StorageService,
         openai: OpenAIGateway,
+        billing: BillingService,
     ) -> None:
         self._settings = settings
         self._database = database
         self._auth = auth
         self._storage = storage
         self._openai = openai
+        self._billing = billing
         self._ingest_semaphore: asyncio.Semaphore | None = None
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
@@ -1197,6 +1201,14 @@ class SourceService:
             extracted_text=extracted_text,
             user_guidance=user_guidance,
         )
+        await self._billing.record_fixed_cost_event(
+            clerk_user_id=clerk_user_id,
+            operation_kind="semantic_split_preview",
+            origin_surface="web",
+            platform_cost_usd=self._settings.billing_semantic_split_cost_usd,
+            model=self._settings.openai_agent_model,
+            note=f"Semantic split preview for {source_kind}.",
+        )
         normalized_split = SemanticSplitResult(
             strategy_label=split_result.strategy_label,
             tags=_dedupe_text_values(split_result.tags, limit=AUTO_TAG_LIMIT),
@@ -1428,6 +1440,17 @@ class SourceService:
                         extracted_text=extracted_text,
                         user_guidance="\n".join(part for part in tag_guidance_parts if part).strip() or None,
                     )
+                    await self._billing.record_fixed_cost_event(
+                        clerk_user_id=clerk_user_id,
+                        operation_kind="semantic_tag_assignment",
+                        origin_surface=task.origin_surface,
+                        platform_cost_usd=self._settings.billing_semantic_split_cost_usd,
+                        event_key=f"source:{source.id}:task:{task.id}:tag_assignment",
+                        task_id=task.id,
+                        source_file_id=source.id,
+                        model=self._settings.openai_agent_model,
+                        note="Semantic split call used for single-tag assignment.",
+                    )
                     auto_tag_slugs = _dedupe_text_values([slugify(tag) for tag in tag_split.tags], limit=AUTO_TAG_LIMIT)
                     source.tag_slug = auto_tag_slugs[0] if auto_tag_slugs else None
                     source.updated_at = _utcnow()
@@ -1479,7 +1502,17 @@ class SourceService:
                 vector_file_ids = await self._replace_source_vector_files(
                     source=source,
                     materials=index_materials,
-                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
+                    tag_slugs=[cast(str, source.tag_slug)] if source.tag_slug else [],
+                )
+                await self._billing.record_fixed_cost_event(
+                    clerk_user_id=clerk_user_id,
+                    operation_kind="vector_index",
+                    origin_surface=task.origin_surface,
+                    platform_cost_usd=self._settings.billing_vector_index_file_cost_usd * len(index_materials),
+                    event_key=f"source:{source.id}:task:{task.id}:vector_index",
+                    task_id=task.id,
+                    source_file_id=source.id,
+                    note=f"OpenAI vector indexing for {len(index_materials)} file part(s).",
                 )
                 task.state_json = {
                     "stage": "indexing_source_file",
@@ -1723,6 +1756,17 @@ class SourceService:
                     extracted_text=extracted_text,
                     user_guidance=user_guidance,
                 )
+                await self._billing.record_fixed_cost_event(
+                    clerk_user_id=clerk_user_id,
+                    operation_kind="semantic_resplit",
+                    origin_surface=task.origin_surface,
+                    platform_cost_usd=self._settings.billing_semantic_split_cost_usd,
+                    event_key=f"source:{source.id}:task:{task.id}:semantic_resplit",
+                    task_id=task.id,
+                    source_file_id=source.id,
+                    model=self._settings.openai_agent_model,
+                    note="Semantic re-split request.",
+                )
                 logger.info(
                     "source_resplit_split_completed clerk_user_id=%s source_id=%s task_id=%s tags=%s chunks=%s duration_ms=%.1f",
                     clerk_user_id,
@@ -1808,7 +1852,17 @@ class SourceService:
                 vector_file_ids = await self._replace_source_vector_files(
                     source=source,
                     materials=index_materials,
-                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
+                    tag_slugs=[cast(str, source.tag_slug)] if source.tag_slug else [],
+                )
+                await self._billing.record_fixed_cost_event(
+                    clerk_user_id=clerk_user_id,
+                    operation_kind="vector_index",
+                    origin_surface=task.origin_surface,
+                    platform_cost_usd=self._settings.billing_vector_index_file_cost_usd * len(index_materials),
+                    event_key=f"source:{source.id}:task:{task.id}:vector_index",
+                    task_id=task.id,
+                    source_file_id=source.id,
+                    note=f"OpenAI vector indexing for {len(index_materials)} file part(s).",
                 )
 
                 source.status = "ready"
@@ -2012,7 +2066,17 @@ class SourceService:
                 vector_file_ids = await self._replace_source_vector_files(
                     source=source,
                     materials=index_materials,
-                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
+                    tag_slugs=[cast(str, source.tag_slug)] if source.tag_slug else [],
+                )
+                await self._billing.record_fixed_cost_event(
+                    clerk_user_id=clerk_user_id,
+                    operation_kind="vector_reindex",
+                    origin_surface=task.origin_surface,
+                    platform_cost_usd=self._settings.billing_vector_index_file_cost_usd * len(index_materials),
+                    event_key=f"source:{source.id}:task:{task.id}:vector_reindex",
+                    task_id=task.id,
+                    source_file_id=source.id,
+                    note=f"OpenAI vector reindexing for {len(index_materials)} file part(s).",
                 )
                 reindexed_source_file = True
                 task.state_json = {
@@ -2128,14 +2192,28 @@ class SourceService:
                 reindexed_source_file,
             )
 
-    async def search(self, *, clerk_user_id: str, request: SearchRequest) -> SearchResponse:
-        hits = await self.search_chunks(clerk_user_id=clerk_user_id, request=request)
+    async def search(
+        self,
+        *,
+        clerk_user_id: str,
+        request: SearchRequest,
+        origin_surface: str = "system",
+    ) -> SearchResponse:
+        hits = await self.search_chunks(clerk_user_id=clerk_user_id, request=request, origin_surface=origin_surface)
         return SearchResponse(query=request.query, hits=hits)
 
-    async def search_chunks(self, *, clerk_user_id: str, request: SearchRequest) -> list[ChunkHit]:
+    async def search_chunks(
+        self,
+        *,
+        clerk_user_id: str,
+        request: SearchRequest,
+        origin_surface: str = "system",
+    ) -> list[ChunkHit]:
         normalized_query = request.query.strip()
         if not normalized_query:
             return []
+        searched_vector_store = False
+        output: list[ChunkHit] = []
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
@@ -2167,6 +2245,7 @@ class SourceService:
                 max_results=request.max_results,
                 filters=filters,
             )
+            searched_vector_store = True
             source_ids = [
                 str(candidate.attributes.get("source_id"))
                 for candidate in candidates
@@ -2174,31 +2253,31 @@ class SourceService:
             ]
             vector_file_ids = [candidate.openai_file_id for candidate in candidates]
             if not source_ids and not vector_file_ids:
-                return []
-            sources = (
-                (
-                    await session.execute(
-                        select(SourceFile)
-                        .options(
-                            selectinload(SourceFile.chunks),
-                            selectinload(SourceFile.filesystem_entry),
-                        )
-                        .where(
-                            or_(
-                                SourceFile.id.in_(source_ids),
-                                SourceFile.openai_vector_file_id.in_(vector_file_ids),
+                sources = []
+            else:
+                sources = (
+                    (
+                        await session.execute(
+                            select(SourceFile)
+                            .options(
+                                selectinload(SourceFile.chunks),
+                                selectinload(SourceFile.filesystem_entry),
+                            )
+                            .where(
+                                or_(
+                                    SourceFile.id.in_(source_ids),
+                                    SourceFile.openai_vector_file_id.in_(vector_file_ids),
+                                )
                             )
                         )
                     )
+                    .scalars()
+                    .all()
                 )
-                .scalars()
-                .all()
-            )
             source_map = {source.id: source for source in sources}
             source_by_vector_file_id = {
                 source.openai_vector_file_id: source for source in sources if source.openai_vector_file_id is not None
             }
-            output: list[ChunkHit] = []
             seen_source_ids: set[str] = set()
             for candidate in candidates:
                 candidate_source_id = candidate.attributes.get("source_id")
@@ -2222,7 +2301,15 @@ class SourceService:
                     continue
                 seen_source_ids.add(source.id)
                 output.append(self._source_hit(source, candidate=candidate))
-            return output
+        if searched_vector_store:
+            await self._billing.record_fixed_cost_event(
+                clerk_user_id=clerk_user_id,
+                operation_kind="vector_search",
+                origin_surface=origin_surface,
+                platform_cost_usd=self._settings.billing_vector_search_cost_usd,
+                note="OpenAI vector-store search request.",
+            )
+        return output
 
     async def branch_search(self, *, clerk_user_id: str, request: BranchSearchRequest) -> BranchSearchResponse:
         levels: list[BranchSearchLevel] = []
@@ -3057,7 +3144,7 @@ def split_pdf_payload_by_size(*, filename: str, payload: bytes, max_part_bytes: 
     if len(payload) <= max_part_bytes:
         return [PdfPayloadPart(filename=filename, payload=payload, start_page=1, end_page=_pdf_page_count(payload))]
 
-    from pypdf import PdfReader, PdfWriter
+    from pypdf import PdfReader
 
     reader = PdfReader(BytesIO(payload))
     page_count = len(reader.pages)
@@ -3245,7 +3332,7 @@ def _source_vector_file_ids(source: SourceFile) -> list[str]:
     output: list[str] = []
     metadata_ids = source.source_metadata.get("openai_vector_file_ids")
     if isinstance(metadata_ids, list):
-        output.extend(item for item in metadata_ids if isinstance(item, str) and item.strip())
+        output.extend(item for item in metadata_ids if item.strip())
     if source.openai_vector_file_id:
         output.append(source.openai_vector_file_id)
     return list(dict.fromkeys(output))

@@ -5,16 +5,21 @@ import type {
   AdminPortfolioPanelCallbacks,
   AdminUserSummary as SharedAdminUserSummary,
   CreditGrantRecord,
+  FreeCreditRequestRecord as SharedFreeCreditRequestRecord,
   ManualCreditGrantRequest,
   PaymentAttemptRecord as SharedPaymentAttemptRecord,
 } from "../../../vendor/ai-portfolio-admin/frontend";
 import {
+  createFreeCreditRequest,
   createPayPalPaymentAttempt,
+  decideAdminFreeCreditRequest,
   decideAdminPaymentAttempt,
   getPaymentIntegrationStatus,
   grantAdminCredit,
+  listAdminFreeCreditRequests,
   listAdminPaymentAttempts,
   listAdminUsers,
+  listFreeCreditRequests,
   listPayPalPaymentAttempts,
   setAdminUserActive,
   uploadPayPalReceipt,
@@ -24,6 +29,7 @@ import type {
   AdminSetUserActiveResponse,
   AdminUserSummary as LocalAdminUserSummary,
   AuthUser,
+  FreeCreditRequestSummary,
   PaymentAttemptSummary,
   PaymentIntegrationResponse,
 } from "../lib/types";
@@ -98,6 +104,28 @@ function toSharedPaymentAttempt(attempt: PaymentAttemptSummary): SharedPaymentAt
   };
 }
 
+function toSharedFreeCreditRequest(request: FreeCreditRequestSummary): SharedFreeCreditRequestRecord {
+  return {
+    id: request.id,
+    user_id: request.clerk_user_id,
+    requested_amount_usd: request.requested_amount_usd,
+    source: request.source,
+    reason: request.reason,
+    linkedin_profile_url: request.linkedin_profile_url,
+    relationship_note: request.relationship_note,
+    intended_use: request.intended_use,
+    evidence_verified: request.evidence_verified,
+    idempotency_key: request.idempotency_key,
+    status: request.status,
+    decided_amount_usd: request.decided_amount_usd,
+    decision_note: request.decision_note,
+    reviewer_user_id: request.reviewer_clerk_user_id,
+    credit_grant_id: request.credit_grant_id,
+    created_at: request.created_at,
+    decided_at: request.decided_at,
+  };
+}
+
 export function AdminWorkspacePanel({ user }: { user: AuthUser | null }) {
   const callbacks = useMemo<AdminPortfolioPanelCallbacks>(() => {
     let latestUsers: SharedAdminUserSummary[] = [];
@@ -126,6 +154,19 @@ export function AdminWorkspacePanel({ user }: { user: AuthUser | null }) {
           note: payload.note,
         });
         return toSharedGrant(payload, response);
+      },
+      async listFreeCreditRequests(status) {
+        const response = await listAdminFreeCreditRequests(status);
+        return response.requests.map(toSharedFreeCreditRequest);
+      },
+      async decideFreeCreditRequest(payload) {
+        const response = await decideAdminFreeCreditRequest({
+          request_id: payload.request_id,
+          status: payload.status,
+          credit_amount_usd: payload.credit_amount_usd,
+          decision_note: payload.decision_note,
+        });
+        return toSharedFreeCreditRequest(response);
       },
       async listPaymentAttempts(status) {
         const response = await listAdminPaymentAttempts(status);
@@ -162,7 +203,10 @@ function formatUsd(value: number): string {
 function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
   const [paymentStatus, setPaymentStatus] = useState<PaymentIntegrationResponse | null>(null);
   const [paymentAttempts, setPaymentAttempts] = useState<PaymentAttemptSummary[]>([]);
+  const [freeCreditRequests, setFreeCreditRequests] = useState<FreeCreditRequestSummary[]>([]);
   const [paymentAmount, setPaymentAmount] = useState("10.00");
+  const [freeCreditAmount, setFreeCreditAmount] = useState("5.00");
+  const [freeCreditReason, setFreeCreditReason] = useState("");
   const [selectedReceipt, setSelectedReceipt] = useState<File | null>(null);
   const [activeAttemptId, setActiveAttemptId] = useState<string | null>(null);
   const [status, setStatus] = useState<string | null>(null);
@@ -170,11 +214,12 @@ function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
   useEffect(() => {
     let cancelled = false;
     setStatus(null);
-    void Promise.all([getPaymentIntegrationStatus(), listPayPalPaymentAttempts()])
-      .then(([response, attemptResponse]) => {
+    void Promise.all([getPaymentIntegrationStatus(), listPayPalPaymentAttempts(), listFreeCreditRequests()])
+      .then(([response, attemptResponse, freeCreditResponse]) => {
         if (!cancelled) {
           setPaymentStatus(response);
           setPaymentAttempts(attemptResponse.attempts);
+          setFreeCreditRequests(freeCreditResponse.requests);
           setActiveAttemptId(attemptResponse.attempts[0]?.id ?? null);
         }
       })
@@ -220,6 +265,30 @@ function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
       setStatus(attempt.review_reason ?? `Receipt reviewed: ${attempt.status}.`);
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Unable to upload receipt.");
+    }
+  }
+
+  async function submitFreeCreditRequest(): Promise<void> {
+    const requestedAmount = Number(freeCreditAmount);
+    if (!freeCreditReason.trim()) {
+      setStatus("Add a short note for the credit request.");
+      return;
+    }
+    if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+      setStatus("Enter a positive free-credit amount.");
+      return;
+    }
+    try {
+      const request = await createFreeCreditRequest({
+        requested_amount_usd: requestedAmount,
+        source: "general",
+        reason: freeCreditReason.trim(),
+      });
+      setFreeCreditRequests((current) => [request, ...current]);
+      setFreeCreditReason("");
+      setStatus(request.decision_note ?? `Free-credit request is ${request.status.replaceAll("_", " ")}.`);
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "Unable to request free credit.");
     }
   }
 
@@ -321,6 +390,41 @@ function AccountWorkspacePanel({ user }: { user: AuthUser | null }) {
               </button>
             </div>
           ) : null}
+        </section>
+        <section className="account-settings-section" aria-label="Free credit requests">
+          <p className="eyebrow">Access</p>
+          <h2>Request free credit</h2>
+          <dl>
+            <div>
+              <dt>Latest request</dt>
+              <dd>{freeCreditRequests[0]?.status.replaceAll("_", " ") ?? "None"}</dd>
+            </div>
+            <div>
+              <dt>Decision</dt>
+              <dd>{freeCreditRequests[0]?.decision_note ?? "Requests are reviewed by an admin."}</dd>
+            </div>
+          </dl>
+          <div className="payment-receipt-flow">
+            <label>
+              Amount
+              <input
+                inputMode="decimal"
+                onChange={(event) => setFreeCreditAmount(event.currentTarget.value)}
+                value={freeCreditAmount}
+              />
+            </label>
+            <label>
+              Request note
+              <textarea
+                onChange={(event) => setFreeCreditReason(event.currentTarget.value)}
+                placeholder="What are you trying to test or build?"
+                value={freeCreditReason}
+              />
+            </label>
+            <button type="button" className="secondary-button" onClick={() => void submitFreeCreditRequest()}>
+              Request credit
+            </button>
+          </div>
         </section>
       </div>
     </section>

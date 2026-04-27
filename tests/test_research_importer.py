@@ -98,6 +98,7 @@ async def test_research_import_linkedin_export_seed_is_cleaned(configured_settin
         database=cast(Any, None),
         sources=cast(Any, None),
         openai=cast(Any, None),
+        billing=cast(Any, None),
     )
 
     material = await service._material_from_seed(
@@ -127,6 +128,7 @@ def test_research_candidate_summary_reflects_linked_source_status(configured_set
         database=cast(Any, None),
         sources=cast(Any, None),
         openai=cast(Any, None),
+        billing=cast(Any, None),
     )
     now = datetime.now(UTC)
     source = SourceFile(

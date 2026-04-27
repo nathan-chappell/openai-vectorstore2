@@ -106,6 +106,8 @@ PaymentAttemptStatus: TypeAlias = Literal[
     "expired_temporary_access",
     "manual_review_required",
 ]
+FreeCreditSource: TypeAlias = Literal["general", "linkedin_connection", "beta_tester", "manual_admin"]
+FreeCreditRequestStatus: TypeAlias = Literal["pending", "approved", "rejected", "manual_review_required", "expired"]
 
 
 class AuthUser(BaseModel):
@@ -254,6 +256,48 @@ class AdminPaymentAttemptDecisionRequest(BaseModel):
     decision_note: str = Field(min_length=1, max_length=500)
     credit_amount_usd: float | None = Field(default=None, gt=0)
     provider_reference: str | None = Field(default=None, max_length=255)
+
+
+class FreeCreditRequestCreate(BaseModel):
+    requested_amount_usd: float | None = Field(default=None, gt=0)
+    source: FreeCreditSource = "general"
+    reason: str = Field(min_length=1, max_length=1000)
+    linkedin_profile_url: str | None = Field(default=None, max_length=2048)
+    relationship_note: str | None = Field(default=None, max_length=1000)
+    intended_use: str | None = Field(default=None, max_length=1000)
+    idempotency_key: str | None = Field(default=None, max_length=255)
+
+
+class FreeCreditRequestSummary(BaseModel):
+    id: str
+    clerk_user_id: str
+    requested_amount_usd: float | None = None
+    source: FreeCreditSource
+    reason: str
+    linkedin_profile_url: str | None = None
+    relationship_note: str | None = None
+    intended_use: str | None = None
+    evidence_verified: bool = False
+    idempotency_key: str | None = None
+    status: FreeCreditRequestStatus
+    decided_amount_usd: float | None = None
+    decision_note: str | None = None
+    reviewer_clerk_user_id: str | None = None
+    credit_grant_id: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    decided_at: datetime | None = None
+
+
+class FreeCreditRequestListResponse(BaseModel):
+    requests: list[FreeCreditRequestSummary] = Field(default_factory=list)
+
+
+class AdminFreeCreditDecisionRequest(BaseModel):
+    request_id: str = Field(min_length=1, max_length=32)
+    status: Literal["approved", "rejected", "manual_review_required"]
+    credit_amount_usd: float | None = Field(default=None, gt=0)
+    decision_note: str = Field(min_length=1, max_length=500)
 
 
 class TagSummary(BaseModel):

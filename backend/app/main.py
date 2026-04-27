@@ -20,6 +20,7 @@ from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
 from backend.app.schemas import (
     ActionResponse,
+    AdminFreeCreditDecisionRequest,
     AdminGrantCreditRequest,
     AdminGrantCreditResponse,
     AdminSetUserActiveRequest,
@@ -39,6 +40,10 @@ from backend.app.schemas import (
     FilesystemListResponse,
     FilesystemSearchResponse,
     FilesystemUpdateEntryRequest,
+    FreeCreditRequestCreate,
+    FreeCreditRequestListResponse,
+    FreeCreditRequestStatus,
+    FreeCreditRequestSummary,
     FreeformRequest,
     ImageGenerationRequest,
     IngestFinalizeResponse,
@@ -258,6 +263,23 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
+    @app.get("/api/billing/free-credit-requests")
+    async def list_free_credit_requests_api(
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> FreeCreditRequestListResponse:
+        requests = await services.free_credits.list_user_requests(clerk_user_id=user.clerk_user_id)
+        return FreeCreditRequestListResponse(requests=requests)
+
+    @app.post("/api/billing/free-credit-requests")
+    async def create_free_credit_request_api(
+        payload: FreeCreditRequestCreate,
+        user: AuthenticatedUser = Depends(require_authenticated_web_user),
+    ) -> FreeCreditRequestSummary:
+        try:
+            return await services.free_credits.create_request(clerk_user_id=user.clerk_user_id, payload=payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     @app.post("/api/admin/credits/grant")
     async def admin_grant_credit_api(
         payload: AdminGrantCreditRequest,
@@ -281,6 +303,30 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     ) -> PaymentAttemptListResponse:
         attempts = await services.payments.list_admin_attempts(status=status_filter)
         return PaymentAttemptListResponse(attempts=attempts)
+
+    @app.get("/api/admin/free-credit-requests")
+    async def admin_list_free_credit_requests_api(
+        _: AuthenticatedUser = Depends(require_admin_web_user),
+        status_filter: FreeCreditRequestStatus | None = Query(default=None, alias="status"),
+    ) -> FreeCreditRequestListResponse:
+        requests = await services.free_credits.list_admin_requests(status=status_filter)
+        return FreeCreditRequestListResponse(requests=requests)
+
+    @app.post("/api/admin/free-credit-requests/decide")
+    async def admin_decide_free_credit_request_api(
+        payload: AdminFreeCreditDecisionRequest,
+        admin: AuthenticatedUser = Depends(require_admin_web_user),
+    ) -> FreeCreditRequestSummary:
+        try:
+            return await services.free_credits.decide_admin_request(
+                request_id=payload.request_id,
+                admin_clerk_user_id=admin.clerk_user_id,
+                status=payload.status,
+                decision_note=payload.decision_note,
+                credit_amount_usd=payload.credit_amount_usd,
+            )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     @app.post("/api/admin/payments/decide")
     async def admin_decide_payment_attempt_api(
@@ -745,7 +791,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         payload: SearchRequest,
         user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> SearchResponse:
-        return await services.sources.search(clerk_user_id=user.clerk_user_id, request=payload)
+        return await services.sources.search(clerk_user_id=user.clerk_user_id, request=payload, origin_surface="web")
 
     @app.post("/api/search/branch")
     async def branch_search_api(

@@ -39,6 +39,10 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "ActionResponse": ("ActionResponse", {"asset", "answer", "hits", "kind", "task_id"}),
     "AdminGrantCreditRequest": ("AdminGrantCreditRequest", {"clerk_user_id", "credit_amount_usd", "note"}),
     "AdminGrantCreditResponse": ("AdminGrantCreditResponse", {"balance", "grant"}),
+    "AdminFreeCreditDecisionRequest": (
+        "AdminFreeCreditDecisionRequest",
+        {"credit_amount_usd", "decision_note", "request_id", "status"},
+    ),
     "AdminSetUserActiveRequest": ("AdminSetUserActiveRequest", {"active", "clerk_user_id"}),
     "AdminSetUserActiveResponse": (
         "AdminSetUserActiveResponse",
@@ -85,6 +89,15 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "AdminPaymentAttemptDecisionRequest": (
         "AdminPaymentAttemptDecisionRequest",
         {"attempt_id", "credit_amount_usd", "decision_note", "provider_reference", "status"},
+    ),
+    "FreeCreditRequestCreate": (
+        "FreeCreditRequestCreate",
+        {"idempotency_key", "reason", "requested_amount_usd", "source"},
+    ),
+    "FreeCreditRequestListResponse": ("FreeCreditRequestListResponse", {"requests"}),
+    "FreeCreditRequestSummary": (
+        "FreeCreditRequestSummary",
+        {"clerk_user_id", "credit_grant_id", "id", "reason", "requested_amount_usd", "status"},
     ),
     "BranchSearchResponse": ("BranchSearchResponse", {"descend", "levels", "max_width", "query"}),
     "ChunkHit": ("ChunkHit", {"attributes", "chunk_id", "locator", "score", "source_file_id", "text"}),
@@ -388,6 +401,7 @@ async def test_http_paypal_receipt_upload_grants_temporary_credit(
             assert reviewed.status_code == 200
             reviewed_payload = reviewed.json()
             assert reviewed_payload["status"] == "temporarily_approved"
+            assert reviewed_payload["temporary_access_expires_at"] is None
             assert reviewed_payload["credit_grant_id"]
             assert reviewed_payload["provider_reference"] == "PAYPAL123456789"
 
@@ -413,6 +427,56 @@ async def test_http_paypal_receipt_upload_grants_temporary_credit(
             )
             assert confirmed.status_code == 200
             assert confirmed.json()["status"] == "confirmed_paid"
+
+
+@pytest.mark.asyncio
+async def test_http_free_credit_request_can_be_approved_by_admin(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            created = await client.post(
+                "/api/billing/free-credit-requests",
+                headers=auth_headers,
+                json={
+                    "requested_amount_usd": 7.0,
+                    "source": "general",
+                    "reason": "Trying the beta workflows before adding payment details.",
+                    "idempotency_key": "free-credit-test-1",
+                },
+            )
+            assert created.status_code == 200
+            request_payload = created.json()
+            assert request_payload["status"] == "pending"
+
+            listed = await client.get("/api/admin/free-credit-requests?status=pending", headers=auth_headers)
+            assert listed.status_code == 200
+            assert listed.json()["requests"][0]["id"] == request_payload["id"]
+
+            approved = await client.post(
+                "/api/admin/free-credit-requests/decide",
+                headers=auth_headers,
+                json={
+                    "request_id": request_payload["id"],
+                    "status": "approved",
+                    "credit_amount_usd": 7.0,
+                    "decision_note": "Approved for beta test.",
+                },
+            )
+            assert approved.status_code == 200
+            approved_payload = approved.json()
+            assert approved_payload["status"] == "approved"
+            assert approved_payload["credit_grant_id"]
+            assert approved_payload["decided_amount_usd"] == 7.0
+
+            billing = await client.get("/api/billing/me", headers=auth_headers)
+            assert billing.status_code == 200
+            assert billing.json()["current_credit_usd"] == 7.0
 
 
 @pytest.mark.asyncio
@@ -1134,7 +1198,6 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             bravo_tag = await client.post("/api/tags", headers=auth_headers, json={"name": "bravo"})
             assert alpha_tag.status_code == 200
             assert bravo_tag.status_code == 200
-            alpha_tag_id = alpha_tag.json()["tag"]["id"]
             alpha_tag_slug = alpha_tag.json()["tag"]["slug"]
             bravo_tag_id = bravo_tag.json()["tag"]["id"]
             alpha_upload = await client.post(

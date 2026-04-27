@@ -891,7 +891,6 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     "results": [
                         hit
                         for level in _mapping_list(compact_payload.get("levels"))
-                        if isinstance(level, Mapping)
                         for hit in _mapping_list(level.get("hits"))
                     ],
                 },
