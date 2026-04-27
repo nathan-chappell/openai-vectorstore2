@@ -39,9 +39,10 @@ VITE_CHATKIT_DOMAIN_KEY=
 ```
 
 Use a separate database for each portfolio app when possible. If PlodAI and
-OpenAI Vectorstore2 must share the same PostgreSQL database service, keep them
-in separate schemas because their app-owned billing tables are not the same
-schema. For example, leave PlodAI on `public` and set:
+OpenAI Vectorstore2 must share the same PostgreSQL database service today, keep
+them in separate schemas because their Alembic histories and same-named
+billing tables are not yet a shared contract. For example, leave PlodAI on
+`public` for the current instance and set:
 
 ```bash
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
@@ -49,6 +50,11 @@ DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 
 The app will create the schema if it is missing and run Alembic inside that
 schema. Do not point both apps at the same PostgreSQL schema.
+
+The intended shared-service layout is `public` for shared account, credit,
+payment, and usage tracking tables, plus one app schema per product. See
+`docs/database-schemas.md` before consolidating PlodAI and this app onto one
+database.
 
 `openai_responses` is still the default agent provider. The first compatibility-mode configuration surface is available for OpenAI-compatible `/v1/chat/completions` endpoints:
 

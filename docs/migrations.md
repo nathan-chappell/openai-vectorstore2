@@ -19,6 +19,11 @@ columns. Prefer separate databases. If using one physical PostgreSQL service,
 set `DATABASE_POSTGRES_SCHEMA=openai_vectorstore2` for this app so migrations
 and app queries run in an isolated schema.
 
+The target shared-service architecture is not one shared `public` schema for
+everything. It is shared account/billing/payment/usage tables in `public`, app
+tables in app-specific schemas, and separate Alembic version tables per
+ownership boundary. See `docs/database-schemas.md`.
+
 ## Commands
 
 Upgrade the configured database:

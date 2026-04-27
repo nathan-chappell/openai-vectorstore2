@@ -46,6 +46,7 @@ Deployment checklist:
 - Completed docs pass: added Docker/Railway deployment notes covering service start command, health check, required env vars, storage choice, migration workflow, logs, admin integration, billing defaults, and image build/push commands.
 - Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:1.0.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
+- Move shared portfolio state toward a common PostgreSQL layout: `public` owns shared user, credit, payment, and usage tracking tables; `openai_vectorstore2` owns only this app's library/filesystem/source/task/chat/report tables; PlodAI owns only its farm/chat/image tables in a `plodai` schema. Until that split is implemented, use isolated app schemas or separate databases to avoid Alembic revision and table-shape collisions.
 - Completed docs pass for mandatory env vars: `OPENAI_API_KEY`, app signing secret, database URL, app base URL, Clerk values when auth is enabled, storage backend/S3-compatible values, billing/admin settings, and ChatKit domain key are documented in `.env.example` and `docs/deployment.md`.
 - Decide whether beta admin/auth/payments come from this repo's default implementation or the private shared `ai-portfolio-admin` submodule; either path must leave the app bootable and demoable.
 - Track the private on-prem companion repo as `vendor/openai-vectorstore2-on-prem`, sourced from `git@github.com:nathan-chappell/openai-vectorstore2-on-prem.git`, for RunPod/SGLang/fine-tuning work that should not live in the base app until the boundary is proven.
@@ -404,7 +405,7 @@ Acceptance criteria:
 
 ### 8. Shared Admin, Auth, And Payments Submodule
 
-Status: shared submodule foundation and host admin UI wiring complete; PayPal receipt credit flow implemented; host free-credit request storage/review implemented; full provider checkout/webhook payments remain planned.
+Status: shared submodule foundation and host admin UI wiring complete; PayPal receipt credit flow implemented; host free-credit request storage/review implemented; current PostgreSQL schema isolation unblocks shared DB services; public shared-schema migration remains planned.
 
 Goal:
 
@@ -422,6 +423,8 @@ Decision:
 - The private submodule can provide the production implementation for Clerk, admin panels, credit ledgers, and payment providers.
 - This repo must also provide a default/local provider path: local-dev auth, manual activation/credit grants, billing status, and clear "payments unavailable" behavior.
 - The fallback boundary is important both for developer experience and for making the app understandable when private production payment/admin wiring is not configured. A fresh clone still needs `git submodule update --init --recursive` because shared contracts are now a declared dependency.
+- Database ownership should converge on shared state in `public` and app state in app-specific schemas. Shared tables include account/user identity mirrors, credit balances, credit grants, free-credit requests, payment attempts, and cost/usage events. App schemas should hold only app-domain tables such as Vectorstore2 libraries/sources/tasks/chats and PlodAI farms/images/chats.
+- Alembic versioning must be separate per ownership boundary: a shared/public version table for shared admin/billing migrations, an `openai_vectorstore2` app version table for this repo's app tables, and a `plodai` app version table for PlodAI. Do not reuse one bare `public.alembic_version` across apps.
 
 Completed:
 
@@ -437,9 +440,12 @@ Remaining implementation plan:
 - Completed PayPal receipt pass: users can create a PayPal payment reference, upload text/PDF/email-style receipt evidence, receive immediate receipt-backed credit when amount/currency/recipient/reference checks pass, and admins can review/confirm/reject payment attempts from the shared admin panel.
 - Completed follow-up: host endpoints now persist free-credit requests, expose user request creation/listing, wire shared admin-panel review callbacks, grant approved request credit, preserve idempotency keys, and block duplicate active requests.
 - Completed follow-up: shared free-credit policy evaluation from `ai-portfolio-admin` is used as the host request pre-check while host apps own persistence and external evidence verification.
+- Completed deploy-unblocking workaround: this app can run in a dedicated PostgreSQL schema through `DATABASE_POSTGRES_SCHEMA=openai_vectorstore2`, which prevents immediate Alembic revision collisions with PlodAI when both point at one physical database.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
 - Expand host-local adapters only where they compose local services with shared contracts. Do not add host imports back into `ai-portfolio-admin`.
-- Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
+- Define the shared public table contract once, preferably in `ai-portfolio-admin`, and make host apps consume it through narrow adapters instead of carrying divergent `user_credit_balances`, `credit_grants`, and `cost_events` models.
+- Split migrations into shared/public and app-specific streams. The shared stream should create/update shared tables in `public`; this repo's app stream should create/update only `openai_vectorstore2` tables; PlodAI's app stream should create/update only `plodai` tables.
+- Align PlodAI's current credit/usage models with the richer shared contract during the next DB reinitialization, since the existing same-named PlodAI tables use a smaller shape and cannot safely share this repo's ledger tables as-is.
 - Add/update submodule setup docs with the private URL, clone command, and `git submodule update --init --recursive`.
 - Document clone/submodule setup and how the default provider behaves without private production wiring: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
