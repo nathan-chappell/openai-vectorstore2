@@ -16,7 +16,7 @@ The product is file-library first. Ingestion stores the original source file, pu
 
 ### 0. Typed Payload And Legacy Compression Refactor
 
-Status: in progress.
+Status: first pass implemented; continue opportunistic cleanup.
 
 Goal:
 
@@ -27,10 +27,7 @@ Goal:
 
 Implementation plan:
 
-- Inventory JSON payload shapes used across `SourceFile`, `StoredAsset`, `ResearchImportCandidate`, `CostEvent`, `AppTask`, and ChatKit records.
-- Add shared typed-dict aliases for JSON scalar/object/list payloads and narrow domain shapes such as source metadata, research provenance, OpenAI usage, and vector attributes.
-- Add SQLAlchemy model accessors for common JSON columns, including `SourceFile.source_metadata`, `SourceFile.vector_attributes`, `ResearchImportCandidate.provenance`, `StoredAsset.asset_metadata`, `CostEvent.raw_usage`, and ChatKit metadata/status payloads.
-- Refactor service hotspots to use typed accessors instead of direct `*_json` reads/writes, with casts only at the boundary where SQLAlchemy/JSON loses shape.
+- Completed first pass: inventoried the highest-traffic JSON payloads; added shared typed-dict aliases for source metadata, research provenance, OpenAI usage, vector attributes, structured objects, and task payloads; added SQLAlchemy model accessors for `SourceFile.source_metadata`, `SourceFile.vector_attributes`, `ResearchImportCandidate.provenance`, `StoredAsset.asset_metadata`, `CostEvent.raw_usage`, task object payloads, and ChatKit metadata/status payloads; and refactored source, research, billing, and ChatKit store hotspots to use them.
 - Be careful with method covariance and invariant containers: build with narrow local types, then assign or cast at the final wider return/override boundary when required.
 - Remove helpers/normalizers made redundant by stronger typed boundaries, and drop legacy chunk/vector compatibility code where tests show the current source-level indexing flow no longer depends on it.
 - Keep edits incremental with integration-level coverage; add unit tests only for tricky parsing or normalization logic that remains.
@@ -44,7 +41,7 @@ Acceptance criteria:
 
 ### 1. Split Explorer And Library Views
 
-Status: in progress.
+Status: first pass implemented; needs browser polish and follow-up coverage.
 
 Decision:
 
@@ -55,7 +52,7 @@ Decision:
 
 Implementation notes:
 
-- Add a clear view switcher or tabs for Explorer and Library.
+- Completed first pass: added Explorer/Library tabs, local current-folder fuzzy filtering for Explorer, a semantic Library query surface with tag pills and `all` / `any` mode, Enter replace search, Ctrl+Enter append/dedupe search, ChatKit `set_file_search` routing to Library, and fuzzy ChatKit composer entity search over known file entries.
 - Keep the existing virtual filesystem as the source of truth for folders and paths.
 - Explorer search is local to the current folder and should be simple/fuzzy over entry name, path, description, summary, suggested tags, and source metadata that is already present in the folder listing. It must not call OpenAI vector search.
 - Reuse the same fuzzy matching behavior for ChatKit composer entity search so file tags feel consistent with the Explorer.
@@ -65,6 +62,12 @@ Implementation notes:
 - ChatKit `set_file_search` should move the user to Library view and apply query/tag filters instead of crowding Explorer.
 - Preserve fast keyboard behavior in Explorer: `F2` rename, `Backspace` or `Alt+Left` go up, `Delete` delete, and Shift+arrow range selection.
 - Keep preview closable and resizable so file details stay readable.
+
+Next:
+
+- Improve Library result richness when a semantic hit is not already in the local entry cache.
+- Add a direct “select result for chat” control in Library rows instead of relying only on reveal/open behavior.
+- Consider moving research builder into Library view or a third task-focused area so Explorer stays purely file-browser oriented.
 
 Acceptance criteria:
 
