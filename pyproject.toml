@@ -46,7 +46,7 @@ openai-vectorstore2-stdio = "backend.app.mcp.stdio:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
-pythonpath = ["."]
+pythonpath = [".", "vendor/ai-portfolio-admin/src"]
 
 [tool.pyright]
 pythonVersion = "3.14"
