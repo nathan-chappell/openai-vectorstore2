@@ -78,6 +78,23 @@ type EntitySearchItem = {
   searchableText: string;
 };
 
+const ADMIN_ROUTE_PATH = "/admin";
+const WORKSPACE_ROUTE_PATH = "/";
+
+function browserAdminRouteOpen(): boolean {
+  return typeof window !== "undefined" && window.location.pathname === ADMIN_ROUTE_PATH;
+}
+
+function syncBrowserAdminRoute(open: boolean): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const nextPath = open ? ADMIN_ROUTE_PATH : WORKSPACE_ROUTE_PATH;
+  if (window.location.pathname !== nextPath) {
+    window.history.pushState({}, "", nextPath);
+  }
+}
+
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
@@ -101,7 +118,7 @@ export function App({ authMode }: AppProps) {
   const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
-  const [adminOpen, setAdminOpen] = useState(false);
+  const [adminOpen, setAdminOpen] = useState(browserAdminRouteOpen);
   const [status, setStatus] = useState("Opening files.");
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
@@ -157,6 +174,25 @@ export function App({ authMode }: AppProps) {
         }
       })();
     }, 0);
+  }, []);
+
+  useEffect(() => {
+    const handleRouteChange = (): void => {
+      setAdminOpen(browserAdminRouteOpen());
+    };
+    window.addEventListener("popstate", handleRouteChange);
+    handleRouteChange();
+    return () => {
+      window.removeEventListener("popstate", handleRouteChange);
+    };
+  }, []);
+
+  const toggleAdminPanel = useCallback((): void => {
+    setAdminOpen((current) => {
+      const next = !current;
+      syncBrowserAdminRoute(next);
+      return next;
+    });
   }, []);
 
   const rememberEntitySearchItems = useCallback((items: EntitySearchItem[]): void => {
@@ -842,7 +878,7 @@ export function App({ authMode }: AppProps) {
         user={user}
         adminOpen={adminOpen}
         onRefresh={() => void refreshAll()}
-        onToggleAdmin={() => setAdminOpen((current) => !current)}
+        onToggleAdmin={toggleAdminPanel}
       />
 
       {adminOpen && user ? <AdminWorkspacePanel user={user} /> : null}
