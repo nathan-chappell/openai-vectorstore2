@@ -11,7 +11,6 @@ AppOperation: TypeAlias = Literal[
     "create_folder",
     "update_filesystem_entry",
     "delete_filesystem_entries",
-    "set_file_selection",
     "reveal_file",
     "set_file_search",
     "list_tags",
@@ -106,11 +105,6 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("POST /api/filesystem/delete",),
         chatkit_tool="delete_filesystem_entries",
         mcp_tools=("delete_filesystem_entries",),
-    ),
-    AppCapability(
-        operation="set_file_selection",
-        summary="Coordinate the web explorer's selected files from ChatKit.",
-        chatkit_tool="set_file_selection",
     ),
     AppCapability(
         operation="reveal_file",

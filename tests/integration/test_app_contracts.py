@@ -1858,7 +1858,7 @@ async def test_chatkit_attachment_save_backfills_ingest_task_thread_link(
 
 
 @pytest.mark.asyncio
-async def test_chatkit_thread_metadata_persists_selected_source_scope(
+async def test_chatkit_thread_metadata_persists_origin_without_file_selection_scope(
     configured_settings: AppSettings,
     fake_openai: None,
 ) -> None:
@@ -1873,7 +1873,6 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
             credit_floor_usd=-1.0,
             bearer_token="local-dev",
         )
-        context.selected_source_ids = ["source_alpha", "source_bravo"]
         context.thread_origin = "web"
         thread = ThreadMetadata(
             id="chat_scope_metadata_test",
@@ -1889,8 +1888,8 @@ async def test_chatkit_thread_metadata_persists_selected_source_scope(
         loaded = await services.chatkit_server.store.load_thread(thread.id, context=context)
 
         assert loaded.metadata["existing"] == "value"
-        assert loaded.metadata["selected_source_ids"] == ["source_alpha", "source_bravo"]
-        assert loaded.metadata["selected_source_count"] == 2
+        assert "selected_source_ids" not in loaded.metadata
+        assert "selected_source_count" not in loaded.metadata
         assert loaded.metadata["scope_origin"] == "web"
         assert isinstance(loaded.metadata["scope_updated_at"], str)
         assert loaded.metadata["openai_conversation_id"] == "conv_scope_test"

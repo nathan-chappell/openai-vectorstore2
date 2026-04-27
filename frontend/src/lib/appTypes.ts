@@ -45,5 +45,4 @@ export type ChatKitDeeplinkEvent = {
 
 export type ChatKitMetadata = {
   origin: "web";
-  selected_source_ids: string[];
 } & Record<string, unknown>;

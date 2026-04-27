@@ -34,7 +34,7 @@ from backend.app.chatkit.store import VectorstoreChatContext
 NOW = datetime(2026, 4, 27, tzinfo=UTC)
 
 
-def test_selected_scope_falls_back_when_model_passes_openai_file_ids() -> None:
+def test_selected_scope_ignores_openai_file_ids_without_browser_selection_fallback() -> None:
     context = VectorstoreChatContext(
         clerk_user_id="local-dev",
         user_email="local-dev@example.com",
@@ -46,7 +46,7 @@ def test_selected_scope_falls_back_when_model_passes_openai_file_ids() -> None:
         thread_origin="web",
     )
 
-    assert selected_scope(context, ["file-openai-a", "file-openai-b"]) == ["source_a", "source_b"]
+    assert selected_scope(context, ["file-openai-a", "file-openai-b"]) == []
 
 
 def test_selected_scope_preserves_explicit_app_source_ids() -> None:
@@ -280,7 +280,7 @@ def _client_tool_call(item_id: str, *, status: Literal["pending", "completed"]) 
         created_at=NOW,
         status=status,
         call_id=f"call_{item_id}",
-        name="set_file_selection",
-        arguments={"source_ids": ["source_a"]},
+        name="reveal_file",
+        arguments={"source_id": "source_a"},
         output={"ok": True} if status == "completed" else None,
     )

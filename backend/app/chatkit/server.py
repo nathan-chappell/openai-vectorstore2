@@ -28,7 +28,7 @@ from chatkit.types import (
     ThreadStreamEvent,
     UserMessageItem,
 )
-from openai.types.responses.response_input_item_param import Message, ResponseInputItemParam
+from openai.types.responses.response_input_item_param import ResponseInputItemParam
 from openai.types.responses import ResponseInputContentParam, ResponseInputTextParam
 from openai.types.shared import Reasoning
 from pydantic import TypeAdapter
@@ -65,14 +65,10 @@ MODEL_ALIASES = {
     "powerful": "gpt-5.5",
 }
 MAX_AGENT_TURNS = 20
-CHATKIT_SELECTED_FILE_INPUT_LIMIT = 2
-CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES = 250_000
-CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES = 350_000
 CHATKIT_TEXT_SNIPPET_MAX_CHARS = 1_200
 CHATKIT_DETAIL_CHUNK_LIMIT = 8
 THREAD_TITLE_MAX_CHARS = 72
 STOP_AT_TOOL_NAMES = [
-    "set_file_selection",
     "reveal_file",
     "set_file_search",
     "delete_source",
@@ -243,7 +239,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             role=role,
             credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
-            selected_source_ids=_string_list(metadata.get("selected_source_ids")),
+            selected_source_ids=[],
             thread_origin=_string_or_none(metadata.get("origin")),
         )
 
@@ -347,16 +343,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             context=context,
             has_openai_conversation=had_openai_conversation,
         )
-        selected_source_context = await self._selected_source_context_items(
-            context=context,
-            attach_files=input_user_message is not None and provider == "openai_responses",
-        )
-        if selected_source_context:
-            agent_input = selected_source_context + agent_input
-
         logger.info(
             "chat turn started thread=%s provider=%s model=%s conversation=%s conversation_log_url=%s "
-            "previous_response=%s previous_response_log_url=%s selected_sources=%s input_items=%s "
+            "previous_response=%s previous_response_log_url=%s input_items=%s "
             "history_mode=%s compact_threshold=%s",
             thread.id,
             provider,
@@ -365,7 +354,6 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             openai_platform_log_url(conversation_id),
             openai_state.previous_response_id,
             openai_platform_log_url(openai_state.previous_response_id),
-            len(context.selected_source_ids),
             len(agent_input),
             "pending" if had_openai_conversation else "app_owned",
             self._settings.openai_context_compact_threshold,
@@ -547,72 +535,6 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         items = pending_chatkit_thread_items(items, has_openai_conversation=has_openai_conversation)
         return await self._converter.to_agent_input(items)
 
-    async def _selected_source_context_items(
-        self,
-        *,
-        context: VectorstoreChatContext,
-        attach_files: bool,
-    ) -> list[ResponseInputItemParam]:
-        if not context.selected_source_ids:
-            return []
-        if not attach_files:
-            return []
-        file_inputs = await self._sources.ensure_source_file_inputs(
-            clerk_user_id=context.clerk_user_id,
-            source_ids=context.selected_source_ids,
-            limit=CHATKIT_SELECTED_FILE_INPUT_LIMIT,
-            max_file_bytes=CHATKIT_SELECTED_FILE_SINGLE_MAX_BYTES,
-            max_total_bytes=CHATKIT_SELECTED_FILE_TOTAL_MAX_BYTES,
-        )
-        selected_count = len(list(dict.fromkeys(context.selected_source_ids)))
-        source_lines = [
-            f"- {item.virtual_path}: app source_id={item.source_id}; media_type={item.media_type}; "
-            f"bytes={item.byte_size}; attached OpenAI file_id={item.file_id}"
-            for item in file_inputs
-        ]
-        if source_lines:
-            source_text = "\n".join(source_lines)
-        else:
-            source_text = "- No selected files were small enough for direct attachment on this turn."
-        remaining_count = max(0, selected_count - len(file_inputs))
-        remaining_text = (
-            f" {remaining_count} selected file{'' if remaining_count == 1 else 's'} "
-            "remain available through retrieval tools instead of direct attachment."
-            if remaining_count
-            else ""
-        )
-        content: list[dict[str, object]] = [
-            {
-                "type": "input_text",
-                "text": (
-                    f"The user selected {selected_count} file{'' if selected_count == 1 else 's'} in the app explorer. "
-                    "Treat the selection as the primary retrieval scope unless the user asks to widen it. "
-                    "Use search_chunks or answer_from_library to search the full selected scope; those tools automatically use "
-                    "the current selection when selected_source_ids is omitted. "
-                    "When calling app tools, pass app source_id values as selected_source_ids; do not pass OpenAI file_id values. "
-                    f"Attached {len(file_inputs)} small selected file{'' if len(file_inputs) == 1 else 's'} for direct reading."
-                    f"{remaining_text}\n{source_text}"
-                ),
-            }
-        ]
-        content.extend(
-            {
-                "type": "input_file",
-                "file_id": item.file_id,
-            }
-            for item in file_inputs
-        )
-        return [
-            cast(
-                ResponseInputItemParam,
-                Message(
-                    role="user",
-                    type="message",
-                    content=cast(Any, content),
-                ),
-            )
-        ]
-
     def tool_names(self) -> set[str]:
         return {tool.name for tool in self._build_tools()}
 
@@ -741,20 +663,6 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 confirm=confirm,
             )
             return response.model_dump(mode="json")
-
-        @function_tool(name_override="set_file_selection")
-        async def set_file_selection_tool(
-            ctx: ChatKitToolContext,
-            source_ids: list[str],
-            mode: str = "replace",
-        ) -> dict[str, object]:
-            """Ask the client explorer to replace, add to, or remove from the selected files for chat."""
-            normalized_mode = mode if mode in {"replace", "add", "remove"} else "replace"
-            ctx.context.client_tool_call = ClientToolCall(
-                name="set_file_selection",
-                arguments={"source_ids": source_ids[:10], "mode": normalized_mode},
-            )
-            return {"client_tool": "set_file_selection", "source_ids": source_ids[:10], "mode": normalized_mode}
 
         @function_tool(name_override="reveal_file")
         async def reveal_file_tool(
@@ -904,7 +812,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             tag_match_mode: str = "all",
             max_results: int = 8,
         ) -> dict[str, object]:
-            """Search OpenAI vector-store indexed source files, filtered by selected files, tags, or paths."""
+            """Search OpenAI vector-store indexed source files, filtered by explicit source IDs, tags, or paths."""
             request_context = ctx.context.request_context
             await stream_chatkit_progress(ctx, "search", f"Searching indexed files for '{query[:80]}'.")
             response = await self._sources.search(
@@ -1598,7 +1506,6 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             create_folder_tool,
             update_filesystem_entry_tool,
             delete_filesystem_entries_tool,
-            set_file_selection_tool,
             reveal_file_tool,
             set_file_search_tool,
             list_tags_tool,
@@ -1645,17 +1552,17 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             "to replace its optional split records, build foldered research libraries directly from topics or papers, start lower-level research imports when needed, answer questions over built research libraries, save structured Markdown reports into the library, update a source's tags when the user explicitly asks, list task progress, answer questions, and create image or voice assets. "
             "When a conversation starts or the topic becomes clear, call name_thread early with a concise 3-8 word title. "
             "When the user asks to research a topic, gather papers, or build a library from a paper title, use build_research_library as the primary path and summarize progress in chat while the file explorer reflects created folders and indexed sources. "
-            "Chat composer attachments, pasted text, and the file explorer are the primary source input and selection surfaces; selected files are retrieval scope first, and only small ready files may be attached to a user turn as OpenAI file inputs. "
-            "Use set_file_selection, reveal_file, and set_file_search to coordinate the browser UI when the user asks you to select files, navigate to a file, or filter the explorer. "
+            "Chat composer attachments, pasted text, @ file references, and the file explorer are the primary source input surfaces. "
+            "Use reveal_file and set_file_search to coordinate the browser UI when the user asks you to navigate to a file or filter the explorer. "
             "Research build tools should report candidate, duplicate, download, and indexing state in chat and reveal created library folders when possible. "
             "Tool results are intentionally compact: source/file records expose id, name, type, description, summary, tag slugs, and a citation_link when available. "
             "When citing evidence, use markdown links with the provided citation_link, for example [Source title](chatkit-link://source?source_id=...). "
             "Those links reveal the source in the file explorer when clicked. "
             "Treat tag slugs as the stable tag identifiers; tag filter arguments named tag_ids accept tag slugs as well as legacy tag IDs. "
-            "Use selected_source_ids as the retrieval scope when present, and call find_files or search_chunks when the user asks to discover files beyond that selection. "
-            "If a selected source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
+            "Use explicit selected_source_ids only when the user names or @-references specific files; otherwise search the broader library with find_files, search_chunks, or answer_from_library. "
+            "If a referenced source is still processing, check the task with get_task or list_tasks and explain that retrieval can start after ingestion completes. "
             "Treat split previews as inspect-only; iterate by rerunning the preview with revised guidance before re-splitting. "
-            "Prefer the user's selected files when present. Only delete files, folders, or sources after explicit user confirmation. "
+            "Only delete files, folders, or sources after explicit user confirmation. "
             "Be concise, name the evidence you used, and say clearly when the library "
             "does not support a claim."
         )
@@ -1697,6 +1604,7 @@ def apply_agent_thread_title(thread: ThreadMetadata, title: str) -> str:
 
 
 def selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | None) -> list[str]:
+    del context
     if explicit_ids:
         source_ids = [
             source_id.strip()
@@ -1705,9 +1613,7 @@ def selected_scope(context: VectorstoreChatContext, explicit_ids: list[str] | No
         ]
         if source_ids:
             return source_ids
-        if context.selected_source_ids:
-            return list(context.selected_source_ids)
-    return list(context.selected_source_ids)
+    return []
 
 
 def chatkit_source_deeplink(source_id: str, *, locator: object | None = None) -> str:

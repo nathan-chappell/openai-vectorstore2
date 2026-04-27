@@ -30,9 +30,9 @@ import {
 import {
   DEFAULT_LIBRARY_QUERY,
   DEFAULT_SPLIT_GUIDANCE,
+  ENTITY_FILE_HISTORY_LIMIT,
   EXPLORER_RENDER_LIMIT,
   PREVIEW_SPLIT_STORAGE_KEY,
-  SELECTED_FILE_LIMIT,
   WORKSPACE_SPLIT_STORAGE_KEY,
 } from "./lib/appConstants";
 import type {
@@ -49,7 +49,6 @@ import {
   asResearchCandidates,
   asResearchIngested,
 } from "./lib/researchUi";
-import { fuzzyRankFilesystemEntries } from "./lib/search";
 import type {
   AuthUser,
   FilesystemBreadcrumb,
@@ -60,7 +59,7 @@ import type {
   TagSummary,
   TaskSummary,
 } from "./lib/types";
-import { isActiveTask } from "./lib/uiFormat";
+import { isActiveTask, stringAttribute } from "./lib/uiFormat";
 import {
   clamp,
   isEditableShortcutTarget,
@@ -69,6 +68,16 @@ import {
   sameStringArray,
   sameStringSet,
 } from "./lib/uiState";
+
+type EntitySearchItem = {
+  key: string;
+  title: string;
+  path: string;
+  sourceId: string;
+  entryId: string | null;
+  icon: string;
+  searchableText: string;
+};
 
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
@@ -87,7 +96,6 @@ export function App({ authMode }: AppProps) {
   const [libraryResultCount, setLibraryResultCount] = useState(0);
   const [librarySearching, setLibrarySearching] = useState(false);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
-  const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
   const [selectionAnchorEntryId, setSelectionAnchorEntryId] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
@@ -104,6 +112,7 @@ export function App({ authMode }: AppProps) {
   const currentFolderIdRef = useRef<string | null>(null);
   const selectedSourceIdRef = useRef<string | null>(null);
   const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
+  const entitySearchItemsRef = useRef<EntitySearchItem[]>([]);
   const tagsRef = useRef<TagSummary[]>([]);
   const clientToolUiQueueRef = useRef<Array<() => void | Promise<void>>>([]);
   const clientToolUiFlushRef = useRef<number | null>(null);
@@ -114,18 +123,9 @@ export function App({ authMode }: AppProps) {
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
-  const selectedSourceIdSet = useMemo(() => new Set(selectedSourceIds), [selectedSourceIds]);
   const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
   const folderEntries = filesystem?.entries ?? [];
   const visibleEntries = folderEntries;
-  const selectedFileEntries = useMemo(
-    () =>
-      selectedSourceIds.flatMap((sourceId) => {
-        const entry = Object.values(knownEntries).find((item) => item.source_id === sourceId);
-        return entry ? [entry] : [];
-      }),
-    [knownEntries, selectedSourceIds],
-  );
   const selectedSourceId = selectedSource?.id ?? null;
   currentFolderIdRef.current = currentFolderId;
   selectedSourceIdRef.current = selectedSourceId;
@@ -167,6 +167,25 @@ export function App({ authMode }: AppProps) {
     }, 0);
   }, []);
 
+  const rememberEntitySearchItems = useCallback((items: EntitySearchItem[]): void => {
+    if (!items.length) {
+      return;
+    }
+    const seenKeys = new Set<string>();
+    const nextItems: EntitySearchItem[] = [];
+    for (const item of [...items, ...entitySearchItemsRef.current]) {
+      if (seenKeys.has(item.key)) {
+        continue;
+      }
+      seenKeys.add(item.key);
+      nextItems.push(item);
+      if (nextItems.length >= ENTITY_FILE_HISTORY_LIMIT) {
+        break;
+      }
+    }
+    entitySearchItemsRef.current = nextItems;
+  }, []);
+
   const cacheEntries = useCallback((entries: FilesystemEntrySummary[]): void => {
     setKnownEntries((current) => {
       const next = { ...current };
@@ -175,7 +194,8 @@ export function App({ authMode }: AppProps) {
       }
       return next;
     });
-  }, []);
+    rememberEntitySearchItems(entries.flatMap((entry) => entitySearchItemFromEntry(entry) ?? []));
+  }, [rememberEntitySearchItems]);
 
   const loadFolder = useCallback(
     async (folderId: string | null): Promise<FilesystemListResponse> => {
@@ -196,7 +216,6 @@ export function App({ authMode }: AppProps) {
 
   const clearExplorerSelection = useCallback((): void => {
     setSelectedEntryIds([]);
-    setSelectedSourceIds([]);
     setFocusedEntryId(null);
     setSelectionAnchorEntryId(null);
     setSelectedSource(null);
@@ -287,11 +306,9 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     setChatKitMetadataGetter(() => ({
       origin: "web",
-      selected_source_ids: selectedSourceIds,
-      selected_virtual_paths: selectedFileEntries.map((entry) => entry.path),
     }));
     return () => setChatKitMetadataGetter(null);
-  }, [selectedFileEntries, selectedSourceIds]);
+  }, []);
 
   useEffect(() => {
     void refreshAll();
@@ -329,20 +346,6 @@ export function App({ authMode }: AppProps) {
     }
   }, []);
 
-  const syncChatSelection = useCallback(
-    (entryIds: string[]): void => {
-      const readySourceIds = entryIds
-        .map((entryId) => knownEntries[entryId])
-        .filter((entry): entry is FilesystemEntrySummary => Boolean(entry))
-        .filter((entry) => entry.kind === "file" && entry.status === "ready" && Boolean(entry.source_id))
-        .map((entry) => entry.source_id as string)
-        .slice(0, SELECTED_FILE_LIMIT);
-      const nextSourceIds = Array.from(new Set(readySourceIds));
-      setSelectedSourceIds((current) => (sameStringArray(current, nextSourceIds) ? current : nextSourceIds));
-    },
-    [knownEntries],
-  );
-
   const applyExplorerSelection = useCallback(
     (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null): void => {
       const nextEntryIds = Array.from(new Set(entryIds));
@@ -350,7 +353,6 @@ export function App({ authMode }: AppProps) {
       setSelectedEntryIds((current) => (sameStringArray(current, nextEntryIds) ? current : nextEntryIds));
       setFocusedEntryId((current) => current === focusedEntryId ? current : focusedEntryId);
       setSelectionAnchorEntryId((current) => current === nextAnchorEntryId ? current : nextAnchorEntryId);
-      syncChatSelection(nextEntryIds);
       const focusedEntry = knownEntries[focusedEntryId] ?? visibleEntries.find((entry) => entry.id === focusedEntryId);
       if (focusedEntry?.source_id) {
         void openSource(focusedEntry.source_id);
@@ -358,7 +360,7 @@ export function App({ authMode }: AppProps) {
       }
       setSelectedSource(null);
     },
-    [knownEntries, openSource, syncChatSelection, visibleEntries],
+    [knownEntries, openSource, visibleEntries],
   );
 
   const chooseEntries = useCallback(
@@ -477,7 +479,6 @@ export function App({ authMode }: AppProps) {
     try {
       const result = await deleteFilesystemEntries({ entry_ids: entryIds, confirm: true });
       setSelectedEntryIds([]);
-      setSelectedSourceIds([]);
       setFocusedEntryId(null);
       setSelectionAnchorEntryId(null);
       setSelectedSource(null);
@@ -506,7 +507,6 @@ export function App({ authMode }: AppProps) {
       try {
         await Promise.all(movingIds.map((entryId) => updateFilesystemEntry(entryId, { parent_id: folderId })));
         setSelectedEntryIds([]);
-        setSelectedSourceIds([]);
         setFocusedEntryId(null);
         setSelectionAnchorEntryId(null);
         await refreshExplorer();
@@ -565,6 +565,7 @@ export function App({ authMode }: AppProps) {
           const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === hit.source_file_id) ?? null;
           nextResults.push({ hit, entry });
         }
+        rememberEntitySearchItems(nextResults.map(entitySearchItemFromLibraryResult));
         setLibraryQuery(query);
         setLibraryResultCount(response.hits.length);
         setLibraryResults((current) => {
@@ -589,7 +590,7 @@ export function App({ authMode }: AppProps) {
         setLibrarySearching(false);
       }
     },
-    [libraryQuery, libraryTagMatchMode, selectedExplorerTagIds],
+    [libraryQuery, libraryTagMatchMode, rememberEntitySearchItems, selectedExplorerTagIds],
   );
 
   const toggleExplorerTag = useCallback(
@@ -612,35 +613,6 @@ export function App({ authMode }: AppProps) {
     },
     [runLibrarySearch, selectedExplorerTagIds],
   );
-
-  const toggleLibrarySourceSelection = useCallback(
-    (sourceId: string): void => {
-      const currentlySelected = selectedSourceIds.includes(sourceId);
-      const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === sourceId) ?? null;
-      setSelectedSourceIds((current) =>
-        current.includes(sourceId)
-          ? current.filter((id) => id !== sourceId)
-          : Array.from(new Set([...current, sourceId])).slice(0, SELECTED_FILE_LIMIT),
-      );
-      if (currentlySelected && entry) {
-        setSelectedEntryIds((current) => current.filter((id) => id !== entry.id));
-      }
-    },
-    [selectedSourceIds],
-  );
-
-  const selectLibraryResultsForChat = useCallback((): void => {
-    const sourceIds = libraryResults.map((result) => result.hit.source_file_id).slice(0, SELECTED_FILE_LIMIT);
-    setSelectedSourceIds(sourceIds);
-    setSelectedEntryIds([]);
-    setFocusedEntryId(null);
-    setSelectionAnchorEntryId(null);
-    setStatus(
-      `Selected ${sourceIds.length} semantic result${sourceIds.length === 1 ? "" : "s"} for ChatKit${
-        libraryResults.some((result) => !result.entry) ? "; some files are not loaded in Explorer yet" : ""
-      }.`,
-    );
-  }, [libraryResults]);
 
   const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
@@ -719,12 +691,8 @@ export function App({ authMode }: AppProps) {
         setFocusedEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
         setSelectionAnchorEntryId((current) => current === revealedEntry.id ? current : revealedEntry.id);
         if (revealedEntry.source_id) {
-          setSelectedSourceIds((current) =>
-            sameStringArray(current, [revealedEntry.source_id as string]) ? current : [revealedEntry.source_id as string],
-          );
           await openSource(revealedEntry.source_id);
         } else {
-          setSelectedSourceIds((current) => (current.length ? [] : current));
           setSelectedSource(null);
           setStatus(`Opened ${revealedEntry.path}.`);
         }
@@ -736,22 +704,22 @@ export function App({ authMode }: AppProps) {
 
   const searchChatEntities = useCallback(
     async (query: string): Promise<Entity[]> => {
-      const entries = fuzzyRankFilesystemEntries(Object.values(knownEntriesRef.current), query).slice(0, 12);
+      const entries = fuzzyRankEntitySearchItems(entitySearchItemsRef.current, query).slice(0, 12);
       return entries.map((entry) => {
         const data: Record<string, string> = {
-          entry_id: entry.id,
-          kind: entry.kind,
+          kind: "file",
           path: entry.path,
+          source_id: entry.sourceId,
         };
-        if (entry.source_id) {
-          data.source_id = entry.source_id;
+        if (entry.entryId) {
+          data.entry_id = entry.entryId;
         }
         return {
-          id: entry.source_id ?? entry.id,
-          title: entry.path,
-          icon: entry.kind === "folder" ? "lucide:folder" : "lucide:file-text",
+          id: entry.sourceId,
+          title: entry.title,
+          icon: entry.icon,
           interactive: true,
-          group: entry.kind === "folder" ? "Folders" : "Files",
+          group: "Files",
           data,
         };
       });
@@ -771,31 +739,6 @@ export function App({ authMode }: AppProps) {
 
   const handleClientTool = useCallback(
     async (toolCall: ChatKitClientToolCall): Promise<ChatKitClientToolResult> => {
-      if (toolCall.name === "set_file_selection") {
-        const rawIds = Array.isArray(toolCall.params.source_ids) ? toolCall.params.source_ids : [];
-        const sourceIds = rawIds.filter((id): id is string => typeof id === "string").slice(0, SELECTED_FILE_LIMIT);
-        const mode = typeof toolCall.params.mode === "string" ? toolCall.params.mode : "replace";
-        const entryIds = Object.values(knownEntriesRef.current)
-          .filter((entry) => entry.source_id && sourceIds.includes(entry.source_id))
-          .map((entry) => entry.id);
-        scheduleClientToolUiUpdate(() => {
-          setSelectedSourceIds((current) => {
-            const next =
-              mode === "add"
-                ? Array.from(new Set([...current, ...sourceIds])).slice(0, SELECTED_FILE_LIMIT)
-                : mode === "remove"
-                  ? current.filter((id) => !sourceIds.includes(id))
-                  : sourceIds;
-            return sameStringArray(current, next) ? current : next;
-          });
-          if (entryIds.length) {
-            setSelectedEntryIds((current) => (sameStringArray(current, entryIds) ? current : entryIds));
-            setFocusedEntryId((current) => current === entryIds[0] ? current : entryIds[0]);
-            setSelectionAnchorEntryId((current) => current === entryIds[0] ? current : entryIds[0]);
-          }
-        });
-        return { ok: true, selected_source_ids: sourceIds };
-      }
       if (toolCall.name === "set_file_search") {
         const query = typeof toolCall.params.query === "string" ? toolCall.params.query : "";
         const rawTagIds = Array.isArray(toolCall.params.tag_ids)
@@ -833,7 +776,6 @@ export function App({ authMode }: AppProps) {
           if (targetFolderId) {
             setSelectedExplorerTagIds((current) => current.length ? [] : current);
             setSelectedEntryIds((current) => current.length ? [] : current);
-            setSelectedSourceIds((current) => current.length ? [] : current);
             setFocusedEntryId(null);
             setSelectionAnchorEntryId(null);
             setSelectedSource(null);
@@ -960,9 +902,7 @@ export function App({ authMode }: AppProps) {
           selectedEntryIds={selectedEntryIds}
           selectedEntryIdSet={selectedEntryIdSet}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
-          selectedFileEntries={selectedFileEntries}
           selectedSource={selectedSource}
-          selectedSourceIdSet={selectedSourceIdSet}
           selectedSourceTagChanged={selectedSourceTagChanged}
           selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
           selectionAnchorEntryId={selectionAnchorEntryId}
@@ -991,8 +931,6 @@ export function App({ authMode }: AppProps) {
           onTagToggle={toggleSelectedSourceTagDraft}
           onLibraryQueryChange={setLibraryQuery}
           onLibraryTagMatchModeChange={changeLibraryTagMatchMode}
-          onSelectLibraryResults={selectLibraryResultsForChat}
-          onToggleLibrarySourceSelection={toggleLibrarySourceSelection}
           onToggleExplorerTag={toggleExplorerTag}
           onUploadGuidanceChange={setUploadGuidance}
           canGoBackFolder={canGoBackFolder}
@@ -1032,4 +970,101 @@ export function App({ authMode }: AppProps) {
       {shortcutDialogOpen ? <ExplorerShortcutDialog onClose={() => setShortcutDialogOpen(false)} /> : null}
     </main>
   );
+}
+
+function entitySearchItemFromEntry(entry: FilesystemEntrySummary): EntitySearchItem | null {
+  if (entry.kind !== "file" || !entry.source_id) {
+    return null;
+  }
+  const title = entry.path || entry.name;
+  return {
+    key: entry.source_id,
+    title,
+    path: entry.path,
+    sourceId: entry.source_id,
+    entryId: entry.id,
+    icon: "lucide:file-text",
+    searchableText: [
+      entry.name,
+      entry.path,
+      entry.description,
+      entry.summary,
+      entry.source_kind,
+      entry.media_type,
+      ...entry.suggested_tags,
+      ...entry.tags.map((tag) => tag.name),
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+function entitySearchItemFromLibraryResult(result: LibrarySearchResult): EntitySearchItem {
+  const { hit, entry } = result;
+  const title = entry?.path ?? stringAttribute(hit.attributes, "virtual_path") ?? hit.source_title;
+  const path = entry?.path ?? stringAttribute(hit.attributes, "virtual_path") ?? hit.original_filename;
+  return {
+    key: hit.source_file_id,
+    title,
+    path,
+    sourceId: hit.source_file_id,
+    entryId: entry?.id ?? null,
+    icon: "lucide:file-text",
+    searchableText: [
+      title,
+      path,
+      hit.source_title,
+      hit.original_filename,
+      hit.title,
+      hit.summary,
+      hit.text,
+      ...hit.tags,
+      entry?.description,
+      entry?.summary,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+function fuzzyRankEntitySearchItems(items: EntitySearchItem[], query: string): EntitySearchItem[] {
+  const normalizedQuery = query.trim().toLocaleLowerCase();
+  if (!normalizedQuery) {
+    return items;
+  }
+  return items
+    .map((item) => ({ item, score: fuzzyEntityScore(item, normalizedQuery) }))
+    .filter((result) => result.score > 0)
+    .sort((left, right) => right.score - left.score || left.item.title.localeCompare(right.item.title))
+    .map((result) => result.item);
+}
+
+function fuzzyEntityScore(item: EntitySearchItem, normalizedQuery: string): number {
+  const candidate = item.searchableText.toLocaleLowerCase();
+  if (!candidate) {
+    return 0;
+  }
+  if (candidate === normalizedQuery) {
+    return 100;
+  }
+  if (candidate.startsWith(normalizedQuery)) {
+    return 80;
+  }
+  if (candidate.includes(normalizedQuery)) {
+    return 60;
+  }
+  return isOrderedSubsequence(normalizedQuery, candidate) ? 30 + Math.min(20, normalizedQuery.length) : 0;
+}
+
+function isOrderedSubsequence(needle: string, haystack: string): boolean {
+  let needleIndex = 0;
+  for (const character of haystack) {
+    if (character === needle[needleIndex]) {
+      needleIndex += 1;
+      if (needleIndex === needle.length) {
+        return true;
+      }
+    }
+  }
+  return false;
 }

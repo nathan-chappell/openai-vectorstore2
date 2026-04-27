@@ -39,9 +39,7 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIds,
   selectedEntryIdSet,
   selectedExplorerTagIdSet,
-  selectedFileEntries,
   selectedSource,
-  selectedSourceIdSet,
   selectedSourceTagChanged,
   selectedSourceTagDraftIdSet,
   selectionAnchorEntryId,
@@ -70,8 +68,6 @@ export const FileExplorer = memo(function FileExplorer({
   onTagToggle,
   onLibraryQueryChange,
   onLibraryTagMatchModeChange,
-  onSelectLibraryResults,
-  onToggleLibrarySourceSelection,
   onToggleExplorerTag,
   onUploadGuidanceChange,
   canGoBackFolder,
@@ -95,9 +91,7 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIds: string[];
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagIdSet: Set<string>;
-  selectedFileEntries: FilesystemEntrySummary[];
   selectedSource: SourceDetail | null;
-  selectedSourceIdSet: Set<string>;
   selectedSourceTagChanged: boolean;
   selectedSourceTagDraftIdSet: Set<string>;
   selectionAnchorEntryId: string | null;
@@ -126,16 +120,13 @@ export const FileExplorer = memo(function FileExplorer({
   onTagToggle: (tagId: string) => void;
   onLibraryQueryChange: (value: string) => void;
   onLibraryTagMatchModeChange: (value: TagMatchMode) => void;
-  onSelectLibraryResults: () => void;
-  onToggleLibrarySourceSelection: (sourceId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;
   onUploadGuidanceChange: (value: string) => void;
   canGoBackFolder: boolean;
   canGoForwardFolder: boolean;
 }) {
   const selectedCount = selectedEntryIdSet.size;
-  const selectedFileLabel =
-    selectedFileEntries.length === 1 ? "1 indexed file selected" : `${selectedFileEntries.length} indexed files selected`;
+  const entryCountLabel = entries.length === 1 ? "1 item shown" : `${entries.length} items shown`;
   const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
   const entryIds = useMemo(() => entries.map((entry) => entry.id), [entries]);
   const previewPane = selectedSource ? (
@@ -321,10 +312,10 @@ export const FileExplorer = memo(function FileExplorer({
         </button>
         <div
           className="explorer-selection-summary"
-          title={selectedFileEntries.map((entry) => entry.path).join(", ") || "Arrow keys move, Left/Right navigate folder history, F2 renames, Delete removes"}
+          title="Use @ in ChatKit to reference files. Arrow keys move, Left/Right navigate folder history, F2 renames, Delete removes."
         >
-          <strong>{selectedFileLabel}</strong>
-          <span>{selectedFileEntries.slice(0, 3).map((entry) => entry.name).join(", ") || "No ready files"}</span>
+          <strong>{entryCountLabel}</strong>
+          <span>Use @ in chat to reference files</span>
         </div>
         <button type="button" className="icon-button" onClick={onShowShortcuts} aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
           ?
@@ -344,15 +335,12 @@ export const FileExplorer = memo(function FileExplorer({
             librarySearching={librarySearching}
             libraryTagMatchMode={libraryTagMatchMode}
             previewedSourceId={selectedSource?.id ?? null}
-            selectedSourceIdSet={selectedSourceIdSet}
             selectedTagIdSet={selectedExplorerTagIdSet}
             tags={tags}
-            onSelectResults={onSelectLibraryResults}
             onOpenSource={onOpenSource}
             onQueryChange={onLibraryQueryChange}
             onRunSearch={onRunLibrarySearch}
             onTagMatchModeChange={onLibraryTagMatchModeChange}
-            onToggleSourceSelection={onToggleLibrarySourceSelection}
             onToggleTag={onToggleExplorerTag}
           />
           {previewPane}
@@ -399,7 +387,7 @@ export const FileExplorer = memo(function FileExplorer({
                     entry={entry}
                     dragEntryIds={dragEntryIds.length ? dragEntryIds : [entry.id]}
                     focused={focusedEntryId === entry.id}
-                    selected={selectedEntryIdSet.has(entry.id) || (entry.source_id ? selectedSourceIdSet.has(entry.source_id) : false)}
+                    selected={selectedEntryIdSet.has(entry.id)}
                     onChoose={onChooseEntries}
                     onDropEntries={onDropEntries}
                     onOpen={onOpenEntry}

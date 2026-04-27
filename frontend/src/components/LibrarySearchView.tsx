@@ -15,15 +15,12 @@ export function LibrarySearchView({
   librarySearching,
   libraryTagMatchMode,
   previewedSourceId,
-  selectedSourceIdSet,
   selectedTagIdSet,
   tags,
-  onSelectResults,
   onOpenSource,
   onQueryChange,
   onRunSearch,
   onTagMatchModeChange,
-  onToggleSourceSelection,
   onToggleTag,
 }: {
   busy: boolean;
@@ -33,15 +30,12 @@ export function LibrarySearchView({
   librarySearching: boolean;
   libraryTagMatchMode: TagMatchMode;
   previewedSourceId: string | null;
-  selectedSourceIdSet: Set<string>;
   selectedTagIdSet: Set<string>;
   tags: TagSummary[];
-  onSelectResults: () => void;
   onOpenSource: (sourceId: string) => void;
   onQueryChange: (value: string) => void;
   onRunSearch: (mode: "replace" | "append") => void;
   onTagMatchModeChange: (value: TagMatchMode) => void;
-  onToggleSourceSelection: (sourceId: string) => void;
   onToggleTag: (tagId: string) => void;
 }) {
   const disabled = busy || librarySearching;
@@ -69,12 +63,6 @@ export function LibrarySearchView({
     return [...selectedTags, ...sortedTags.filter((tag) => !selectedTagIdSet.has(tag.id)).slice(0, unselectedLimit)];
   }, [selectedTagIdSet, showAllTags, tags]);
   const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
-  const chooseSource = (sourceId: string): void => {
-    if (!selectedSourceIdSet.has(sourceId)) {
-      onToggleSourceSelection(sourceId);
-    }
-    onOpenSource(sourceId);
-  };
   return (
     <section className="library-search-view" aria-label="Tag and semantic search">
       <div className="library-searchbar">
@@ -152,9 +140,6 @@ export function LibrarySearchView({
       <div className="library-result-summary">
         <strong>{libraryResults.length} source{libraryResults.length === 1 ? "" : "s"}</strong>
         <span>{libraryResultCount ? `${libraryResultCount} vector hit${libraryResultCount === 1 ? "" : "s"}` : "Press Enter to search."}</span>
-        <button type="button" className="secondary-button" onClick={onSelectResults} disabled={!libraryResults.length}>
-          Select results
-        </button>
       </div>
 
       <div className="file-list-header library-file-list-header">
@@ -168,10 +153,8 @@ export function LibrarySearchView({
         {libraryResults.map(({ hit, entry }) => {
           const resultName = entry?.name ?? stringAttribute(hit.attributes, "virtual_name") ?? hit.source_title;
           const resultPath = entry?.path ?? stringAttribute(hit.attributes, "virtual_path") ?? hit.original_filename;
-          const selected = selectedSourceIdSet.has(hit.source_file_id);
           const active = previewedSourceId === hit.source_file_id;
           const rowClassName = [
-            selected ? "selected-file-row" : "",
             active ? "active-file-row" : "",
           ]
             .filter(Boolean)
@@ -182,26 +165,19 @@ export function LibrarySearchView({
               key={hit.source_file_id}
               role="row"
               tabIndex={0}
-              aria-selected={selected}
+              aria-selected={active}
               className={rowClassName || undefined}
               data-source-id={hit.source_file_id}
-              onClick={() => chooseSource(hit.source_file_id)}
+              onClick={() => onOpenSource(hit.source_file_id)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
-                  chooseSource(hit.source_file_id);
+                  onOpenSource(hit.source_file_id);
                 }
               }}
             >
               <span role="cell" className="filesystem-name-cell">
-                <input
-                  aria-label={`Select ${resultName} for chat`}
-                  checked={selected}
-                  className="file-select-checkbox"
-                  onClick={(event) => event.stopPropagation()}
-                  onChange={() => onToggleSourceSelection(hit.source_file_id)}
-                  type="checkbox"
-                />
+                <span className="entry-icon file-icon">{entry?.source_kind?.toUpperCase().slice(0, 4) || "FILE"}</span>
                 <span>
                   <strong>{resultName}</strong>
                   <small>{resultPath}</small>

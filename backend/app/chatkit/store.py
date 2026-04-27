@@ -454,8 +454,6 @@ def thread_metadata_with_scope(
     context: VectorstoreChatContext,
 ) -> dict[str, object]:
     output: dict[str, object] = dict(metadata or {})
-    output["selected_source_ids"] = list(context.selected_source_ids)
-    output["selected_source_count"] = len(context.selected_source_ids)
     output["scope_origin"] = context.thread_origin or "web"
     output["scope_updated_at"] = datetime.now(UTC).isoformat()
     return output
