@@ -28,6 +28,24 @@ S3_URL_STYLE=path
 
 Keep bucket secrets in `.env` or deployment secret storage. `.env.example` intentionally leaves bucket credentials empty.
 
+For a persistent beta deployment, use S3-compatible storage or a mounted volume. Container-local storage is only appropriate for resettable demos because source payloads, generated assets, and saved report artifacts must remain reachable after restarts.
+
+## Migrations
+
+Alembic is the production schema path:
+
+```bash
+alembic upgrade head
+```
+
+In Docker/Railway, run migrations before the HTTP process starts:
+
+```bash
+sh -lc 'alembic upgrade head && openai-vectorstore2-http'
+```
+
+`DATABASE_SCHEMA_MODE=create_all` is only for empty throwaway databases and should not be used to evolve a deployed database.
+
 ## OpenAI File Cleanup
 
 Source delete is responsible for app storage and tracked OpenAI files.

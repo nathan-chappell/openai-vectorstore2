@@ -42,10 +42,10 @@ Deployment checklist:
 
 - Add a Dockerfile that builds the Vite frontend, installs the Python app in the `.venv`/package style expected by the repo, runs Alembic migrations or documents the migration command, and starts the backend HTTP service.
 - Add a `.dockerignore` that excludes `.venv`, `node_modules`, local logs, local storage, debug artifacts, Playwright output, and secrets.
-- Add a Railway deployment guide or config notes covering service start command, health check, required env vars, storage choice, and migration workflow.
+- Completed docs pass: added Docker/Railway deployment notes covering service start command, health check, required env vars, storage choice, migration workflow, logs, admin integration, billing defaults, and image build/push commands.
 - Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:1.0.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
-- Confirm mandatory env vars are documented: `OPENAI_API_KEY`, database URL, Clerk values if auth is enabled, storage backend/S3-compatible values if not using local ephemeral storage, app base URL, allowed origins, billing/admin settings, and any ChatKit/OpenAI model settings.
+- Completed docs pass for mandatory env vars: `OPENAI_API_KEY`, app signing secret, database URL, app base URL, Clerk values when auth is enabled, storage backend/S3-compatible values, billing/admin settings, and ChatKit domain key are documented in `.env.example` and `docs/deployment.md`.
 - Decide whether beta admin/auth/payments come from this repo's default implementation or the private shared `ai-portfolio-admin` submodule; either path must leave the app bootable and demoable.
 - Decide beta storage explicitly: local container storage is acceptable only for throwaway demos; persistent Railway volume or S3-compatible storage is preferred for a live resume link.
 - Confirm logs work in Railway without leaking prompts, secrets, or bulky content, and that enough IDs are present to debug OpenAI API calls from platform logs.
