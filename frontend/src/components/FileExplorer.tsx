@@ -45,7 +45,6 @@ export const FileExplorer = memo(function FileExplorer({
   selectedSourceTagChanged,
   selectedSourceTagDraftIdSet,
   selectionAnchorEntryId,
-  sourceEntriesById,
   tags,
   uploadGuidance,
   onActiveFileViewChange,
@@ -102,7 +101,6 @@ export const FileExplorer = memo(function FileExplorer({
   selectedSourceTagChanged: boolean;
   selectedSourceTagDraftIdSet: Set<string>;
   selectionAnchorEntryId: string | null;
-  sourceEntriesById: Record<string, FilesystemEntrySummary>;
   tags: TagSummary[];
   uploadGuidance: string;
   onActiveFileViewChange: (view: WorkspaceFileView) => void;
@@ -140,6 +138,44 @@ export const FileExplorer = memo(function FileExplorer({
     selectedFileEntries.length === 1 ? "1 indexed file selected" : `${selectedFileEntries.length} indexed files selected`;
   const dragEntryIds = useMemo(() => Array.from(selectedEntryIdSet), [selectedEntryIdSet]);
   const entryIds = useMemo(() => entries.map((entry) => entry.id), [entries]);
+  const previewPane = selectedSource ? (
+    <>
+      <button
+        type="button"
+        className="preview-splitter"
+        role="separator"
+        aria-label="Resize preview"
+        aria-orientation="vertical"
+        aria-valuemin={34}
+        aria-valuemax={70}
+        aria-valuenow={Math.round(previewSplitPercent)}
+        onPointerDown={onPreviewResize}
+      />
+      <div className="explorer-detail" aria-label="File detail">
+        <div className="explorer-detail-header">
+          <strong>{selectedSource.display_title}</strong>
+          <button type="button" className="icon-button" onClick={onClosePreview} aria-label="Close preview" title="Close preview">
+            X
+          </button>
+        </div>
+        <SourcePreview
+          busy={busy}
+          selectedSource={selectedSource}
+          selectedSourceTagChanged={selectedSourceTagChanged}
+          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
+          tags={tags}
+          uploadGuidance={uploadGuidance}
+          newTagName={newTagName}
+          onCreateTag={onCreateTag}
+          onNewTagNameChange={onNewTagNameChange}
+          onSaveTags={onSaveTags}
+          onTagToggle={onTagToggle}
+          onUploadGuidanceChange={onUploadGuidanceChange}
+          onResplit={onResplit}
+        />
+      </div>
+    </>
+  ) : null;
   const handleExplorerKeyDown = useCallback(
     (event: ReactKeyboardEvent<HTMLElement>): void => {
       if (busy || isEditableShortcutTarget(event.target)) {
@@ -295,33 +331,34 @@ export const FileExplorer = memo(function FileExplorer({
         </button>
       </div>
       {activeFileView === "library" ? (
-        <LibrarySearchView
-          busy={busy}
-          libraryQuery={libraryQuery}
-          libraryResultCount={libraryResultCount}
-          libraryResults={libraryResults}
-          librarySearching={librarySearching}
-          libraryTagMatchMode={libraryTagMatchMode}
-          selectedSourceIdSet={selectedSourceIdSet}
-          selectedTagIdSet={selectedExplorerTagIdSet}
-          tags={tags}
-          onSelectResults={onSelectLibraryResults}
-          onOpenSource={(sourceId) => {
-            const entry = Object.values(sourceEntriesById).find((item) => item.source_id === sourceId) ?? null;
-            if (entry) {
-              onSelectEntries([entry.id], entry.id, entry.id);
-            }
-            onActiveFileViewChange("explorer");
-            onOpenSource(sourceId);
-          }}
-          onQueryChange={onLibraryQueryChange}
-          onRunSearch={onRunLibrarySearch}
-          onTagMatchModeChange={onLibraryTagMatchModeChange}
-          onToggleSourceSelection={onToggleLibrarySourceSelection}
-          onToggleTag={onToggleExplorerTag}
-        />
+        <div
+          ref={previewGridRef}
+          className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}
+          style={selectedSource ? previewLayoutStyle : undefined}
+        >
+          <LibrarySearchView
+            busy={busy}
+            libraryQuery={libraryQuery}
+            libraryResultCount={libraryResultCount}
+            libraryResults={libraryResults}
+            librarySearching={librarySearching}
+            libraryTagMatchMode={libraryTagMatchMode}
+            previewedSourceId={selectedSource?.id ?? null}
+            selectedSourceIdSet={selectedSourceIdSet}
+            selectedTagIdSet={selectedExplorerTagIdSet}
+            tags={tags}
+            onSelectResults={onSelectLibraryResults}
+            onOpenSource={onOpenSource}
+            onQueryChange={onLibraryQueryChange}
+            onRunSearch={onRunLibrarySearch}
+            onTagMatchModeChange={onLibraryTagMatchModeChange}
+            onToggleSourceSelection={onToggleLibrarySourceSelection}
+            onToggleTag={onToggleExplorerTag}
+          />
+          {previewPane}
+        </div>
       ) : (
-        <>
+        <div className="explorer-view-body">
           <nav className="breadcrumb-row" aria-label="Folder path">
             {breadcrumbs.map((crumb, index) => {
               const current = index === breadcrumbs.length - 1;
@@ -373,45 +410,10 @@ export const FileExplorer = memo(function FileExplorer({
             </section>
 
             {selectedSource ? (
-              <>
-                <button
-                  type="button"
-                  className="preview-splitter"
-                  role="separator"
-                  aria-label="Resize preview"
-                  aria-orientation="vertical"
-                  aria-valuemin={34}
-                  aria-valuemax={70}
-                  aria-valuenow={Math.round(previewSplitPercent)}
-                  onPointerDown={onPreviewResize}
-                />
-                <div className="explorer-detail" aria-label="File detail">
-                  <div className="explorer-detail-header">
-                    <strong>{selectedSource.display_title}</strong>
-                    <button type="button" className="icon-button" onClick={onClosePreview} aria-label="Close preview" title="Close preview">
-                      X
-                    </button>
-                  </div>
-                  <SourcePreview
-                    busy={busy}
-                    selectedSource={selectedSource}
-                    selectedSourceTagChanged={selectedSourceTagChanged}
-                    selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
-                    tags={tags}
-                    uploadGuidance={uploadGuidance}
-                    newTagName={newTagName}
-                    onCreateTag={onCreateTag}
-                    onNewTagNameChange={onNewTagNameChange}
-                    onSaveTags={onSaveTags}
-                    onTagToggle={onTagToggle}
-                    onUploadGuidanceChange={onUploadGuidanceChange}
-                    onResplit={onResplit}
-                  />
-                </div>
-              </>
+              previewPane
             ) : null}
           </div>
-        </>
+        </div>
       )}
     </aside>
   );

@@ -1145,7 +1145,7 @@ kbd {
 }
 
 .filesystem-pane {
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
 }
 
 .file-view-tabs {
@@ -1218,7 +1218,7 @@ kbd {
 .library-search-view {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1294,53 +1294,6 @@ kbd {
   font-size: 0.76rem;
 }
 
-.library-result-list {
-  min-height: 0;
-  display: grid;
-  align-content: start;
-  overflow: auto;
-}
-
-.library-result-row {
-  display: grid;
-  grid-template-columns: 1.5rem minmax(0, 1fr);
-  gap: 0.45rem;
-  align-items: center;
-  min-height: 3.4rem;
-  border: 0;
-  border-bottom: 1px solid #edf1f6;
-  border-radius: 0;
-  padding: 0.45rem 0.6rem;
-  color: var(--ink);
-  background: #ffffff;
-  text-align: left;
-}
-
-.library-result-row:hover,
-.library-result-row.selected-file-row {
-  background: #eef6ff;
-}
-
-.library-result-open {
-  display: grid;
-  grid-template-columns: minmax(14rem, 0.8fr) 4rem minmax(12rem, 1.2fr);
-  gap: 0.65rem;
-  align-items: center;
-  min-width: 0;
-  min-height: 2.6rem;
-  border: 0;
-  padding: 0;
-  color: inherit;
-  background: transparent;
-  text-align: left;
-}
-
-.library-result-open:hover:not(:disabled) {
-  background: transparent;
-}
-
-.library-result-row strong,
-.library-result-row small,
 .library-hit-text {
   display: block;
   overflow: hidden;
@@ -1348,20 +1301,9 @@ kbd {
   white-space: nowrap;
 }
 
-.library-result-row small,
 .library-hit-text {
   color: var(--muted);
   font-size: 0.72rem;
-}
-
-.library-hit-score {
-  justify-self: end;
-  border-radius: 999px;
-  padding: 0.12rem 0.4rem;
-  color: #1d4ed8;
-  background: #eff6ff;
-  font-size: 0.72rem;
-  font-weight: 700;
 }
 
 .library-result-summary button {
@@ -1416,6 +1358,18 @@ kbd {
   min-height: 0;
   display: grid;
   grid-template-columns: 1fr;
+  overflow: hidden;
+}
+
+.filesystem-layout > .library-search-view,
+.explorer-view-body {
+  min-width: 0;
+  min-height: 0;
+}
+
+.explorer-view-body {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   overflow: hidden;
 }
 
@@ -1511,6 +1465,14 @@ kbd {
 
 .file-rows [role="row"].active-file-row {
   box-shadow: inset 3px 0 #2563eb;
+}
+
+.library-file-rows [role="row"] {
+  cursor: pointer;
+}
+
+.library-file-rows .file-select-checkbox {
+  justify-self: center;
 }
 
 .filesystem-name-cell {

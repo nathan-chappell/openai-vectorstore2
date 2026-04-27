@@ -126,15 +126,6 @@ export function App({ authMode }: AppProps) {
       }),
     [knownEntries, selectedSourceIds],
   );
-  const sourceEntriesById = useMemo(() => {
-    const entriesBySourceId: Record<string, FilesystemEntrySummary> = {};
-    for (const entry of Object.values(knownEntries)) {
-      if (entry.source_id) {
-        entriesBySourceId[entry.source_id] = entry;
-      }
-    }
-    return entriesBySourceId;
-  }, [knownEntries]);
   const selectedSourceId = selectedSource?.id ?? null;
   currentFolderIdRef.current = currentFolderId;
   selectedSourceIdRef.current = selectedSourceId;
@@ -622,32 +613,31 @@ export function App({ authMode }: AppProps) {
     [runLibrarySearch, selectedExplorerTagIds],
   );
 
-  const toggleLibrarySourceSelection = useCallback((sourceId: string): void => {
-    const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === sourceId) ?? null;
-    setSelectedSourceIds((current) =>
-      current.includes(sourceId)
-        ? current.filter((id) => id !== sourceId)
-        : Array.from(new Set([...current, sourceId])).slice(0, SELECTED_FILE_LIMIT),
-    );
-    if (entry) {
-      setSelectedEntryIds((current) =>
-        current.includes(entry.id) ? current.filter((id) => id !== entry.id) : Array.from(new Set([...current, entry.id])),
+  const toggleLibrarySourceSelection = useCallback(
+    (sourceId: string): void => {
+      const currentlySelected = selectedSourceIds.includes(sourceId);
+      const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === sourceId) ?? null;
+      setSelectedSourceIds((current) =>
+        current.includes(sourceId)
+          ? current.filter((id) => id !== sourceId)
+          : Array.from(new Set([...current, sourceId])).slice(0, SELECTED_FILE_LIMIT),
       );
-      setFocusedEntryId(entry.id);
-      setSelectionAnchorEntryId(entry.id);
-    }
-  }, []);
+      if (currentlySelected && entry) {
+        setSelectedEntryIds((current) => current.filter((id) => id !== entry.id));
+      }
+    },
+    [selectedSourceIds],
+  );
 
   const selectLibraryResultsForChat = useCallback((): void => {
     const sourceIds = libraryResults.map((result) => result.hit.source_file_id).slice(0, SELECTED_FILE_LIMIT);
-    const entryIds = libraryResults.flatMap((result) => (result.entry ? [result.entry.id] : [])).slice(0, SELECTED_FILE_LIMIT);
     setSelectedSourceIds(sourceIds);
-    setSelectedEntryIds(entryIds);
-    setFocusedEntryId(entryIds[0] ?? null);
-    setSelectionAnchorEntryId(entryIds[0] ?? null);
+    setSelectedEntryIds([]);
+    setFocusedEntryId(null);
+    setSelectionAnchorEntryId(null);
     setStatus(
       `Selected ${sourceIds.length} semantic result${sourceIds.length === 1 ? "" : "s"} for ChatKit${
-        sourceIds.length > entryIds.length ? "; some files are not loaded in Explorer yet" : ""
+        libraryResults.some((result) => !result.entry) ? "; some files are not loaded in Explorer yet" : ""
       }.`,
     );
   }, [libraryResults]);
@@ -976,7 +966,6 @@ export function App({ authMode }: AppProps) {
           selectedSourceTagChanged={selectedSourceTagChanged}
           selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
           selectionAnchorEntryId={selectionAnchorEntryId}
-          sourceEntriesById={sourceEntriesById}
           tags={tags}
           uploadGuidance={uploadGuidance}
           onActiveFileViewChange={setActiveFileView}
@@ -991,7 +980,7 @@ export function App({ authMode }: AppProps) {
           onNewTagNameChange={setNewTagName}
           onClosePreview={() => setSelectedSource(null)}
           onOpenEntry={openEntry}
-          onOpenSource={(sourceId) => void revealFileInExplorer({ sourceId })}
+          onOpenSource={(sourceId) => void openSource(sourceId)}
           onPreviewResize={beginPreviewResize}
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}

@@ -3,7 +3,7 @@ import { useMemo, useState } from "react";
 import { DEFAULT_LIBRARY_QUERY } from "../lib/appConstants";
 import type { LibrarySearchResult } from "../lib/appTypes";
 import type { TagMatchMode, TagSummary } from "../lib/types";
-import { stringAttribute } from "../lib/uiFormat";
+import { formatDate, stringAttribute } from "../lib/uiFormat";
 
 const TAG_PREVIEW_LIMIT = 36;
 
@@ -14,6 +14,7 @@ export function LibrarySearchView({
   libraryResults,
   librarySearching,
   libraryTagMatchMode,
+  previewedSourceId,
   selectedSourceIdSet,
   selectedTagIdSet,
   tags,
@@ -31,6 +32,7 @@ export function LibrarySearchView({
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
   libraryTagMatchMode: TagMatchMode;
+  previewedSourceId: string | null;
   selectedSourceIdSet: Set<string>;
   selectedTagIdSet: Set<string>;
   tags: TagSummary[];
@@ -67,6 +69,12 @@ export function LibrarySearchView({
     return [...selectedTags, ...sortedTags.filter((tag) => !selectedTagIdSet.has(tag.id)).slice(0, unselectedLimit)];
   }, [selectedTagIdSet, showAllTags, tags]);
   const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
+  const chooseSource = (sourceId: string): void => {
+    if (!selectedSourceIdSet.has(sourceId)) {
+      onToggleSourceSelection(sourceId);
+    }
+    onOpenSource(sourceId);
+  };
   return (
     <section className="library-search-view" aria-label="Tag and semantic search">
       <div className="library-searchbar">
@@ -149,28 +157,64 @@ export function LibrarySearchView({
         </button>
       </div>
 
-      <div className="library-result-list">
+      <div className="file-list-header library-file-list-header">
+        <span>Name</span>
+        <span>Relevance</span>
+        <span>Match</span>
+        <span>Modified</span>
+      </div>
+
+      <div className="file-rows library-file-rows" role="treegrid" aria-label="Library search results">
         {libraryResults.map(({ hit, entry }) => {
           const resultName = entry?.name ?? stringAttribute(hit.attributes, "virtual_name") ?? hit.source_title;
           const resultPath = entry?.path ?? stringAttribute(hit.attributes, "virtual_path") ?? hit.original_filename;
           const selected = selectedSourceIdSet.has(hit.source_file_id);
+          const active = previewedSourceId === hit.source_file_id;
+          const rowClassName = [
+            selected ? "selected-file-row" : "",
+            active ? "active-file-row" : "",
+          ]
+            .filter(Boolean)
+            .join(" ");
+          const scorePercent = Math.round(hit.score * 100);
           return (
-            <div key={hit.source_file_id} className={selected ? "library-result-row selected-file-row" : "library-result-row"}>
-              <input
-                aria-label={`Select ${resultName} for chat`}
-                checked={selected}
-                className="file-select-checkbox"
-                onChange={() => onToggleSourceSelection(hit.source_file_id)}
-                type="checkbox"
-              />
-              <button type="button" className="library-result-open" onClick={() => onOpenSource(hit.source_file_id)}>
+            <div
+              key={hit.source_file_id}
+              role="row"
+              tabIndex={0}
+              aria-selected={selected}
+              className={rowClassName || undefined}
+              data-source-id={hit.source_file_id}
+              onClick={() => chooseSource(hit.source_file_id)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  chooseSource(hit.source_file_id);
+                }
+              }}
+            >
+              <span role="cell" className="filesystem-name-cell">
+                <input
+                  aria-label={`Select ${resultName} for chat`}
+                  checked={selected}
+                  className="file-select-checkbox"
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={() => onToggleSourceSelection(hit.source_file_id)}
+                  type="checkbox"
+                />
                 <span>
                   <strong>{resultName}</strong>
                   <small>{resultPath}</small>
                 </span>
-                <span className="library-hit-score">{Math.round(hit.score * 100)}%</span>
-                <span className="library-hit-text">{hit.text || hit.summary}</span>
-              </button>
+              </span>
+              <span role="cell" className="status-cell">
+                <span className="status-badge status-ready">{scorePercent}%</span>
+                <span className="status-progress-track" aria-label={`${scorePercent}% relevance`}>
+                  <span style={{ width: `${scorePercent}%` }} />
+                </span>
+              </span>
+              <span role="cell" className="muted-cell library-hit-text">{hit.text || hit.summary}</span>
+              <span role="cell" className="muted-cell">{entry ? formatDate(entry.updated_at) : ""}</span>
             </div>
           );
         })}
