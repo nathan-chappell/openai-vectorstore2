@@ -11,6 +11,7 @@ from sqlalchemy import create_engine, inspect
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.schema import CreateSchema
 
 from backend.app.core.config import PROJECT_ROOT, AppSettings
 from backend.app.models import Base
@@ -30,6 +31,14 @@ def ensure_database_directory(database_url: str) -> None:
     if not database_path.is_absolute():
         database_path = (Path.cwd() / database_path).resolve()
     database_path.parent.mkdir(parents=True, exist_ok=True)
+
+
+def postgres_connect_args(schema_name: str | None, *, async_driver: bool) -> dict[str, Any]:
+    if schema_name is None:
+        return {}
+    if async_driver:
+        return {"server_settings": {"search_path": schema_name}}
+    return {"options": f"-csearch_path={schema_name}"}
 
 
 class AsyncSessionAdapter:
@@ -96,7 +105,18 @@ class DatabaseManager:
             )
             self._sync_session_factory = sessionmaker(self._sync_engine, class_=Session, expire_on_commit=False)
         else:
-            self._async_engine = create_async_engine(settings.normalized_database_url, future=True, pool_pre_ping=True)
+            parsed_sync_url = make_url(settings.sync_database_url)
+            connect_args = (
+                postgres_connect_args(settings.database_postgres_schema, async_driver=True)
+                if parsed_sync_url.get_backend_name() == "postgresql"
+                else {}
+            )
+            self._async_engine = create_async_engine(
+                settings.normalized_database_url,
+                future=True,
+                pool_pre_ping=True,
+                connect_args=connect_args,
+            )
             self._async_session_factory = async_sessionmaker(
                 self._async_engine,
                 class_=AsyncSession,
@@ -105,13 +125,15 @@ class DatabaseManager:
 
     async def ensure_ready(self) -> None:
         database_url = self._settings.normalized_database_url
-        if database_url in _INITIALIZED_DATABASES:
+        database_key = f"{self._settings.normalized_database_url}#{self._settings.database_postgres_schema or ''}"
+        if database_key in _INITIALIZED_DATABASES:
             return
-        lock = _INITIALIZATION_LOCKS.setdefault(database_url, asyncio.Lock())
+        lock = _INITIALIZATION_LOCKS.setdefault(database_key, asyncio.Lock())
         async with lock:
-            if database_url in _INITIALIZED_DATABASES:
+            if database_key in _INITIALIZED_DATABASES:
                 return
             ensure_database_directory(database_url)
+            await asyncio.to_thread(self._ensure_postgres_schema)
             if self._settings.database_schema_mode == "migrations":
                 await asyncio.to_thread(self._upgrade_to_head)
             elif self._use_sync_sqlite:
@@ -126,7 +148,21 @@ class DatabaseManager:
                 async with self._async_engine.begin() as connection:
                     await connection.run_sync(Base.metadata.create_all)
                     await connection.run_sync(self._validate_schema_matches_metadata)
-            _INITIALIZED_DATABASES.add(database_url)
+            _INITIALIZED_DATABASES.add(database_key)
+
+    def _ensure_postgres_schema(self) -> None:
+        schema_name = self._settings.database_postgres_schema
+        if schema_name is None:
+            return
+        parsed_url = make_url(self._settings.sync_database_url)
+        if parsed_url.get_backend_name() != "postgresql":
+            return
+        engine = create_engine(self._settings.sync_database_url, future=True, pool_pre_ping=True)
+        try:
+            with engine.begin() as connection:
+                connection.execute(CreateSchema(schema_name, if_not_exists=True))
+        finally:
+            engine.dispose()
 
     def _upgrade_to_head(self) -> None:
         migrations_dir: Path | None = None
@@ -146,6 +182,8 @@ class DatabaseManager:
         config = Config(str(alembic_ini)) if alembic_ini is not None else Config()
         config.set_main_option("script_location", str(migrations_dir))
         config.set_main_option("sqlalchemy.url", self._settings.sync_database_url)
+        if self._settings.database_postgres_schema is not None:
+            config.set_main_option("postgres_schema", self._settings.database_postgres_schema)
         command.upgrade(config, "head")
 
     def _validate_schema_matches_metadata(self, connection: Connection) -> None:

@@ -5,8 +5,10 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import engine_from_config, pool
+from sqlalchemy.schema import CreateSchema
 
 from backend.app.core.config import AppSettings
+from backend.app.db.session import postgres_connect_args
 from backend.app.models import Base
 
 config = context.config
@@ -24,6 +26,13 @@ def _database_url() -> str:
     return AppSettings().sync_database_url
 
 
+def _postgres_schema() -> str | None:
+    configured_schema = config.get_main_option("postgres_schema")
+    if configured_schema and configured_schema.strip():
+        return configured_schema.strip()
+    return AppSettings().database_postgres_schema
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
@@ -39,10 +48,23 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     configuration = config.get_section(config.config_ini_section, {})
     configuration["sqlalchemy.url"] = _database_url()
+    postgres_schema = _postgres_schema()
+    if postgres_schema is not None:
+        schema_engine = engine_from_config(
+            configuration,
+            prefix="sqlalchemy.",
+            poolclass=pool.NullPool,
+        )
+        try:
+            with schema_engine.begin() as connection:
+                connection.execute(CreateSchema(postgres_schema, if_not_exists=True))
+        finally:
+            schema_engine.dispose()
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=postgres_connect_args(postgres_schema, async_driver=False),
     )
 
     with connectable.connect() as connection:

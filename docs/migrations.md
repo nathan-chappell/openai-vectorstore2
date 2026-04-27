@@ -11,6 +11,14 @@ Alembic is the migration baseline for schema changes.
 
 Use `migrations` for normal local development and deployed environments. Keep `create_all` only for short-lived scratch databases.
 
+## Shared PostgreSQL Services
+
+Do not run PlodAI and OpenAI Vectorstore2 in the same PostgreSQL schema. They
+have separate Alembic histories and some same-named app tables with different
+columns. Prefer separate databases. If using one physical PostgreSQL service,
+set `DATABASE_POSTGRES_SCHEMA=openai_vectorstore2` for this app so migrations
+and app queries run in an isolated schema.
+
 ## Commands
 
 Upgrade the configured database:

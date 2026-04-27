@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 from pathlib import Path
+import re
 from typing import Annotated, Literal, cast
 from urllib.parse import urlparse
 
@@ -23,6 +24,7 @@ class AppSettings(BaseSettings):
     app_name: str = "openai-vectorstore2"
     database_url: str = "sqlite+aiosqlite:///./.local/openai-vectorstore2.db"
     database_schema_mode: Literal["create_all", "migrations"] = "migrations"
+    database_postgres_schema: str | None = None
     static_dir: str = "frontend/dist"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
@@ -142,6 +144,7 @@ class AppSettings(BaseSettings):
         "chat_completions_web_search_url",
         "paypal_recipient_email",
         "paypal_payment_url",
+        "database_postgres_schema",
         mode="before",
     )
     @classmethod
@@ -149,6 +152,18 @@ class AppSettings(BaseSettings):
         if isinstance(raw_value, str) and not raw_value.strip():
             return None
         return raw_value
+
+    @field_validator("database_postgres_schema")
+    @classmethod
+    def _validate_postgres_schema_name(cls, raw_value: str | None) -> str | None:
+        if raw_value is None:
+            return None
+        normalized_value = raw_value.strip()
+        if not normalized_value:
+            return None
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized_value):
+            raise ValueError("DATABASE_POSTGRES_SCHEMA must be a simple PostgreSQL identifier.")
+        return normalized_value
 
     @property
     def normalized_app_base_url(self) -> str:

@@ -34,8 +34,21 @@ APP_BASE_URL=https://your-service.example
 CORS_ORIGINS=https://your-service.example
 DATABASE_URL=postgresql://...
 DATABASE_SCHEMA_MODE=migrations
+DATABASE_POSTGRES_SCHEMA=
 VITE_CHATKIT_DOMAIN_KEY=
 ```
+
+Use a separate database for each portfolio app when possible. If PlodAI and
+OpenAI Vectorstore2 must share the same PostgreSQL database service, keep them
+in separate schemas because their app-owned billing tables are not the same
+schema. For example, leave PlodAI on `public` and set:
+
+```bash
+DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
+```
+
+The app will create the schema if it is missing and run Alembic inside that
+schema. Do not point both apps at the same PostgreSQL schema.
 
 `openai_responses` is still the default agent provider. The first compatibility-mode configuration surface is available for OpenAI-compatible `/v1/chat/completions` endpoints:
 
