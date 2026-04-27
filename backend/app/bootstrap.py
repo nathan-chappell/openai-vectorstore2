@@ -65,6 +65,7 @@ def create_services(settings: AppSettings) -> AppServices:
         sources=sources,
         storage=storage,
         openai=openai,
+        billing=billing,
     )
     research = ResearchImportService(
         settings=settings,

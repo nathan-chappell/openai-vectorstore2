@@ -120,7 +120,7 @@ Decision:
 
 Implementation notes:
 
-- Completed first pass: added `user_credit_balances`, `credit_grants`, and `cost_events` tables with migration coverage; added `BillingService` for grants, idempotent debits, cost calculations, and credit-floor checks; exposed `/api/billing/me`, `/api/admin/users`, `/api/admin/users/set-active`, and `/api/admin/credits/grant`; added current credit and floor fields to `/api/auth/me`; gated billable REST operations before long-running work; and recorded ChatKit response usage as auditable cost events when response usage is available.
+- Completed first pass: added `user_credit_balances`, `credit_grants`, and `cost_events` tables with migration coverage; added `BillingService` for grants, idempotent debits, cost calculations, and credit-floor checks; exposed `/api/billing/me`, `/api/admin/users`, `/api/admin/users/set-active`, and `/api/admin/credits/grant`; added current credit and floor fields to `/api/auth/me`; gated billable REST operations before long-running work; recorded ChatKit response usage as auditable cost events when response usage is available; and records QA/freeform action usage from REST, MCP, or ChatKit tool calls.
 - Use these PlodAI files as the first implementation reference: `../plodai/backend/app/models/credit.py`, `../plodai/backend/app/models/credit_grant.py`, `../plodai/backend/app/models/cost.py`, `../plodai/backend/app/services/credit_service.py`, `../plodai/backend/app/core/clerk_metadata.py`, `../plodai/backend/app/core/auth.py`, `../plodai/backend/app/services/clerk_admin_service.py`, `../plodai/backend/app/schemas/credits.py`, `../plodai/backend/app/api/routes.py`, `../plodai/backend/app/chatkit/usage.py`, `../plodai/backend/app/chatkit/metadata.py`, `../plodai/frontend/src/components/AdminCreditsPanel.tsx`, and `../plodai/frontend/src/types/credits.ts`.
 - Reuse this repo's existing Clerk and `AppUser` foundation: `private_metadata` already provides `active` and `role`, and local `AppUser` records already mirror Clerk identity.
 - Align table shape and behavior with PlodAI's `UserCreditBalance`, `CreditGrant`, and `CostEvent` where possible so credit grants, balance debits, cost audit records, admin summaries, and future Stripe grants stay portable between the two projects.
@@ -132,7 +132,7 @@ Implementation notes:
 - Add admin REST endpoints and a compact admin view for user search, activation/deactivation, manual credit grants with notes, balance display, recent grants/costs, and low/empty credit status.
 - Keep user-facing billing light in the normal workspace: show current credit/remaining trial state and clear blocked-state copy, without adding Stripe checkout until the ledger is proven.
 - Prepare Stripe integration by reserving fields for payment provider, checkout/session/payment intent IDs, payment status, and credit amount, then later add webhook-driven credit grants with idempotency.
-- Next pass: record post-completion cost events for non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, QA/freeform, image, voice, and transcription; add the compact admin UI; and add Stripe-created credit grants once the manual ledger has been exercised.
+- Next pass: record post-completion cost events for the remaining non-ChatKit OpenAI paths such as semantic split, research discovery, source vector indexing/search, image, voice, and transcription; add the compact admin UI; and add Stripe-created credit grants once the manual ledger has been exercised.
 
 Acceptance criteria:
 

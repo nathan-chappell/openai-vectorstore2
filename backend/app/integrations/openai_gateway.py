@@ -28,6 +28,16 @@ class VectorSearchCandidate:
     attributes: dict[str, str | float | bool]
 
 
+@dataclass(frozen=True, slots=True)
+class OpenAITextResult:
+    text: str
+    response_id: str | None
+    conversation_id: str | None
+    request_id: str | None
+    model: str | None
+    usage: object | None
+
+
 class OpenAIGateway:
     """OpenAI-backed operations isolated behind a fakeable service boundary."""
 
@@ -366,10 +376,17 @@ class OpenAIGateway:
         *,
         prompt: str,
         hits: list[ChunkHit],
-    ) -> str:
+    ) -> OpenAITextResult:
         evidence = _render_hit_evidence(hits)
         if not evidence:
-            return "I could not find relevant indexed file matches in the current library."
+            return OpenAITextResult(
+                text="I could not find relevant indexed file matches in the current library.",
+                response_id=None,
+                conversation_id=None,
+                request_id=None,
+                model=None,
+                usage=None,
+            )
         response = await self._create_response(
             operation="answer_with_chunks",
             model=self._settings.openai_agent_model,
@@ -392,7 +409,7 @@ class OpenAIGateway:
         output_text = getattr(response, "output_text", "")
         if not isinstance(output_text, str) or not output_text.strip():
             raise RuntimeError("OpenAI did not return answer text.")
-        return output_text.strip()
+        return _text_result_from_response(response, text=output_text.strip())
 
     async def freeform_with_chunks(
         self,
@@ -400,7 +417,7 @@ class OpenAIGateway:
         prompt: str,
         hits: list[ChunkHit],
         mode: str,
-    ) -> str:
+    ) -> OpenAITextResult:
         evidence = _render_hit_evidence(hits)
         grounding = (
             "Use the retrieved chunks as hard evidence and avoid unsupported claims."
@@ -425,7 +442,7 @@ class OpenAIGateway:
         output_text = getattr(response, "output_text", "")
         if not isinstance(output_text, str) or not output_text.strip():
             raise RuntimeError("OpenAI did not return free-form text.")
-        return output_text.strip()
+        return _text_result_from_response(response, text=output_text.strip())
 
     async def generate_image_bytes(
         self,
@@ -504,6 +521,17 @@ def log_openai_response(*, operation: str, response: object, duration_ms: float)
         _string_attr(response, "_request_id") or _string_attr(response, "request_id"),
         getattr(usage, "total_tokens", None),
         duration_ms,
+    )
+
+
+def _text_result_from_response(response: object, *, text: str) -> OpenAITextResult:
+    return OpenAITextResult(
+        text=text,
+        response_id=_string_attr(response, "id"),
+        conversation_id=_conversation_id_from_response(response),
+        request_id=_string_attr(response, "_request_id") or _string_attr(response, "request_id"),
+        model=_string_attr(response, "model"),
+        usage=getattr(response, "usage", None),
     )
 
 

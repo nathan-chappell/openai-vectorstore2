@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from backend.app.core.config import AppSettings
-from backend.app.integrations.openai_gateway import VectorSearchCandidate
+from backend.app.integrations.openai_gateway import OpenAITextResult, VectorSearchCandidate
 from backend.app.schemas import (
     ChunkHit,
     ChunkLocator,
@@ -181,11 +181,37 @@ class FakeOpenAIGateway:
             :max_results
         ]
 
-    async def answer_with_chunks(self, *, prompt: str, hits: list[ChunkHit]) -> str:
-        return f"Fake grounded answer to '{prompt}' using {len(hits)} chunks."
+    async def answer_with_chunks(self, *, prompt: str, hits: list[ChunkHit]) -> OpenAITextResult:
+        return OpenAITextResult(
+            text=f"Fake grounded answer to '{prompt}' using {len(hits)} chunks.",
+            response_id=f"resp_answer_{self._counter}",
+            conversation_id=None,
+            request_id=f"req_answer_{self._counter}",
+            model=self.settings.openai_agent_model,
+            usage={
+                "requests": 1,
+                "input_tokens": 1_000,
+                "input_tokens_details": {"cached_tokens": 100},
+                "output_tokens": 250,
+                "total_tokens": 1_250,
+            },
+        )
 
-    async def freeform_with_chunks(self, *, prompt: str, hits: list[ChunkHit], mode: str) -> str:
-        return f"Fake {mode} response to '{prompt}' using {len(hits)} chunks."
+    async def freeform_with_chunks(self, *, prompt: str, hits: list[ChunkHit], mode: str) -> OpenAITextResult:
+        return OpenAITextResult(
+            text=f"Fake {mode} response to '{prompt}' using {len(hits)} chunks.",
+            response_id=f"resp_freeform_{self._counter}",
+            conversation_id=None,
+            request_id=f"req_freeform_{self._counter}",
+            model=self.settings.openai_agent_model,
+            usage={
+                "requests": 1,
+                "input_tokens": 1_200,
+                "input_tokens_details": {"cached_tokens": 100},
+                "output_tokens": 300,
+                "total_tokens": 1_500,
+            },
+        )
 
     async def generate_image_bytes(self, *, prompt: str, size: str) -> tuple[bytes, dict[str, object]]:
         del prompt, size

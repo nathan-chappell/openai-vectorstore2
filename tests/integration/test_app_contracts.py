@@ -260,6 +260,10 @@ async def test_http_ingest_search_and_qa_contracts(
             assert payload["kind"] == "qa"
             assert "Fake grounded answer" in payload["answer"]
 
+            billing_after_qa = await client.get("/api/billing/me", headers=auth_headers)
+            assert billing_after_qa.status_code == 200
+            assert billing_after_qa.json()["current_credit_usd"] < 2.5
+
             tasks = await client.get("/api/tasks", headers=auth_headers)
             assert tasks.status_code == 200
             task_kinds = {task["kind"] for task in tasks.json()["tasks"]}

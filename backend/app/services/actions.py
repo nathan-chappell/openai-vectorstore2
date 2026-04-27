@@ -26,6 +26,7 @@ from backend.app.schemas import (
     VoiceGenerationRequest,
 )
 from backend.app.services.sources import SourceService
+from backend.app.services.billing import BillingService
 from backend.app.storage import StorageService
 
 logger = logging.getLogger(__name__)
@@ -42,12 +43,14 @@ class ActionService:
         sources: SourceService,
         storage: StorageService,
         openai: OpenAIGateway,
+        billing: BillingService,
     ) -> None:
         self._settings = settings
         self._database = database
         self._sources = sources
         self._storage = storage
         self._openai = openai
+        self._billing = billing
 
     async def list_tasks(
         self,
@@ -93,11 +96,18 @@ class ActionService:
                 ),
             )
             answer = await self._openai.answer_with_chunks(prompt=payload.prompt, hits=hits)
+            await self._record_text_usage(
+                clerk_user_id=clerk_user_id,
+                task=task,
+                origin_surface=origin_surface,
+                origin_thread_id=payload.origin_thread_id,
+                result=answer,
+            )
             await self._complete_task(
                 task_id=task.id,
-                result_json={"answer": answer, "hits": [hit.model_dump(mode="json") for hit in hits]},
+                result_json={"answer": answer.text, "hits": [hit.model_dump(mode="json") for hit in hits]},
             )
-            return ActionResponse(task_id=task.id, kind="qa", answer=answer, hits=hits)
+            return ActionResponse(task_id=task.id, kind="qa", answer=answer.text, hits=hits)
         except Exception as exc:
             await self._fail_task(task_id=task.id, error_message=str(exc))
             raise
@@ -125,15 +135,22 @@ class ActionService:
                 ),
             )
             answer = await self._openai.freeform_with_chunks(prompt=payload.prompt, hits=hits, mode=payload.mode)
+            await self._record_text_usage(
+                clerk_user_id=clerk_user_id,
+                task=task,
+                origin_surface=origin_surface,
+                origin_thread_id=payload.origin_thread_id,
+                result=answer,
+            )
             await self._complete_task(
                 task_id=task.id,
                 result_json={
-                    "answer": answer,
+                    "answer": answer.text,
                     "mode": payload.mode,
                     "hits": [hit.model_dump(mode="json") for hit in hits],
                 },
             )
-            return ActionResponse(task_id=task.id, kind="freeform", answer=answer, hits=hits)
+            return ActionResponse(task_id=task.id, kind="freeform", answer=answer.text, hits=hits)
         except Exception as exc:
             await self._fail_task(task_id=task.id, error_message=str(exc))
             raise
@@ -240,6 +257,35 @@ class ActionService:
 
     async def branch_search(self, *, clerk_user_id: str, payload: BranchSearchRequest) -> Any:
         return await self._sources.branch_search(clerk_user_id=clerk_user_id, request=payload)
+
+    async def _record_text_usage(
+        self,
+        *,
+        clerk_user_id: str,
+        task: AppTask,
+        origin_surface: str,
+        origin_thread_id: str | None,
+        result: Any,
+    ) -> None:
+        usage = getattr(result, "usage", None)
+        if usage is None:
+            return
+        response_id = getattr(result, "response_id", None)
+        request_id = getattr(result, "request_id", None)
+        response_key = response_id if isinstance(response_id, str) and response_id else request_id
+        await self._billing.record_usage_cost(
+            clerk_user_id=clerk_user_id,
+            operation_kind=task.kind,
+            origin_surface=origin_surface,
+            model=getattr(result, "model", None) or self._settings.openai_agent_model,
+            usage=usage,
+            event_key=f"action:{task.id}:{response_key}" if isinstance(response_key, str) and response_key else None,
+            thread_id=origin_thread_id,
+            task_id=task.id,
+            openai_response_id=response_id if isinstance(response_id, str) else None,
+            openai_conversation_id=getattr(result, "conversation_id", None),
+            openai_request_id=request_id if isinstance(request_id, str) else None,
+        )
 
     async def _create_task(
         self,
