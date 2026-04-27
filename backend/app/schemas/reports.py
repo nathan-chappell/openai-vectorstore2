@@ -4,6 +4,8 @@ from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, Field, model_validator
 
+from backend.app.schemas.records import LibrarySourceSummary, TaskSummary
+
 
 class ReportCitation(BaseModel):
     label: str = Field(min_length=1, max_length=80)
@@ -70,6 +72,20 @@ class ReportDocument(BaseModel):
     abstract: str | None = Field(default=None, max_length=4096)
     sections: list[ReportSection] = Field(default_factory=list)
     citations: list[ReportCitation] = Field(default_factory=list)
+
+
+class ReportMarkdownSaveRequest(BaseModel):
+    document: ReportDocument
+    filename: str | None = Field(default=None, min_length=1, max_length=255)
+    folder_id: str | None = None
+    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    user_guidance: str | None = Field(default=None, max_length=2048)
+
+
+class ReportMarkdownSaveResponse(BaseModel):
+    markdown: str
+    source: LibrarySourceSummary
+    task: TaskSummary | None = None
 
 
 ReportSection.model_rebuild()

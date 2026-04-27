@@ -23,6 +23,9 @@ class SourceMetadata(TypedDict, total=False):
     fetched_url: str
     content_hash: str
     fetched_at: str
+    artifact_kind: str
+    report_title: str
+    report_format: str
 
 
 class ResearchProvenance(SourceMetadata, total=False):

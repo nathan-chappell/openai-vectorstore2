@@ -404,6 +404,81 @@ export type IngestFinalizeResponse = {
   task: TaskSummary | null;
 };
 
+export type ReportCitation = {
+  label: string;
+  source_id?: string | null;
+  url?: string | null;
+  note?: string | null;
+};
+
+export type ReportParagraphBlock = {
+  kind: "paragraph";
+  text: string;
+  citations?: ReportCitation[];
+};
+
+export type ReportListBlock = {
+  kind: "list";
+  ordered?: boolean;
+  items: string[];
+};
+
+export type ReportTableBlock = {
+  kind: "table";
+  headers: string[];
+  rows: string[][];
+  caption?: string | null;
+};
+
+export type ReportMathBlock = {
+  kind: "math";
+  expression: string;
+  display?: boolean;
+  label?: string | null;
+};
+
+export type ReportFigureBlock = {
+  kind: "figure";
+  alt_text: string;
+  uri: string;
+  caption?: string | null;
+};
+
+export type ReportBlock =
+  | ReportParagraphBlock
+  | ReportListBlock
+  | ReportTableBlock
+  | ReportMathBlock
+  | ReportFigureBlock;
+
+export type ReportSection = {
+  title: string;
+  blocks?: ReportBlock[];
+  subsections?: ReportSection[];
+};
+
+export type ReportDocument = {
+  title: string;
+  subtitle?: string | null;
+  abstract?: string | null;
+  sections?: ReportSection[];
+  citations?: ReportCitation[];
+};
+
+export type ReportMarkdownSaveRequest = {
+  document: ReportDocument;
+  filename?: string | null;
+  folder_id?: string | null;
+  tag_ids?: string[];
+  user_guidance?: string | null;
+};
+
+export type ReportMarkdownSaveResponse = {
+  markdown: string;
+  source: SourceSummary;
+  task: TaskSummary | null;
+};
+
 export type ResearchSeedKind = "topic" | "paper" | "text" | "url" | "pdf_url" | "arxiv_url" | "uploaded_file" | "linkedin_export";
 export type ResearchCandidateSourceType = "text" | "url" | "html" | "pdf" | "arxiv" | "linkedin_export" | "uploaded_file";
 export type ResearchCandidateStatus = "pending" | "approved" | "rejected" | "ingesting" | "ingested" | "failed" | "duplicate";

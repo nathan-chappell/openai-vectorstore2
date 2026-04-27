@@ -5,11 +5,14 @@ from backend.app.schemas.reports import (
     ReportCitation,
     ReportDocument,
     ReportListBlock,
+    ReportMarkdownSaveRequest,
+    ReportMarkdownSaveResponse,
     ReportMathBlock,
     ReportParagraphBlock,
     ReportSection,
     ReportTableBlock,
 )
+from backend.app.services.sources import SourceService
 
 
 def render_report_markdown(report: ReportDocument) -> str:
@@ -25,6 +28,41 @@ def render_report_markdown(report: ReportDocument) -> str:
         for citation in report.citations:
             lines.append(f"- {_render_citation(citation)}")
     return "\n".join(lines).strip() + "\n"
+
+
+async def save_report_markdown_source(
+    *,
+    sources: SourceService,
+    clerk_user_id: str,
+    request: ReportMarkdownSaveRequest,
+    origin_surface: str,
+    origin_thread_id: str | None = None,
+) -> ReportMarkdownSaveResponse:
+    markdown = render_report_markdown(request.document)
+    filename = request.filename.strip() if request.filename else _report_markdown_filename(request.document.title)
+    if not filename.lower().endswith((".md", ".markdown")):
+        filename = f"{filename}.md"
+    summary = request.document.abstract or request.document.subtitle or f"Compiled report: {request.document.title}"
+    ingest = await sources.ingest_source(
+        clerk_user_id=clerk_user_id,
+        filename=filename,
+        declared_media_type="text/markdown",
+        payload=markdown.encode("utf-8"),
+        tag_ids=request.tag_ids,
+        user_guidance=request.user_guidance,
+        origin_surface=origin_surface,
+        origin_thread_id=origin_thread_id,
+        folder_id=request.folder_id,
+        virtual_name=filename,
+        metadata={
+            "description": f"Compiled Markdown report for {request.document.title}",
+            "summary": summary,
+            "artifact_kind": "report",
+            "report_title": request.document.title,
+            "report_format": "markdown",
+        },
+    )
+    return ReportMarkdownSaveResponse(markdown=markdown, source=ingest.source, task=ingest.task)
 
 
 def _render_section(section: ReportSection, *, level: int) -> list[str]:
@@ -89,3 +127,10 @@ def _escape_table_cell(value: str) -> str:
 
 def _escape_brackets(value: str) -> str:
     return value.replace("[", "\\[").replace("]", "\\]")
+
+
+def _report_markdown_filename(title: str) -> str:
+    normalized = "".join(character.lower() if character.isalnum() else "-" for character in title.strip())
+    parts = [part for part in normalized.split("-") if part]
+    stem = "-".join(parts) or "report"
+    return f"{stem[:120]}.md"

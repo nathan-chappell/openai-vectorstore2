@@ -37,6 +37,8 @@ import type {
   ResearchLibraryBuildRequest,
   ResearchLibraryBuildResponse,
   ResplitSourceRequest,
+  ReportMarkdownSaveRequest,
+  ReportMarkdownSaveResponse,
   SearchChunksRequest,
   SearchFilterPayload,
   SearchResponse,
@@ -365,6 +367,13 @@ export async function freeformAction(payload: FreeformActionRequest): Promise<Ac
       mode: payload.mode,
       selected_source_ids: payload.selectedSourceIds ?? [],
     }),
+  });
+}
+
+export async function saveReportMarkdown(payload: ReportMarkdownSaveRequest): Promise<ReportMarkdownSaveResponse> {
+  return apiRequest<ReportMarkdownSaveResponse>("/reports/markdown", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

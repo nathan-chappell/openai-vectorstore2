@@ -34,6 +34,14 @@ The web UI is a Vite/React app served by FastAPI after build.
 - Tools map directly to app-core operations: list/inspect sources, manage tags, preview split, ingest text, re-split, search, branch, QA, freeform, image, voice, list tasks, and inspect tasks.
 - Long-running ChatKit tools emit progress updates with useful counts, task IDs, and generated asset IDs.
 
+## Reports
+
+Structured report documents live in `backend/app/schemas/reports.py` and render through `backend/app/services/reports.py`.
+
+- `POST /api/reports/markdown` renders a structured report to Markdown and saves the result through the canonical source ingestion path.
+- Saved Markdown reports are normal library sources with report metadata, so they can be searched, selected for ChatKit context, downloaded, deleted, and cited like uploaded files.
+- PDF rendering and inspection are planned as a later export path over the same structured report source.
+
 ## MCP And Apps UI
 
 `backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.

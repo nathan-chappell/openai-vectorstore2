@@ -34,6 +34,7 @@ AppOperation: TypeAlias = Literal[
     "branch_search",
     "qa",
     "freeform",
+    "save_report_markdown",
     "generate_image",
     "generate_voice",
     "list_tasks",
@@ -265,6 +266,12 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("POST /api/actions/freeform",),
         chatkit_tool="freeform_from_library",
         mcp_tools=("freeform",),
+    ),
+    AppCapability(
+        operation="save_report_markdown",
+        summary="Render a structured report document to Markdown and save it as a first-class library source.",
+        rest_routes=("POST /api/reports/markdown",),
+        notes="The saved report follows the canonical source ingestion path so it can be searched, selected, downloaded, and cited.",
     ),
     AppCapability(
         operation="generate_image",

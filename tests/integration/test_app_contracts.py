@@ -58,6 +58,8 @@ FRONTEND_SCHEMA_CONTRACT: dict[str, tuple[str, set[str]]] = {
     "FileListResponse": ("SourceListResponse", {"has_more", "page", "page_size", "sources", "total_count"}),
     "GeneratedAsset": ("GeneratedAsset", {"byte_size", "download_url", "filename", "id", "kind"}),
     "IngestFinalizeResponse": ("IngestFinalizeResponse", {"source", "task"}),
+    "ReportMarkdownSaveRequest": ("ReportMarkdownSaveRequest", {"document", "filename", "folder_id", "tag_ids"}),
+    "ReportMarkdownSaveResponse": ("ReportMarkdownSaveResponse", {"markdown", "source", "task"}),
     "LibrarySourceDetail": (
         "SourceDetail",
         {"chunks", "ingest_strategy", "metadata", "storage_key", "storage_provider"},
@@ -305,6 +307,66 @@ async def test_http_ingest_search_and_qa_contracts(
                 if task["kind"] == "ingest" and task["id"] == upload_payload["task"]["id"]
             ]
             assert deleted_source_tasks[0]["source_file_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_report_markdown_save_api_persists_report_as_source(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/api/reports/markdown",
+                headers=auth_headers,
+                json={
+                    "document": {
+                        "title": "Retrieval Quality Report",
+                        "abstract": "A compact report about retrieval behavior.",
+                        "sections": [
+                            {
+                                "title": "Findings",
+                                "blocks": [
+                                    {
+                                        "kind": "paragraph",
+                                        "text": "Source-level retrieval keeps file evidence intact.",
+                                        "citations": [{"label": "S1", "source_id": "source-alpha"}],
+                                    }
+                                ],
+                            }
+                        ],
+                        "citations": [{"label": "S1", "source_id": "source-alpha", "note": "Example source"}],
+                    },
+                    "filename": "retrieval-quality.md",
+                },
+            )
+            assert response.status_code == 200
+            payload = response.json()
+            assert payload["markdown"].startswith("# Retrieval Quality Report")
+            assert "[S1](chatkit-link://source?source_id=source-alpha)" in payload["markdown"]
+            assert payload["source"]["original_filename"] == "retrieval-quality.md"
+            assert payload["source"]["status"] == "processing"
+            task = payload["task"]
+            assert task["kind"] == "ingest"
+            assert task["origin_surface"] == "web"
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=task["id"],
+                expected_status="completed",
+            )
+
+            detail = await client.get(f"/api/sources/{payload['source']['id']}", headers=auth_headers)
+            assert detail.status_code == 200
+            detail_payload = detail.json()
+            assert detail_payload["status"] == "ready"
+            assert detail_payload["media_type"] == "text/markdown"
+            assert detail_payload["metadata"]["artifact_kind"] == "report"
+            assert detail_payload["metadata"]["report_format"] == "markdown"
 
 
 @pytest.mark.asyncio

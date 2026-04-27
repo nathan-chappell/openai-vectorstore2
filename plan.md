@@ -216,7 +216,8 @@ Implementation notes:
 
 - Completed first pass: added a Pydantic structured report document model for title, sections, prose blocks, lists, tables, citations/evidence links, equations/math blocks, and figures/assets.
 - Completed first pass: added a canonical Markdown renderer that preserves citation links, KaTeX-compatible display/inline math, escaped tables, lists, figures, and references.
-- Next pass: add persistence and API/task boundaries so structured reports and compiled Markdown become library artifacts.
+- Completed first persistence/API pass: added a typed `POST /api/reports/markdown` boundary that renders a structured report to Markdown, saves it through canonical source ingestion, stores report metadata on the resulting source, returns the source/task, and exposes matching frontend contracts.
+- Next pass: expose report save/compile through ChatKit and MCP tools so agents can create the same saved Markdown artifacts without calling REST directly.
 - Later pass: optionally render PDF from the same structured report source.
 - Store compiled report artifacts through the same library/storage boundaries used for source files and generated assets, so reports can be searched, selected for ChatKit scope, previewed, downloaded, and cited later.
 - ChatKit should expose agent tools to draft/update a structured report, compile it, save it into a folder, render Markdown preview, render PDF preview, and return library links to the saved artifacts.

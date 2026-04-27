@@ -55,6 +55,8 @@ from backend.app.schemas import (
     ResearchLibraryBuildRequest,
     ResearchLibraryBuildResponse,
     ResplitSourceRequest,
+    ReportMarkdownSaveRequest,
+    ReportMarkdownSaveResponse,
     SearchRequest,
     SearchResponse,
     SplitPreviewResponse,
@@ -68,6 +70,7 @@ from backend.app.schemas import (
     SourceTagsUpdateRequest,
     VoiceGenerationRequest,
 )
+from backend.app.services.reports import save_report_markdown_source
 from backend.app.services import AuthenticatedUser
 from backend.app.web_auth import (
     require_active_web_user,
@@ -677,6 +680,23 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> ActionResponse:
         return await services.actions.freeform(clerk_user_id=user.clerk_user_id, payload=payload, origin_surface="web")
+
+    @app.post("/api/reports/markdown")
+    async def save_report_markdown_api(
+        payload: ReportMarkdownSaveRequest,
+        user: AuthenticatedUser = Depends(require_billable_web_user),
+    ) -> ReportMarkdownSaveResponse:
+        try:
+            return await save_report_markdown_source(
+                sources=services.sources,
+                clerk_user_id=user.clerk_user_id,
+                request=payload,
+                origin_surface="web",
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     @app.post("/api/actions/image")
     async def image_api(
