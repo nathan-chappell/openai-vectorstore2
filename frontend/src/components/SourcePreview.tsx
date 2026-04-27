@@ -99,7 +99,7 @@ export function SourcePreview({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [previewMediaType, previewSourceId, previewSourceKind, selectedSource]);
+  }, [previewMediaType, previewSourceId, previewSourceKind]);
 
   if (!selectedSource) {
     return (

@@ -48,8 +48,8 @@ export function WorkspaceHeader({
           ⚙
         </button>
       ) : null}
-      <button type="button" className="secondary-button" onClick={onRefresh} disabled={busy}>
-        Refresh
+      <button type="button" className="icon-button" onClick={onRefresh} disabled={busy} aria-label="Refresh" title="Refresh">
+        ↻
       </button>
     </header>
   );

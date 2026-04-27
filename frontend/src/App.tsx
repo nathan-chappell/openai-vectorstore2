@@ -28,7 +28,6 @@ import {
   updateSourceTags,
 } from "./lib/api";
 import {
-  ACTIVE_TASK_REFRESH_INTERVAL_MS,
   DEFAULT_LIBRARY_QUERY,
   DEFAULT_SPLIT_GUIDANCE,
   EXPLORER_RENDER_LIMIT,
@@ -134,7 +133,6 @@ export function App({ authMode }: AppProps) {
     }
     return entriesBySourceId;
   }, [knownEntries]);
-  const hasActiveTasks = useMemo(() => tasks.some(isActiveTask), [tasks]);
   const selectedSourceId = selectedSource?.id ?? null;
   const selectedSourceTagChanged = selectedSource
     ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
@@ -251,39 +249,25 @@ export function App({ authMode }: AppProps) {
   const refreshAll = useCallback(async (): Promise<void> => {
     setBusy(true);
     try {
-      const [me, tagList, taskList] = await Promise.all([getAuthenticatedUser(), listTags(), listTasks()]);
-      setUser(me);
-      setTags(tagList);
-      setTasks(taskList.tasks);
-      const response = await loadFolder(currentFolderId);
-      setStatus(`Ready at ${response.current.path}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not load the workspace.");
-    } finally {
-      setBusy(false);
-    }
-  }, [currentFolderId, loadFolder]);
-
-  const refreshActivity = useCallback(async (): Promise<void> => {
-    try {
       const detailPromise = selectedSourceId
         ? getSource(selectedSourceId).catch(() => null)
         : Promise.resolve<SourceDetail | null>(null);
-      const [tagList, taskList, detail] = await Promise.all([listTags(), listTasks(), detailPromise]);
+      const [me, tagList, taskList, detail] = await Promise.all([getAuthenticatedUser(), listTags(), listTasks(), detailPromise]);
+      setUser(me);
       setTags(tagList);
       setTasks(taskList.tasks);
       if (detail) {
         setSelectedSource(detail);
       }
-      await refreshExplorer();
+      const response = await loadFolder(currentFolderId);
       const activeTask = taskList.tasks.find(isActiveTask);
-      if (activeTask) {
-        setStatus(`${activeTask.kind} ${activeTask.status}: ${activeTask.title}.`);
-      }
+      setStatus(activeTask ? `${activeTask.kind} ${activeTask.status}: ${activeTask.title}.` : `Ready at ${response.current.path}.`);
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not refresh background activity.");
+      setStatus(error instanceof Error ? error.message : "Could not load the workspace.");
+    } finally {
+      setBusy(false);
     }
-  }, [refreshExplorer, selectedSourceId]);
+  }, [currentFolderId, loadFolder, selectedSourceId]);
 
   useEffect(() => {
     knownEntriesRef.current = knownEntries;
@@ -324,14 +308,20 @@ export function App({ authMode }: AppProps) {
   }, [refreshExplorer]);
 
   useEffect(() => {
-    if (!hasActiveTasks) {
-      return undefined;
+    function handleKeyDown(event: KeyboardEvent): void {
+      if (event.key.toLowerCase() !== "r" || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+        return;
+      }
+      if (busy || isEditableShortcutTarget(event.target)) {
+        return;
+      }
+      event.preventDefault();
+      void refreshAll();
     }
-    const intervalId = window.setInterval(() => {
-      void refreshActivity();
-    }, ACTIVE_TASK_REFRESH_INTERVAL_MS);
-    return () => window.clearInterval(intervalId);
-  }, [hasActiveTasks, refreshActivity]);
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [busy, refreshAll]);
 
   useEffect(() => {
     setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
