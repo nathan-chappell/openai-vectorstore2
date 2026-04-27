@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import logging
 import math
-from typing import Any, Mapping
+from typing import Mapping, TypedDict
 
 import httpx
 from clerk_backend_api.sdk import Clerk
@@ -13,6 +13,24 @@ from pydantic import BaseModel
 from backend.app.core.config import AppSettings
 
 logger = logging.getLogger(__name__)
+
+
+class ClerkEmailPayload(TypedDict, total=False):
+    id: str
+    email_address: str
+
+
+class ClerkUserPayload(TypedDict, total=False):
+    id: str
+    primary_email_address_id: str
+    email_addresses: list[ClerkEmailPayload]
+    private_metadata: dict[str, object]
+    first_name: str
+    last_name: str
+    username: str
+    image_url: str
+    created_at: int
+    last_sign_in_at: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -119,18 +137,7 @@ class AuthService:
             raise RuntimeError("CLERK_SECRET_KEY is required for non-local users.")
         response = await self._http_client.get(f"/v1/users/{clerk_user_id}")
         response.raise_for_status()
-        payload = response.json()
-        private_metadata = payload.get("private_metadata") or {}
-        raw_role = private_metadata.get(self._settings.clerk_role_metadata_key)
-        role = raw_role.strip() if isinstance(raw_role, str) and raw_role.strip() else None
-        return UserRecord(
-            clerk_user_id=clerk_user_id,
-            primary_email=_extract_primary_email(payload),
-            display_name=_extract_display_name(payload, clerk_user_id),
-            active=bool(private_metadata.get(self._settings.clerk_active_metadata_key)),
-            role=role,
-            credit_floor_usd=self._resolve_credit_floor(private_metadata),
-        )
+        return self._user_record_from_payload(_clerk_user_payload(response.json()), clerk_user_id=clerk_user_id)
 
     async def list_user_records(self, *, limit: int, offset: int, query: str | None = None) -> list[AdminUserRecord]:
         if self._settings.allow_local_dev_auth and (self._http_client is None or query in {None, "", "local-dev"}):
@@ -155,11 +162,7 @@ class AuthService:
             params["query"] = normalized_query
         response = await self._http_client.get("/v1/users", params=params)
         response.raise_for_status()
-        payload = response.json()
-        raw_items = payload.get("data") if isinstance(payload, dict) else payload
-        if not isinstance(raw_items, list):
-            return []
-        return [self._admin_user_record_from_payload(item) for item in raw_items if isinstance(item, dict)]
+        return [self._admin_user_record_from_payload(item) for item in _clerk_user_payloads(response.json())]
 
     async def set_user_active_state(self, *, clerk_user_id: str, active: bool) -> UserRecord:
         if clerk_user_id == "local-dev" and self._settings.allow_local_dev_auth:
@@ -168,8 +171,8 @@ class AuthService:
             raise RuntimeError("CLERK_SECRET_KEY is required for Clerk admin operations.")
         current = await self._http_client.get(f"/v1/users/{clerk_user_id}")
         current.raise_for_status()
-        payload = current.json()
-        private_metadata = dict(payload.get("private_metadata") or {})
+        payload = _clerk_user_payload(current.json())
+        private_metadata = _private_metadata_from_payload(payload)
         private_metadata[self._settings.clerk_active_metadata_key] = active
         if (
             active
@@ -183,7 +186,7 @@ class AuthService:
             json={"private_metadata": private_metadata},
         )
         updated.raise_for_status()
-        return self._user_record_from_payload(updated.json(), clerk_user_id=clerk_user_id)
+        return self._user_record_from_payload(_clerk_user_payload(updated.json()), clerk_user_id=clerk_user_id)
 
     async def _verify_session_token(self, token: str) -> str | None:
         if self._clerk_sdk is None or self._settings.clerk_secret_key is None:
@@ -220,42 +223,30 @@ class AuthService:
         subject = payload.get("subject")
         return subject if isinstance(subject, str) and subject.strip() else None
 
-    def _admin_user_record_from_payload(self, payload: dict[str, Any]) -> AdminUserRecord:
+    def _admin_user_record_from_payload(self, payload: ClerkUserPayload) -> AdminUserRecord:
         clerk_user_id = str(payload.get("id") or "").strip()
-        private_metadata = payload.get("private_metadata") or {}
-        raw_role = (
-            private_metadata.get(self._settings.clerk_role_metadata_key) if isinstance(private_metadata, dict) else None
-        )
-        role = raw_role.strip() if isinstance(raw_role, str) and raw_role.strip() else None
+        private_metadata = _private_metadata_from_payload(payload)
         return AdminUserRecord(
             clerk_user_id=clerk_user_id,
             primary_email=_extract_primary_email(payload),
             display_name=_extract_display_name(payload, clerk_user_id),
-            image_url=payload.get("image_url") if isinstance(payload.get("image_url"), str) else None,
-            active=bool(private_metadata.get(self._settings.clerk_active_metadata_key))
-            if isinstance(private_metadata, dict)
-            else False,
-            role=role,
-            credit_floor_usd=self._resolve_credit_floor(private_metadata if isinstance(private_metadata, dict) else {}),
+            image_url=payload.get("image_url"),
+            active=_metadata_bool(private_metadata, self._settings.clerk_active_metadata_key),
+            role=_metadata_str(private_metadata, self._settings.clerk_role_metadata_key),
+            credit_floor_usd=self._resolve_credit_floor(private_metadata),
             created_at_ms=_int_or_none(payload.get("created_at")),
             last_sign_in_at_ms=_int_or_none(payload.get("last_sign_in_at")),
         )
 
-    def _user_record_from_payload(self, payload: dict[str, Any], *, clerk_user_id: str) -> UserRecord:
-        private_metadata = payload.get("private_metadata") or {}
-        raw_role = (
-            private_metadata.get(self._settings.clerk_role_metadata_key) if isinstance(private_metadata, dict) else None
-        )
-        role = raw_role.strip() if isinstance(raw_role, str) and raw_role.strip() else None
+    def _user_record_from_payload(self, payload: ClerkUserPayload, *, clerk_user_id: str) -> UserRecord:
+        private_metadata = _private_metadata_from_payload(payload)
         return UserRecord(
             clerk_user_id=clerk_user_id,
             primary_email=_extract_primary_email(payload),
             display_name=_extract_display_name(payload, clerk_user_id),
-            active=bool(private_metadata.get(self._settings.clerk_active_metadata_key))
-            if isinstance(private_metadata, dict)
-            else False,
-            role=role,
-            credit_floor_usd=self._resolve_credit_floor(private_metadata if isinstance(private_metadata, dict) else {}),
+            active=_metadata_bool(private_metadata, self._settings.clerk_active_metadata_key),
+            role=_metadata_str(private_metadata, self._settings.clerk_role_metadata_key),
+            credit_floor_usd=self._resolve_credit_floor(private_metadata),
         )
 
     def _resolve_credit_floor(self, metadata: Mapping[str, object]) -> float:
@@ -283,23 +274,87 @@ class AuthService:
         return round(value, 8)
 
 
-def _extract_primary_email(payload: dict[str, Any]) -> str | None:
+def _clerk_user_payload(raw_payload: object) -> ClerkUserPayload:
+    if not isinstance(raw_payload, dict):
+        return {}
+
+    payload: ClerkUserPayload = {}
+    for key in (
+        "id",
+        "primary_email_address_id",
+        "first_name",
+        "last_name",
+        "username",
+        "image_url",
+    ):
+        raw_value = raw_payload.get(key)
+        if isinstance(raw_value, str):
+            payload[key] = raw_value
+
+    for key in ("created_at", "last_sign_in_at"):
+        raw_value = _int_or_none(raw_payload.get(key))
+        if raw_value is not None:
+            payload[key] = raw_value
+
+    raw_metadata = raw_payload.get("private_metadata")
+    if isinstance(raw_metadata, dict):
+        payload["private_metadata"] = {key: value for key, value in raw_metadata.items() if isinstance(key, str)}
+
+    raw_email_addresses = raw_payload.get("email_addresses")
+    if isinstance(raw_email_addresses, list):
+        email_addresses: list[ClerkEmailPayload] = []
+        for raw_email in raw_email_addresses:
+            if not isinstance(raw_email, dict):
+                continue
+            email: ClerkEmailPayload = {}
+            raw_id = raw_email.get("id")
+            raw_address = raw_email.get("email_address")
+            if isinstance(raw_id, str):
+                email["id"] = raw_id
+            if isinstance(raw_address, str):
+                email["email_address"] = raw_address
+            if email:
+                email_addresses.append(email)
+        payload["email_addresses"] = email_addresses
+
+    return payload
+
+
+def _clerk_user_payloads(raw_payload: object) -> list[ClerkUserPayload]:
+    raw_items = raw_payload.get("data") if isinstance(raw_payload, dict) else raw_payload
+    if not isinstance(raw_items, list):
+        return []
+    return [_clerk_user_payload(item) for item in raw_items]
+
+
+def _private_metadata_from_payload(payload: ClerkUserPayload) -> dict[str, object]:
+    return dict(payload.get("private_metadata", {}))
+
+
+def _metadata_str(metadata: Mapping[str, object], key: str) -> str | None:
+    raw_value = metadata.get(key)
+    return raw_value.strip() if isinstance(raw_value, str) and raw_value.strip() else None
+
+
+def _metadata_bool(metadata: Mapping[str, object], key: str) -> bool:
+    return bool(metadata.get(key))
+
+
+def _extract_primary_email(payload: ClerkUserPayload) -> str | None:
     primary_email_id = payload.get("primary_email_address_id")
-    email_addresses = payload.get("email_addresses") or []
+    email_addresses = payload.get("email_addresses", [])
     for email in email_addresses:
-        if (
-            isinstance(email, dict)
-            and email.get("id") == primary_email_id
-            and isinstance(email.get("email_address"), str)
-        ):
-            return email["email_address"]
+        email_address = email.get("email_address")
+        if email.get("id") == primary_email_id and isinstance(email_address, str):
+            return email_address
     for email in email_addresses:
-        if isinstance(email, dict) and isinstance(email.get("email_address"), str):
-            return email["email_address"]
+        email_address = email.get("email_address")
+        if isinstance(email_address, str):
+            return email_address
     return None
 
 
-def _extract_display_name(payload: dict[str, Any], fallback: str) -> str:
+def _extract_display_name(payload: ClerkUserPayload, fallback: str) -> str:
     first_name = payload.get("first_name")
     last_name = payload.get("last_name")
     full_name = " ".join(part.strip() for part in [first_name, last_name] if isinstance(part, str) and part.strip())

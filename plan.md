@@ -71,6 +71,7 @@ Goal:
 Implementation plan:
 
 - Completed first pass: inventoried the highest-traffic JSON payloads; added shared typed-dict aliases for source metadata, research provenance, OpenAI usage, vector attributes, structured objects, and task payloads; added SQLAlchemy model accessors for `SourceFile.source_metadata`, `SourceFile.vector_attributes`, `ResearchImportCandidate.provenance`, `StoredAsset.asset_metadata`, `CostEvent.raw_usage`, task object payloads, and ChatKit metadata/status payloads; and refactored source, research, billing, and ChatKit store hotspots to use them.
+- Completed auth/admin payload cleanup: Clerk user and email JSON now enters through typed-dict boundary parsing, and user/admin record construction uses typed metadata accessors for active state, role, and credit floor instead of repeated bare dict handling.
 - Be careful with method covariance and invariant containers: build with narrow local types, then assign or cast at the final wider return/override boundary when required.
 - Remove helpers/normalizers made redundant by stronger typed boundaries, and drop legacy chunk/vector compatibility code where tests show the current source-level indexing flow no longer depends on it.
 - Keep edits incremental with integration-level coverage; add unit tests only for tricky parsing or normalization logic that remains.
