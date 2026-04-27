@@ -165,14 +165,6 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
 
   const tags = [
     { id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 },
-    ...Array.from({ length: 42 }, (_, index) => ({
-      id: `tag-extra-${index + 1}`,
-      name: `Extra ${String(index + 1).padStart(2, "0")}`,
-      slug: `extra-${index + 1}`,
-      color: null,
-      source: "auto",
-      source_count: 1,
-    })),
   ];
 
   await page.route("**/api/tags", async (route) => {
@@ -236,23 +228,17 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
   await expect(page.locator(".file-rows")).toContainText("bravo-plan.txt");
 
   await page.getByRole("tab", { name: "Library" }).click();
-  await expect(page.locator(".library-tag-panel")).toContainText("+7 more");
-  await expect(page.getByRole("button", { name: "Extra 42" })).toHaveCount(0);
-  await page.getByRole("button", { name: "RAG" }).click();
+  await page.getByLabel("Tag").selectOption("tag-rag");
   await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files"]);
   expect(searchPayloads[0].tag_ids).toEqual(["tag-rag"]);
-  await expect(page.getByRole("button", { name: "RAG" })).toHaveAttribute("aria-pressed", "true");
-  await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
+  await expect(page.getByLabel("Tag")).toHaveValue("tag-rag");
+  await expect(page.locator(".library-file-rows")).toContainText("alpha-notes.txt");
 
   await page.getByPlaceholder("indexed files").fill("bravo");
   await page.keyboard.press("Control+Enter");
   await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files", "bravo"]);
-  await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
-  await expect(page.locator(".library-result-list")).toContainText("charlie-paper.pdf");
-  await expect(page.locator(".library-result-list")).toContainText("/Archives/charlie-paper.pdf");
-  await page.getByRole("button", { name: "Select results" }).click();
-  await expect(page.getByRole("checkbox", { name: "Select alpha-notes.txt for chat" })).toBeChecked();
-  await expect(page.getByRole("checkbox", { name: "Select charlie-paper.pdf for chat" })).toBeChecked();
+  await expect(page.locator(".library-file-rows")).toContainText("alpha-notes.txt");
+  await expect(page.locator(".library-file-rows")).toContainText("charlie-paper.pdf");
   await page.locator(".library-result-row").filter({ hasText: "alpha-notes.txt" }).locator(".library-result-open").click();
   await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
   await expect(page.locator('[data-entry-id="entry-alpha"]')).toHaveClass(/selected-file-row/);

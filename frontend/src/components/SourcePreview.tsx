@@ -5,7 +5,7 @@ import remarkGfm from "remark-gfm";
 import { readSourceContentBlob } from "../lib/api";
 import { CHUNK_PREVIEW_LIMIT, TEXT_PREVIEW_LIMIT } from "../lib/appConstants";
 import type { PreviewResource } from "../lib/appTypes";
-import type { ChunkSummary, SourceDetail } from "../lib/types";
+import type { ChunkSummary, SourceDetail, TagSummary } from "../lib/types";
 import {
   canPreviewSource,
   formatBytes,
@@ -20,16 +20,21 @@ export function SourcePreview({
   busy,
   selectedSource,
   uploadGuidance,
+  tags,
   onUploadGuidanceChange,
   onResplit,
+  onSaveSourceTag,
 }: {
   busy: boolean;
   selectedSource: SourceDetail | null;
   uploadGuidance: string;
+  tags: TagSummary[];
   onUploadGuidanceChange: (value: string) => void;
   onResplit: () => void;
+  onSaveSourceTag: (tagSlug: string | null) => void;
 }) {
   const [previewResource, setPreviewResource] = useState<PreviewResource>({ state: "idle" });
+  const [tagDraft, setTagDraft] = useState("");
   const previewSourceId = selectedSource?.id ?? null;
   const previewSourceKind = selectedSource?.source_kind ?? null;
   const previewMediaType = selectedSource?.media_type ?? null;
@@ -86,6 +91,10 @@ export function SourcePreview({
       }
     };
   }, [previewMediaType, previewSourceId, previewSourceKind]);
+
+  useEffect(() => {
+    setTagDraft(selectedSource?.tags[0]?.slug ?? "");
+  }, [previewSourceId, selectedSource?.tags]);
 
   if (!selectedSource) {
     return (
@@ -173,13 +182,31 @@ export function SourcePreview({
             Re-split
           </button>
           <div className="tag-inspection">
-            <strong>AI-managed tags</strong>
-            <div className="tag-picker-list">
-              {selectedSource.tags.map((tag) => (
-                <span key={tag.id} className="tag-chip selected">{tag.name}</span>
+            <strong>File tag</strong>
+            <label className="field-label compact-field-label">
+              <input
+                list="source-tag-options"
+                value={tagDraft}
+                onChange={(event) => setTagDraft(event.currentTarget.value)}
+                placeholder="untagged"
+                disabled={busy}
+              />
+            </label>
+            <datalist id="source-tag-options">
+              {tags.map((tag) => (
+                <option key={tag.id} value={tag.slug}>
+                  {tag.name}
+                </option>
               ))}
-              {!selectedSource.tags.length ? <span className="subtle">No tags yet</span> : null}
-            </div>
+            </datalist>
+            <button
+              type="button"
+              className="secondary-button"
+              onClick={() => onSaveSourceTag(tagDraft.trim() || null)}
+              disabled={busy || tagDraft.trim() === (selectedSource.tags[0]?.slug ?? "")}
+            >
+              Save tag
+            </button>
           </div>
         </aside>
       </div>

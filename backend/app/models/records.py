@@ -171,7 +171,6 @@ class UserLibrary(Base):
     filesystem_entries: Mapped[list["FilesystemEntry"]] = relationship(
         back_populates="library", cascade="all, delete-orphan"
     )
-    tags: Mapped[list["Tag"]] = relationship(back_populates="library", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="library")
     assets: Mapped[list["StoredAsset"]] = relationship(back_populates="library", cascade="all, delete-orphan")
     research_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(
@@ -179,28 +178,12 @@ class UserLibrary(Base):
     )
 
 
-class Tag(Base):
-    __tablename__ = "tag"
-    __table_args__ = (
-        UniqueConstraint("library_id", "slug", name="uq_tag_library_slug"),
-        UniqueConstraint("library_id", "name", name="uq_tag_library_name"),
-    )
-
-    id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
-    library_id: Mapped[str] = mapped_column(ForeignKey("user_library.id"), nullable=False, index=True)
-    name: Mapped[str] = mapped_column(String(80), nullable=False)
-    slug: Mapped[str] = mapped_column(String(96), nullable=False)
-    color: Mapped[str | None] = mapped_column(String(32), nullable=True)
-    source: Mapped[str] = mapped_column(String(24), nullable=False, default="auto")
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
-
-    library: Mapped[UserLibrary] = relationship(back_populates="tags")
-    source_links: Mapped[list["SourceTagLink"]] = relationship(back_populates="tag", cascade="all, delete-orphan")
-
-
 class SourceFile(Base):
     __tablename__ = "source_file"
-    __table_args__ = (Index("ix_source_file_library_status_created_at", "library_id", "status", "created_at"),)
+    __table_args__ = (
+        Index("ix_source_file_library_status_created_at", "library_id", "status", "created_at"),
+        Index("ix_source_file_library_tag_slug", "library_id", "tag_slug"),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     library_id: Mapped[str] = mapped_column(ForeignKey("user_library.id"), nullable=False, index=True)
@@ -217,6 +200,7 @@ class SourceFile(Base):
     openai_original_file_purpose: Mapped[str | None] = mapped_column(String(32), nullable=True)
     openai_vector_file_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True)
     vector_attributes_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
+    tag_slug: Mapped[str | None] = mapped_column(String(96), nullable=True)
     ingest_strategy: Mapped[str | None] = mapped_column(String(80), nullable=True)
     metadata_json: Mapped[dict[str, object]] = mapped_column(JSON, nullable=False, default=dict)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -228,7 +212,6 @@ class SourceFile(Base):
         back_populates="source_file", uselist=False, cascade="all, delete-orphan"
     )
     chunks: Mapped[list["SemanticChunk"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
-    tag_links: Mapped[list["SourceTagLink"]] = relationship(back_populates="source_file", cascade="all, delete-orphan")
     tasks: Mapped[list["AppTask"]] = relationship(back_populates="source_file")
     research_seed_candidates: Mapped[list["ResearchImportCandidate"]] = relationship(
         back_populates="parent_source_file",
@@ -288,16 +271,6 @@ class FilesystemEntry(Base):
     )
     children: Mapped[list["FilesystemEntry"]] = relationship(back_populates="parent", cascade="all, delete-orphan")
     source_file: Mapped[SourceFile | None] = relationship(back_populates="filesystem_entry")
-
-
-class SourceTagLink(Base):
-    __tablename__ = "source_tag_link"
-
-    source_file_id: Mapped[str] = mapped_column(ForeignKey("source_file.id"), primary_key=True)
-    tag_id: Mapped[str] = mapped_column(ForeignKey("tag.id"), primary_key=True)
-
-    source_file: Mapped[SourceFile] = relationship(back_populates="tag_links")
-    tag: Mapped[Tag] = relationship(back_populates="source_links")
 
 
 class SemanticChunk(Base):

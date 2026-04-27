@@ -12,7 +12,6 @@ import type {
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
   SourceDetail,
-  TagMatchMode,
   TagSummary,
 } from "../lib/types";
 import { clamp, isEditableShortcutTarget } from "../lib/uiState";
@@ -32,14 +31,13 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResultCount,
   libraryResults,
   librarySearching,
-  libraryTagMatchMode,
   chatResults,
   previewGridRef,
   previewLayoutStyle,
   previewSplitPercent,
   selectedEntryIds,
   selectedEntryIdSet,
-  selectedExplorerTagIdSet,
+  selectedExplorerTagId,
   selectedSource,
   selectionAnchorEntryId,
   tags,
@@ -63,8 +61,8 @@ export const FileExplorer = memo(function FileExplorer({
   onSelectEntries,
   onShowShortcuts,
   onLibraryQueryChange,
-  onLibraryTagMatchModeChange,
-  onToggleExplorerTag,
+  onLibraryTagChange,
+  onSaveSourceTag,
   onUploadGuidanceChange,
   canGoBackFolder,
   canGoForwardFolder,
@@ -79,14 +77,13 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResultCount: number;
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
-  libraryTagMatchMode: TagMatchMode;
   chatResults: ChatResultItem[];
   previewGridRef: RefObject<HTMLDivElement | null>;
   previewLayoutStyle: CSSProperties & Record<"--preview-list-width", string>;
   previewSplitPercent: number;
   selectedEntryIds: string[];
   selectedEntryIdSet: Set<string>;
-  selectedExplorerTagIdSet: Set<string>;
+  selectedExplorerTagId: string | null;
   selectedSource: SourceDetail | null;
   selectionAnchorEntryId: string | null;
   tags: TagSummary[];
@@ -110,8 +107,8 @@ export const FileExplorer = memo(function FileExplorer({
   onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
   onShowShortcuts: () => void;
   onLibraryQueryChange: (value: string) => void;
-  onLibraryTagMatchModeChange: (value: TagMatchMode) => void;
-  onToggleExplorerTag: (tagId: string) => void;
+  onLibraryTagChange: (tagId: string | null) => void;
+  onSaveSourceTag: (tagSlug: string | null) => void;
   onUploadGuidanceChange: (value: string) => void;
   canGoBackFolder: boolean;
   canGoForwardFolder: boolean;
@@ -144,8 +141,10 @@ export const FileExplorer = memo(function FileExplorer({
           busy={busy}
           selectedSource={selectedSource}
           uploadGuidance={uploadGuidance}
+          tags={tags}
           onUploadGuidanceChange={onUploadGuidanceChange}
           onResplit={onResplit}
+          onSaveSourceTag={onSaveSourceTag}
         />
       </div>
     </>
@@ -340,15 +339,13 @@ export const FileExplorer = memo(function FileExplorer({
             libraryResultCount={libraryResultCount}
             libraryResults={libraryResults}
             librarySearching={librarySearching}
-            libraryTagMatchMode={libraryTagMatchMode}
             previewedSourceId={selectedSource?.id ?? null}
-            selectedTagIdSet={selectedExplorerTagIdSet}
+            selectedTagId={selectedExplorerTagId}
             tags={tags}
             onOpenSource={onOpenSource}
             onQueryChange={onLibraryQueryChange}
             onRunSearch={onRunLibrarySearch}
-            onTagMatchModeChange={onLibraryTagMatchModeChange}
-            onToggleTag={onToggleExplorerTag}
+            onTagChange={onLibraryTagChange}
           />
           {previewPane}
         </div>

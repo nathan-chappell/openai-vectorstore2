@@ -1322,13 +1322,13 @@ kbd {
 .library-search-view {
   min-height: 0;
   display: grid;
-  grid-template-rows: auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
   overflow: hidden;
 }
 
 .library-searchbar {
   display: grid;
-  grid-template-columns: minmax(16rem, 1fr) auto auto;
+  grid-template-columns: minmax(14rem, 1fr) minmax(8rem, 12rem) auto;
   gap: 0.5rem;
   align-items: end;
   border-bottom: 1px solid var(--line);
@@ -1336,12 +1336,24 @@ kbd {
   background: #fbfdff;
 }
 
-.library-query-field {
+.library-query-field,
+.tag-select-field {
   display: grid;
   gap: 0.25rem;
   color: #334155;
   font-size: 0.76rem;
   font-weight: 700;
+}
+
+.tag-select-field select,
+.tag-inspection input {
+  min-height: 2rem;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+  padding: 0.35rem 0.5rem;
+  background: #ffffff;
+  color: #0f172a;
 }
 
 .segmented-control {

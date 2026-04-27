@@ -24,6 +24,7 @@ import {
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
+  updateSourceTags,
 } from "./lib/api";
 import {
   DEFAULT_LIBRARY_QUERY,
@@ -54,7 +55,6 @@ import type {
   FilesystemEntrySummary,
   FilesystemListResponse,
   SourceDetail,
-  TagMatchMode,
   TagSummary,
   TaskSummary,
 } from "./lib/types";
@@ -88,9 +88,8 @@ export function App({ authMode }: AppProps) {
   const [folderBackStack, setFolderBackStack] = useState<Array<string | null>>([]);
   const [folderForwardStack, setFolderForwardStack] = useState<Array<string | null>>([]);
   const [activeFileView, setActiveFileView] = useState<WorkspaceFileView>("explorer");
-  const [selectedExplorerTagIds, setSelectedExplorerTagIds] = useState<string[]>([]);
+  const [selectedExplorerTagId, setSelectedExplorerTagId] = useState<string | null>(null);
   const [libraryQuery, setLibraryQuery] = useState("");
-  const [libraryTagMatchMode, setLibraryTagMatchMode] = useState<TagMatchMode>("all");
   const [libraryResults, setLibraryResults] = useState<LibrarySearchResult[]>([]);
   const [libraryResultCount, setLibraryResultCount] = useState(0);
   const [librarySearching, setLibrarySearching] = useState(false);
@@ -119,7 +118,6 @@ export function App({ authMode }: AppProps) {
   const canGoBackFolder = folderBackStack.length > 0;
   const canGoForwardFolder = folderForwardStack.length > 0;
 
-  const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
   const folderEntries = filesystem?.entries ?? [];
   const visibleEntries = folderEntries;
@@ -513,18 +511,18 @@ export function App({ authMode }: AppProps) {
   const runLibrarySearch = useCallback(
     async (
       mode: "replace" | "append",
-      options: { query?: string; tagIds?: string[]; tagMatchMode?: TagMatchMode } = {},
+      options: { query?: string; tagId?: string | null } = {},
     ): Promise<void> => {
       const query = (options.query ?? libraryQuery).trim() || DEFAULT_LIBRARY_QUERY;
-      const tagIds = options.tagIds ?? selectedExplorerTagIds;
-      const tagMatchMode = options.tagMatchMode ?? libraryTagMatchMode;
+      const tagId = options.tagId === undefined ? selectedExplorerTagId : options.tagId;
+      const tagIds = tagId ? [tagId] : [];
       setLibrarySearching(true);
       setStatus(`${mode === "append" ? "Appending" : "Searching"} semantic results for "${query}".`);
       try {
         const response = await searchChunks({
           query,
           tagIds,
-          tagMatchMode,
+          tagMatchMode: "all",
           maxResults: 24,
         });
         const nextResults: LibrarySearchResult[] = [];
@@ -562,28 +560,15 @@ export function App({ authMode }: AppProps) {
         setLibrarySearching(false);
       }
     },
-    [libraryQuery, libraryTagMatchMode, rememberEntitySearchItems, selectedExplorerTagIds],
+    [libraryQuery, rememberEntitySearchItems, selectedExplorerTagId],
   );
 
-  const toggleExplorerTag = useCallback(
-    (tagId: string): void => {
-      const nextTagIds = selectedExplorerTagIds.includes(tagId)
-        ? selectedExplorerTagIds.filter((id) => id !== tagId)
-        : [...selectedExplorerTagIds, tagId];
-      setSelectedExplorerTagIds(nextTagIds);
-      void runLibrarySearch("replace", { tagIds: nextTagIds });
+  const changeLibraryTag = useCallback(
+    (tagId: string | null): void => {
+      setSelectedExplorerTagId(tagId);
+      void runLibrarySearch("replace", { tagId });
     },
-    [runLibrarySearch, selectedExplorerTagIds],
-  );
-
-  const changeLibraryTagMatchMode = useCallback(
-    (value: TagMatchMode): void => {
-      setLibraryTagMatchMode(value);
-      if (selectedExplorerTagIds.length) {
-        void runLibrarySearch("replace", { tagMatchMode: value });
-      }
-    },
-    [runLibrarySearch, selectedExplorerTagIds],
+    [runLibrarySearch],
   );
 
   const resplitSelectedSource = useCallback(async (): Promise<void> => {
@@ -604,6 +589,30 @@ export function App({ authMode }: AppProps) {
       setBusy(false);
     }
   }, [refreshExplorer, selectedSource, uploadGuidance]);
+
+  const saveSelectedSourceTag = useCallback(
+    async (tagSlug: string | null): Promise<void> => {
+      if (!selectedSource) {
+        return;
+      }
+      setBusy(true);
+      try {
+        const tagIds = tagSlug ? [tagSlug] : [];
+        const response = await updateSourceTags(selectedSource.id, { tag_ids: tagIds });
+        const [detail, tagList, taskList] = await Promise.all([getSource(selectedSource.id), listTags(), listTasks()]);
+        setSelectedSource(detail);
+        setTags(tagList);
+        setTasks(taskList.tasks);
+        await refreshExplorer();
+        setStatus(`Queued tag update for ${response.source.virtual_path ?? response.source.display_title}.`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Tag update failed.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [refreshExplorer, selectedSource],
+  );
 
   const revealFileInExplorer = useCallback(
     async ({ sourceId, entryId }: RevealTarget): Promise<ChatKitClientToolResult> => {
@@ -694,12 +703,13 @@ export function App({ authMode }: AppProps) {
           const tag = tagsRef.current.find((candidate) => candidate.id === tagId || candidate.slug === tagId);
           return tag?.id ?? tagId;
         });
+        const tagId = tagIds[0] ?? null;
         scheduleClientToolUiUpdate(() => {
           setActiveFileView("library");
           setLibraryQuery((current) => current === query ? current : query);
-          setSelectedExplorerTagIds((current) => (sameStringArray(current, tagIds) ? current : tagIds));
+          setSelectedExplorerTagId((current) => (current === tagId ? current : tagId));
         });
-        return { ok: true, query, tag_ids: tagIds, requested_tags: rawTagIds };
+        return { ok: true, query, tag_ids: tagId ? [tagId] : [], requested_tags: rawTagIds };
       }
       if (toolCall.name === "reveal_file") {
         const sourceId = typeof toolCall.params.source_id === "string" ? toolCall.params.source_id : null;
@@ -734,7 +744,7 @@ export function App({ authMode }: AppProps) {
               : null);
         scheduleClientToolUiUpdate(async () => {
           if (targetFolderId) {
-            setSelectedExplorerTagIds((current) => current.length ? [] : current);
+            setSelectedExplorerTagId((current) => current === null ? current : null);
             setSelectedEntryIds((current) => current.length ? [] : current);
             setFocusedEntryId(null);
             setSelectionAnchorEntryId(null);
@@ -854,14 +864,13 @@ export function App({ authMode }: AppProps) {
           libraryResultCount={libraryResultCount}
           libraryResults={libraryResults}
           librarySearching={librarySearching}
-          libraryTagMatchMode={libraryTagMatchMode}
           chatResults={chatResults}
           previewGridRef={previewGridRef}
           previewLayoutStyle={previewLayoutStyle}
           previewSplitPercent={previewSplitPercent}
           selectedEntryIds={selectedEntryIds}
           selectedEntryIdSet={selectedEntryIdSet}
-          selectedExplorerTagIdSet={selectedExplorerTagIdSet}
+          selectedExplorerTagId={selectedExplorerTagId}
           selectedSource={selectedSource}
           selectionAnchorEntryId={selectionAnchorEntryId}
           tags={tags}
@@ -885,8 +894,8 @@ export function App({ authMode }: AppProps) {
           onSelectEntries={applyExplorerSelection}
           onShowShortcuts={() => setShortcutDialogOpen(true)}
           onLibraryQueryChange={setLibraryQuery}
-          onLibraryTagMatchModeChange={changeLibraryTagMatchMode}
-          onToggleExplorerTag={toggleExplorerTag}
+          onLibraryTagChange={changeLibraryTag}
+          onSaveSourceTag={(tagSlug) => void saveSelectedSourceTag(tagSlug)}
           onUploadGuidanceChange={setUploadGuidance}
           canGoBackFolder={canGoBackFolder}
           canGoForwardFolder={canGoForwardFolder}

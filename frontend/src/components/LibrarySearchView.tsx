@@ -1,11 +1,7 @@
-import { useMemo, useState } from "react";
-
 import { DEFAULT_LIBRARY_QUERY } from "../lib/appConstants";
 import type { LibrarySearchResult } from "../lib/appTypes";
-import type { TagMatchMode, TagSummary } from "../lib/types";
+import type { TagSummary } from "../lib/types";
 import { stringAttribute } from "../lib/uiFormat";
-
-const TAG_PREVIEW_LIMIT = 20;
 
 export function LibrarySearchView({
   busy,
@@ -13,56 +9,28 @@ export function LibrarySearchView({
   libraryResultCount,
   libraryResults,
   librarySearching,
-  libraryTagMatchMode,
   previewedSourceId,
-  selectedTagIdSet,
+  selectedTagId,
   tags,
   onOpenSource,
   onQueryChange,
   onRunSearch,
-  onTagMatchModeChange,
-  onToggleTag,
+  onTagChange,
 }: {
   busy: boolean;
   libraryQuery: string;
   libraryResultCount: number;
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
-  libraryTagMatchMode: TagMatchMode;
   previewedSourceId: string | null;
-  selectedTagIdSet: Set<string>;
+  selectedTagId: string | null;
   tags: TagSummary[];
   onOpenSource: (sourceId: string) => void;
   onQueryChange: (value: string) => void;
   onRunSearch: (mode: "replace" | "append") => void;
-  onTagMatchModeChange: (value: TagMatchMode) => void;
-  onToggleTag: (tagId: string) => void;
+  onTagChange: (tagId: string | null) => void;
 }) {
   const disabled = busy || librarySearching;
-  const [showAllTags, setShowAllTags] = useState(false);
-  const visibleTags = useMemo(() => {
-    const sortedTags = [...tags].sort((left, right) => {
-      const leftSelected = selectedTagIdSet.has(left.id);
-      const rightSelected = selectedTagIdSet.has(right.id);
-      if (leftSelected !== rightSelected) {
-        return leftSelected ? -1 : 1;
-      }
-      if (left.source !== right.source) {
-        return left.source === "manual" ? -1 : 1;
-      }
-      if (left.source_count !== right.source_count) {
-        return right.source_count - left.source_count;
-      }
-      return left.name.localeCompare(right.name);
-    });
-    if (showAllTags || sortedTags.length <= TAG_PREVIEW_LIMIT) {
-      return sortedTags;
-    }
-    const selectedTags = sortedTags.filter((tag) => selectedTagIdSet.has(tag.id));
-    const unselectedLimit = Math.max(TAG_PREVIEW_LIMIT, selectedTags.length) - selectedTags.length;
-    return [...selectedTags, ...sortedTags.filter((tag) => !selectedTagIdSet.has(tag.id)).slice(0, unselectedLimit)];
-  }, [selectedTagIdSet, showAllTags, tags]);
-  const hiddenTagCount = Math.max(0, tags.length - visibleTags.length);
   return (
     <section className="library-search-view" aria-label="Tag and semantic search">
       <div className="library-searchbar">
@@ -81,24 +49,21 @@ export function LibrarySearchView({
             placeholder={DEFAULT_LIBRARY_QUERY}
           />
         </label>
-        <div className="segmented-control" aria-label="Tag match mode">
-          <button
-            type="button"
-            className={libraryTagMatchMode === "all" ? "active" : undefined}
-            aria-pressed={libraryTagMatchMode === "all"}
-            onClick={() => onTagMatchModeChange("all")}
+        <label className="tag-select-field">
+          <span>Tag</span>
+          <select
+            value={selectedTagId ?? ""}
+            onChange={(event) => onTagChange(event.currentTarget.value || null)}
+            disabled={disabled}
           >
-            All
-          </button>
-          <button
-            type="button"
-            className={libraryTagMatchMode === "any" ? "active" : undefined}
-            aria-pressed={libraryTagMatchMode === "any"}
-            onClick={() => onTagMatchModeChange("any")}
-          >
-            Any
-          </button>
-        </div>
+            <option value="">All tags</option>
+            {tags.map((tag) => (
+              <option key={tag.id} value={tag.id}>
+                {tag.name}
+              </option>
+            ))}
+          </select>
+        </label>
         <div className="button-row">
           <button type="button" onClick={() => onRunSearch("replace")} disabled={disabled}>
             Search
@@ -106,34 +71,6 @@ export function LibrarySearchView({
           <button type="button" className="secondary-button" onClick={() => onRunSearch("append")} disabled={disabled}>
             Append
           </button>
-        </div>
-      </div>
-
-      <div className={showAllTags ? "library-tag-panel expanded" : "library-tag-panel"} aria-label="Tag filters">
-        <div className="library-tag-list">
-          {visibleTags.map((tag) => (
-            <button
-              key={tag.id}
-              type="button"
-              aria-pressed={selectedTagIdSet.has(tag.id)}
-              className={selectedTagIdSet.has(tag.id) ? "tag-chip selected" : "tag-chip"}
-              onClick={() => onToggleTag(tag.id)}
-              disabled={disabled}
-            >
-              {tag.name}
-            </button>
-          ))}
-          {hiddenTagCount ? (
-            <button type="button" className="tag-chip tag-chip-more" onClick={() => setShowAllTags(true)} disabled={disabled}>
-              +{hiddenTagCount} more
-            </button>
-          ) : null}
-          {showAllTags && tags.length > TAG_PREVIEW_LIMIT ? (
-            <button type="button" className="tag-chip tag-chip-more" onClick={() => setShowAllTags(false)} disabled={disabled}>
-              Less
-            </button>
-          ) : null}
-          {!tags.length ? <span>No tags</span> : null}
         </div>
       </div>
 

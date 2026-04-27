@@ -78,7 +78,7 @@ class ReportMarkdownSaveRequest(BaseModel):
     document: ReportDocument
     filename: str | None = Field(default=None, min_length=1, max_length=255)
     folder_id: str | None = None
-    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
     user_guidance: str | None = Field(default=None, max_length=2048)
 
 

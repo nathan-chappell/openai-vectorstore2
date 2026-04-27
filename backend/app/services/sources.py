@@ -28,8 +28,6 @@ from backend.app.models import (
     ResearchImportCandidate,
     SemanticChunk,
     SourceFile,
-    SourceTagLink,
-    Tag,
     UserLibrary,
     new_id,
 )
@@ -99,8 +97,8 @@ TEXT_EXTENSIONS = {
     ".yml",
 }
 
-TAG_SLOT_COUNT = 8
-AUTO_TAG_LIMIT = 3
+TAG_SLOT_COUNT = 1
+AUTO_TAG_LIMIT = 1
 VECTOR_ATTRIBUTES_VERSION = 3
 CHAT_FILE_INPUT_LIMIT = 10
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")
@@ -374,8 +372,8 @@ class SourceService:
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             library = await self._library_for_user(session, app_user=app_user)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
-            selected_tag_ids = {tag.id for tag in selected_tags}
+            selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+            selected_tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             normalized_query = query.casefold().strip() if isinstance(query, str) else ""
             sources = sorted(library.sources, key=lambda source: source.created_at, reverse=True)
             if normalized_query:
@@ -391,17 +389,8 @@ class SourceService:
                     or normalized_query in source.source_kind.casefold()
                     or normalized_query in _metadata_search_text(source.source_metadata)
                 ]
-            if selected_tag_ids:
-
-                def matches_tags(source: SourceFile) -> bool:
-                    source_tag_ids = {link.tag_id for link in source.tag_links}
-                    return (
-                        selected_tag_ids.issubset(source_tag_ids)
-                        if tag_match_mode == "all"
-                        else bool(selected_tag_ids & source_tag_ids)
-                    )
-
-                sources = [source for source in sources if matches_tags(source)]
+            if selected_tag_slug:
+                sources = [source for source in sources if source.tag_slug == selected_tag_slug]
 
             start = max(page - 1, 0) * page_size
             end = start + page_size
@@ -434,9 +423,6 @@ class SourceService:
                         .where(FilesystemEntry.library_id == library.id, FilesystemEntry.parent_id == folder.id)
                         .options(
                             selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
-                            selectinload(FilesystemEntry.source_file)
-                            .selectinload(SourceFile.tag_links)
-                            .selectinload(SourceTagLink.tag),
                         )
                     )
                 )
@@ -490,28 +476,22 @@ class SourceService:
                         )
                         .options(
                             selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
-                            selectinload(FilesystemEntry.source_file)
-                            .selectinload(SourceFile.tag_links)
-                            .selectinload(SourceTagLink.tag),
                         )
                     )
                 )
                 .scalars()
                 .all()
             )
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
-            selected_tag_ids = {tag.id for tag in selected_tags}
+            selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+            selected_tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             vector_source_id_set = set(vector_source_ids)
 
             def matches_entry(entry: FilesystemEntry) -> bool:
                 source = entry.source_file
-                if selected_tag_ids:
+                if selected_tag_slug:
                     if source is None:
                         return False
-                    source_tag_ids = {link.tag_id for link in source.tag_links}
-                    if tag_match_mode == "all" and not selected_tag_ids.issubset(source_tag_ids):
-                        return False
-                    if tag_match_mode == "any" and not (selected_tag_ids & source_tag_ids):
+                    if source.tag_slug != selected_tag_slug:
                         return False
                 if not normalized_query:
                     return True
@@ -643,9 +623,6 @@ class SourceService:
                                 )
                                 .options(
                                     selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
-                                    selectinload(FilesystemEntry.source_file)
-                                    .selectinload(SourceFile.tag_links)
-                                    .selectinload(SourceTagLink.tag),
                                 )
                             )
                         )
@@ -694,7 +671,7 @@ class SourceService:
             await self.update_source_tags(
                 clerk_user_id=clerk_user_id,
                 source_id=source_id,
-                tag_ids=[tag.id for tag in source_detail.tags],
+                tag_ids=[source_detail.tags[0].slug] if source_detail.tags else [],
                 origin_surface=origin_surface,
                 origin_thread_id=origin_thread_id,
             )
@@ -855,7 +832,14 @@ class SourceService:
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             library = await self._library_for_user(session, app_user=app_user)
-            return [self._tag_summary(tag) for tag in sorted(library.tags, key=lambda item: item.name.casefold())]
+            counts: dict[str, int] = {}
+            for source in library.sources:
+                if source.tag_slug:
+                    counts[source.tag_slug] = counts.get(source.tag_slug, 0) + 1
+            return [
+                self._tag_summary_from_slug(slug, source_count=count)
+                for slug, count in sorted(counts.items(), key=lambda item: item[0].casefold())
+            ]
 
     async def ensure_auto_tags(self, *, clerk_user_id: str, tag_names: list[str]) -> list[TagSummary]:
         await self._database.ensure_ready()
@@ -863,10 +847,10 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to create tags.")
-            library = await self._library_for_user(session, app_user=app_user)
-            tags = await self._ensure_auto_tags(session, library=library, tag_names=tag_names)
-            await session.commit()
-            return [self._tag_summary(tag) for tag in tags]
+            return [
+                self._tag_summary_from_slug(slug)
+                for slug in _dedupe_text_values([slugify(name) for name in tag_names], limit=AUTO_TAG_LIMIT)
+            ]
 
     async def create_tag(
         self,
@@ -880,34 +864,13 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to create tags.")
-            library = await self._library_for_user(session, app_user=app_user)
+            del color
             cleaned_name = _clean_tag_name(name)
             if not cleaned_name:
                 raise ValueError("Tag name is required.")
             slug = slugify(cleaned_name)
-            tag = await session.scalar(
-                select(Tag)
-                .where(Tag.library_id == library.id, Tag.slug == slug)
-                .options(selectinload(Tag.source_links))
-            )
-            if tag is None:
-                tag = Tag(
-                    library_id=library.id,
-                    name=cleaned_name,
-                    slug=slug,
-                    color=_clean_tag_color(color),
-                    source="manual",
-                    created_at=_utcnow(),
-                )
-                session.add(tag)
-            else:
-                tag.source = "manual"
-                if color is not None:
-                    tag.color = _clean_tag_color(color)
-            await session.commit()
-            await session.refresh(tag)
-            logger.info("tag_created clerk_user_id=%s tag_id=%s slug=%s", clerk_user_id, tag.id, tag.slug)
-            return TagMutationResponse(tag=self._tag_summary(tag), tasks=[])
+            logger.info("tag_created clerk_user_id=%s slug=%s", clerk_user_id, slug)
+            return TagMutationResponse(tag=self._tag_summary_from_slug(slug, source="manual"), tasks=[])
 
     async def update_tag(
         self,
@@ -920,58 +883,43 @@ class SourceService:
         origin_thread_id: str | None = None,
     ) -> TagMutationResponse:
         await self._database.ensure_ready()
-        reindex_inputs: list[tuple[str, list[str]]] = []
+        reindex_source_ids: list[str] = []
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to update tags.")
-            tag = await self._tag_for_user(session, clerk_user_id=clerk_user_id, tag_id=tag_id)
-            library = tag.library
-            new_name = _clean_tag_name(name) if name is not None else tag.name
+            del color
+            library = await self._library_for_user(session, app_user=app_user)
+            current_slug = _clean_tag_slug(tag_id)
+            if current_slug is None:
+                raise FileNotFoundError("Tag not found.")
+            new_name = _clean_tag_name(name) if name is not None else current_slug
             if not new_name:
                 raise ValueError("Tag name is required.")
             new_slug = slugify(new_name)
-            duplicate = await session.scalar(
-                select(Tag).where(
-                    Tag.library_id == library.id,
-                    Tag.id != tag.id,
-                    or_(Tag.slug == new_slug, func.lower(Tag.name) == new_name.casefold()),
-                )
-            )
-            if duplicate is not None:
-                raise ValueError("Another tag already uses that name.")
             linked_sources = sorted(
-                [link.source_file for link in tag.source_links],
+                [source for source in library.sources if source.tag_slug == current_slug],
                 key=lambda source: source.created_at,
                 reverse=True,
             )
+            if not linked_sources:
+                raise FileNotFoundError("Tag not found.")
             processing_sources = [source.display_title for source in linked_sources if source.status == "processing"]
             if processing_sources:
                 raise ValueError("Wait for current source processing tasks to finish before updating this tag.")
-            slug_changed = new_slug != tag.slug
-            if slug_changed:
-                reindex_inputs = [
-                    (
-                        source.id,
-                        [link.tag_id for link in sorted(source.tag_links, key=lambda item: item.tag.name.casefold())],
-                    )
-                    for source in linked_sources
-                ]
-            tag.name = new_name
-            tag.slug = new_slug
-            if color is not None:
-                tag.color = _clean_tag_color(color)
-            tag.source = "manual"
+            for source in linked_sources:
+                source.tag_slug = new_slug
+                source.updated_at = _utcnow()
+                reindex_source_ids.append(source.id)
             await session.commit()
-            await session.refresh(tag)
-            tag_summary = self._tag_summary(tag)
+            tag_summary = self._tag_summary_from_slug(new_slug, source="manual", source_count=len(linked_sources))
 
         tasks: list[TaskSummary] = []
-        for source_id, tag_ids in reindex_inputs:
+        for source_id in reindex_source_ids:
             response = await self.update_source_tags(
                 clerk_user_id=clerk_user_id,
                 source_id=source_id,
-                tag_ids=tag_ids,
+                tag_ids=[new_slug],
                 origin_surface=origin_surface,
                 origin_thread_id=origin_thread_id,
             )
@@ -994,41 +942,37 @@ class SourceService:
         origin_thread_id: str | None = None,
     ) -> TagMutationResponse:
         await self._database.ensure_ready()
-        reindex_inputs: list[tuple[str, list[str]]] = []
+        reindex_source_ids: list[str] = []
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to delete tags.")
-            tag = await self._tag_for_user(session, clerk_user_id=clerk_user_id, tag_id=tag_id)
+            library = await self._library_for_user(session, app_user=app_user)
+            deleted_slug = _clean_tag_slug(tag_id)
+            if deleted_slug is None:
+                raise FileNotFoundError("Tag not found.")
             linked_sources = sorted(
-                [link.source_file for link in tag.source_links],
+                [source for source in library.sources if source.tag_slug == deleted_slug],
                 key=lambda source: source.created_at,
                 reverse=True,
             )
+            if not linked_sources:
+                raise FileNotFoundError("Tag not found.")
             processing_sources = [source.display_title for source in linked_sources if source.status == "processing"]
             if processing_sources:
                 raise ValueError("Wait for current source processing tasks to finish before deleting this tag.")
-            reindex_inputs = [
-                (
-                    source.id,
-                    [
-                        link.tag_id
-                        for link in sorted(source.tag_links, key=lambda item: item.tag.name.casefold())
-                        if link.tag_id != tag.id
-                    ],
-                )
-                for source in linked_sources
-            ]
-            deleted_slug = tag.slug
-            await session.delete(tag)
+            for source in linked_sources:
+                source.tag_slug = None
+                source.updated_at = _utcnow()
+                reindex_source_ids.append(source.id)
             await session.commit()
 
         tasks: list[TaskSummary] = []
-        for source_id, tag_ids in reindex_inputs:
+        for source_id in reindex_source_ids:
             response = await self.update_source_tags(
                 clerk_user_id=clerk_user_id,
                 source_id=source_id,
-                tag_ids=tag_ids,
+                tag_ids=[],
                 origin_surface=origin_surface,
                 origin_thread_id=origin_thread_id,
             )
@@ -1109,9 +1053,8 @@ class SourceService:
             if parent.kind != "folder":
                 raise ValueError("Sources can only be uploaded into folders.")
 
-            selected_tag_inputs = bounded_tag_ids(tag_ids)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
-            selected_tag_ids = [tag.id for tag in selected_tags]
+            selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+            selected_tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             media_type = guess_media_type(filename=filename, declared_media_type=declared_media_type)
             source_kind = classify_source_kind(filename=filename, media_type=media_type)
             stored = await self._storage.put_bytes(
@@ -1139,6 +1082,7 @@ class SourceService:
                 storage_provider=stored.provider,
                 storage_key=stored.key,
                 metadata_json=metadata or {},
+                tag_slug=selected_tag_slug,
                 created_at=now,
                 updated_at=now,
             )
@@ -1174,7 +1118,7 @@ class SourceService:
                     "declared_media_type": declared_media_type,
                     "media_type": media_type,
                     "byte_size": len(payload),
-                    "tag_ids": selected_tag_ids,
+                    "tag_ids": selected_tag_slugs,
                     "user_guidance": user_guidance,
                     "folder_id": parent.id,
                     "virtual_name": entry_name,
@@ -1202,7 +1146,7 @@ class SourceService:
                 clerk_user_id=clerk_user_id,
                 source_id=source.id,
                 task_id=task.id,
-                tag_ids=selected_tag_ids,
+                tag_ids=selected_tag_slugs,
                 user_guidance=user_guidance,
             )
             return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
@@ -1285,12 +1229,10 @@ class SourceService:
             library = source.library
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
-            raw_tag_ids = list(tag_ids) if tag_ids is not None else [link.tag_id for link in source.tag_links]
-            selected_tag_inputs = bounded_tag_ids(raw_tag_ids)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
-            selected_tag_ids = [tag.id for tag in selected_tags]
+            raw_tag_ids = list(tag_ids) if tag_ids is not None else ([source.tag_slug] if source.tag_slug else [])
+            selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=raw_tag_ids)
             replaced_chunk_count = len(source.chunks)
-            source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+            source.tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             previous_status = source.status
             previous_error_message = source.error_message
             source.status = "processing"
@@ -1309,7 +1251,7 @@ class SourceService:
                     "source_id": source.id,
                     "filename": source.original_filename,
                     "media_type": source.media_type,
-                    "tag_ids": selected_tag_ids,
+                    "tag_ids": selected_tag_slugs,
                     "user_guidance": user_guidance,
                     "replaced_chunk_count": replaced_chunk_count,
                     "previous_status": previous_status,
@@ -1334,7 +1276,7 @@ class SourceService:
                 clerk_user_id=clerk_user_id,
                 source_id=source.id,
                 task_id=task.id,
-                tag_ids=selected_tag_ids,
+                tag_ids=selected_tag_slugs,
                 user_guidance=user_guidance,
             )
             return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
@@ -1359,15 +1301,13 @@ class SourceService:
             library = source.library
             await self._ensure_vector_store(session, library=library, app_user=app_user)
 
-            selected_tag_inputs = bounded_tag_ids(tag_ids)
-            selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=selected_tag_inputs)
-            selected_tag_ids = [tag.id for tag in selected_tags]
+            selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
             previous_status = source.status
             previous_error_message = source.error_message
-            previous_tag_ids = [link.tag_id for link in source.tag_links]
+            previous_tag_ids = [source.tag_slug] if source.tag_slug else []
             chunk_count = len(source.chunks)
             should_reindex_source = source.status == "ready" or source.openai_vector_file_id is not None
-            source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+            source.tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             if should_reindex_source:
                 source.status = "processing"
                 source.error_message = None
@@ -1383,7 +1323,7 @@ class SourceService:
                 source_file_id=source.id,
                 input_json={
                     "source_id": source.id,
-                    "tag_ids": selected_tag_ids,
+                    "tag_ids": selected_tag_slugs,
                     "previous_tag_ids": previous_tag_ids,
                     "previous_status": previous_status,
                     "previous_error_message": previous_error_message,
@@ -1405,7 +1345,7 @@ class SourceService:
                 task.id,
                 chunk_count,
                 source.openai_vector_file_id is not None,
-                len(selected_tag_ids),
+                len(selected_tag_slugs),
             )
             self._schedule_reindex_job(clerk_user_id=clerk_user_id, source_id=source.id, task_id=task.id)
             return IngestFinalizeResponse(source=self._source_summary(source), task=_task_summary(task))
@@ -1428,7 +1368,7 @@ class SourceService:
             now = _utcnow()
             task.status = "running"
             task.started_at = task.started_at or now
-            task.state_json = {"stage": "validating_tags", "source_id": source.id}
+            task.state_json = {"stage": "validating_tag", "source_id": source.id}
             task.updated_at = now
             await session.commit()
             logger.info(
@@ -1441,14 +1381,42 @@ class SourceService:
             )
 
             try:
-                selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
-                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+                selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+                source.tag_slug = selected_tag_slugs[0] if selected_tag_slugs else source.tag_slug
                 task.state_json = {"stage": "reading_source_payload", "source_id": source.id}
                 task.updated_at = _utcnow()
                 await session.commit()
 
                 payload = await self._storage.get_bytes(key=source.storage_key)
                 source_kind = cast(SourceKind, source.source_kind)
+                if source.tag_slug is None:
+                    task.state_json = {"stage": "assigning_tag", "source_id": source.id}
+                    task.updated_at = _utcnow()
+                    await session.commit()
+                    extracted_text, _strategy_hint = await self._extract_searchable_text(
+                        filename=source.original_filename,
+                        source_kind=source_kind,
+                        media_type=source.media_type,
+                        payload=payload,
+                    )
+                    existing_tag_slugs = sorted(dict.fromkeys(item.tag_slug for item in library.sources if item.tag_slug))
+                    tag_guidance_parts = [user_guidance or ""]
+                    if existing_tag_slugs:
+                        tag_guidance_parts.append(
+                            "Existing file tags: "
+                            + ", ".join(existing_tag_slugs[:50])
+                            + ". Prefer one of these when it fits."
+                        )
+                    tag_split = await self._split_semantic_text(
+                        source_id=source.id,
+                        source_title=source.display_title,
+                        source_kind=source_kind,
+                        extracted_text=extracted_text,
+                        user_guidance="\n".join(part for part in tag_guidance_parts if part).strip() or None,
+                    )
+                    auto_tag_slugs = _dedupe_text_values([slugify(tag) for tag in tag_split.tags], limit=AUTO_TAG_LIMIT)
+                    source.tag_slug = auto_tag_slugs[0] if auto_tag_slugs else None
+                    source.updated_at = _utcnow()
                 task.state_json = {"stage": "uploading_original_file", "source_id": source.id}
                 task.updated_at = _utcnow()
                 await session.commit()
@@ -1482,7 +1450,7 @@ class SourceService:
                     source=source,
                     filename=index_material.filename,
                     payload=index_material.payload,
-                    tag_slugs=[tag.slug for tag in selected_tags],
+                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
                 task.state_json = {
                     "stage": "indexing_source_file",
@@ -1515,7 +1483,7 @@ class SourceService:
                     "stage": "completed",
                     "source_id": source.id,
                     "chunk_count": len(source.chunks),
-                    "tag_count": len(selected_tags),
+                    "tag_count": 1 if source.tag_slug else 0,
                     "openai_vector_file_id": source.openai_vector_file_id,
                 }
                 task.result_json = {
@@ -1702,7 +1670,7 @@ class SourceService:
             )
 
             try:
-                selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+                selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
                 payload = await self._storage.get_bytes(key=source.storage_key)
                 source_kind = cast(SourceKind, source.source_kind)
                 extracted_text, strategy_hint = await self._extract_searchable_text(
@@ -1734,8 +1702,14 @@ class SourceService:
                     len(split_result.chunks),
                     (perf_counter() - split_started_at) * 1000,
                 )
-                auto_tags = await self._ensure_auto_tags(session, library=library, tag_names=split_result.tags)
-                merged_tags = _merge_tags([*selected_tags, *auto_tags])
+                auto_tag_slugs = _dedupe_text_values([slugify(tag) for tag in split_result.tags], limit=AUTO_TAG_LIMIT)
+                source.tag_slug = (
+                    selected_tag_slugs[0]
+                    if selected_tag_slugs
+                    else auto_tag_slugs[0]
+                    if auto_tag_slugs
+                    else source.tag_slug
+                )
                 normalized_chunks = _normalize_chunk_drafts(split_result.chunks, fallback_text=extracted_text)
 
                 task.state_json = {"stage": "replacing_old_chunks", "source_id": source.id}
@@ -1746,7 +1720,6 @@ class SourceService:
                 for chunk in source.chunks:
                     chunk.openai_file_id = None
                 source.chunks.clear()
-                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in merged_tags]
                 source.updated_at = _utcnow()
                 old_chunks_replaced = True
                 task.state_json = {
@@ -1806,7 +1779,7 @@ class SourceService:
                     source=source,
                     filename=index_material.filename,
                     payload=index_material.payload,
-                    tag_slugs=[tag.slug for tag in merged_tags],
+                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
 
                 source.status = "ready"
@@ -1820,7 +1793,7 @@ class SourceService:
                     "source_id": source.id,
                     "chunk_count": len(normalized_chunks),
                     "replaced_chunk_count": replaced_chunk_count,
-                    "tag_count": len(merged_tags),
+                    "tag_count": 1 if source.tag_slug else 0,
                     "openai_vector_file_id": vector_file_id,
                 }
                 task.result_json = {
@@ -1977,7 +1950,7 @@ class SourceService:
             now = _utcnow()
             task.status = "running"
             task.started_at = task.started_at or now
-            task.state_json = {"stage": "validating_tags", "source_id": source.id}
+            task.state_json = {"stage": "validating_tag", "source_id": source.id}
             task.updated_at = now
             await session.commit()
             logger.info(
@@ -1989,8 +1962,8 @@ class SourceService:
             )
 
             try:
-                selected_tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
-                source.tag_links = [SourceTagLink(source_file_id=source.id, tag_id=tag.id) for tag in selected_tags]
+                selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
+                source.tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
                 task.state_json = {
                     "stage": "reindexing_source_file",
                     "source_id": source.id,
@@ -2009,7 +1982,7 @@ class SourceService:
                     source=source,
                     filename=index_material.filename,
                     payload=index_material.payload,
-                    tag_slugs=[tag.slug for tag in selected_tags],
+                    tag_slugs=[source.tag_slug] if source.tag_slug else [],
                 )
                 reindexed_source_file = True
                 task.state_json = {
@@ -2029,13 +2002,13 @@ class SourceService:
                     "stage": "completed",
                     "source_id": source.id,
                     "openai_vector_file_id": source.openai_vector_file_id,
-                    "tag_count": len(selected_tags),
+                    "tag_count": 1 if source.tag_slug else 0,
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
                 task.result_json = {
                     "source_id": source.id,
                     "openai_vector_file_id": source.openai_vector_file_id,
-                    "tag_count": len(selected_tags),
+                    "tag_count": 1 if source.tag_slug else 0,
                     "cleanup_failed_file_count": len(cleanup_failed_file_ids),
                 }
                 task.error_message = None
@@ -2143,13 +2116,13 @@ class SourceService:
             )
             if request.selected_source_ids and not selected_source_ids:
                 return []
-            tags = await self._tags_by_ids(session, library_id=library.id, tag_ids=request.tag_ids)
+            tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=request.tag_ids)
             include_created_at_filters = _library_supports_vector_created_at_filter(library)
             filters = build_filter_groups(
                 source_ids=selected_source_ids,
                 source_kinds=request.source_kinds,
                 virtual_paths=request.virtual_paths,
-                tag_slugs=[tag.slug for tag in tags],
+                tag_slugs=tag_slugs,
                 tag_match_mode=request.tag_match_mode,
                 created_after=request.created_after,
                 created_before=request.created_before,
@@ -2176,7 +2149,6 @@ class SourceService:
                         .options(
                             selectinload(SourceFile.chunks),
                             selectinload(SourceFile.filesystem_entry),
-                            selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
                         )
                         .where(
                             or_(
@@ -2209,7 +2181,7 @@ class SourceService:
                     selected_source_ids=selected_source_ids,
                     source_kinds=request.source_kinds,
                     virtual_paths=request.virtual_paths,
-                    tag_ids=[tag.id for tag in tags],
+                    tag_ids=tag_slugs,
                     tag_match_mode=request.tag_match_mode,
                     created_after=request.created_after,
                     created_before=request.created_before,
@@ -2283,9 +2255,7 @@ class SourceService:
             .options(
                 selectinload(UserLibrary.sources).selectinload(SourceFile.chunks),
                 selectinload(UserLibrary.sources).selectinload(SourceFile.filesystem_entry),
-                selectinload(UserLibrary.sources).selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
                 selectinload(UserLibrary.filesystem_entries),
-                selectinload(UserLibrary.tags).selectinload(Tag.source_links),
             )
         )
         if library is not None:
@@ -2345,9 +2315,6 @@ class SourceService:
                 selectinload(FilesystemEntry.library),
                 selectinload(FilesystemEntry.parent),
                 selectinload(FilesystemEntry.source_file).selectinload(SourceFile.chunks),
-                selectinload(FilesystemEntry.source_file)
-                .selectinload(SourceFile.tag_links)
-                .selectinload(SourceTagLink.tag),
             )
         )
         if entry is None:
@@ -2436,31 +2403,11 @@ class SourceService:
                 selectinload(SourceFile.chunks),
                 selectinload(SourceFile.library),
                 selectinload(SourceFile.filesystem_entry),
-                selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
             )
         )
         if source is None:
             raise FileNotFoundError("Source not found.")
         return source
-
-    async def _tag_for_user(self, session: Any, *, clerk_user_id: str, tag_id: str) -> Tag:
-        app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-        tag = await session.scalar(
-            select(Tag)
-            .join(UserLibrary, UserLibrary.id == Tag.library_id)
-            .where(Tag.id == tag_id, UserLibrary.user_id == app_user.id)
-            .options(
-                selectinload(Tag.library),
-                selectinload(Tag.source_links)
-                .selectinload(SourceTagLink.source_file)
-                .selectinload(SourceFile.tag_links)
-                .selectinload(SourceTagLink.tag),
-                selectinload(Tag.source_links).selectinload(SourceTagLink.source_file).selectinload(SourceFile.chunks),
-            )
-        )
-        if tag is None:
-            raise FileNotFoundError("Tag not found.")
-        return tag
 
     async def _source_by_id(
         self,
@@ -2476,7 +2423,6 @@ class SourceService:
                 selectinload(SourceFile.chunks),
                 selectinload(SourceFile.library),
                 selectinload(SourceFile.filesystem_entry),
-                selectinload(SourceFile.tag_links).selectinload(SourceTagLink.tag),
             )
         )
         if populate_existing:
@@ -2591,51 +2537,9 @@ class SourceService:
                 )
         return new_file_id
 
-    async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[Tag]:
-        tag_identifiers = bounded_tag_ids(tag_ids)
-        if not tag_identifiers:
-            return []
-        records = (
-            (
-                await session.execute(
-                    select(Tag).where(
-                        Tag.library_id == library_id,
-                        or_(Tag.id.in_(tag_identifiers), Tag.slug.in_(tag_identifiers)),
-                    )
-                )
-            )
-            .scalars()
-            .all()
-        )
-        resolved_identifiers = {tag.id for tag in records} | {tag.slug for tag in records}
-        if any(identifier not in resolved_identifiers for identifier in tag_identifiers):
-            raise ValueError("One or more tag identifiers are invalid for this library.")
-        return sorted(records, key=lambda tag: tag.name.casefold())
-
-    async def _ensure_auto_tags(self, session: Any, *, library: UserLibrary, tag_names: list[str]) -> list[Tag]:
-        output: list[Tag] = []
-        for raw_name in tag_names[:AUTO_TAG_LIMIT]:
-            name = _clean_tag_name(raw_name)
-            if not name:
-                continue
-            slug = slugify(name)
-            existing = await session.scalar(
-                select(Tag)
-                .where(Tag.library_id == library.id, Tag.slug == slug)
-                .options(selectinload(Tag.source_links))
-            )
-            if existing is None:
-                existing = Tag(
-                    library_id=library.id,
-                    name=name,
-                    slug=slug,
-                    source="auto",
-                    created_at=_utcnow(),
-                )
-                session.add(existing)
-                await session.flush()
-            output.append(existing)
-        return output
+    async def _tags_by_ids(self, session: Any, *, library_id: str, tag_ids: list[str]) -> list[str]:
+        del session, library_id
+        return bounded_tag_ids(tag_ids)
 
     async def _unique_source_title(self, session: Any, *, library_id: str, base_title: str) -> str:
         candidate = base_title.strip() or "Untitled source"
@@ -2814,10 +2718,7 @@ class SourceService:
             error_message=source.error_message,
             created_at=source.created_at,
             updated_at=source.updated_at,
-            tags=[
-                self._tag_summary(link.tag)
-                for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
-            ],
+            tags=[self._tag_summary_from_slug(source.tag_slug)] if source.tag_slug else [],
             openai_original_file_id=source.openai_original_file_id,
             openai_original_file_purpose=source.openai_original_file_purpose,
             openai_vector_file_id=source.openai_vector_file_id,
@@ -2863,10 +2764,7 @@ class SourceService:
             description=_metadata_string(metadata, "description"),
             summary=_metadata_string(metadata, "summary"),
             suggested_tags=_metadata_string_list(metadata, "suggested_tags"),
-            tags=[
-                self._tag_summary(link.tag)
-                for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())
-            ],
+            tags=[self._tag_summary_from_slug(source.tag_slug)] if source.tag_slug else [],
             openai_original_file_id=source.openai_original_file_id,
             openai_vector_file_id=source.openai_vector_file_id,
             created_at=entry.created_at,
@@ -2906,7 +2804,7 @@ class SourceService:
             title=chunk.title,
             summary=chunk.summary,
             text=chunk.text_content,
-            tags=[link.tag.name for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())],
+            tags=[source.tag_slug] if source.tag_slug else [],
             locator=_chunk_locator(chunk),
             openai_file_id=chunk.openai_file_id,
             attributes=attributes,
@@ -2925,21 +2823,21 @@ class SourceService:
             title=source.display_title,
             summary="OpenAI vector-store match from the indexed source file.",
             text=text,
-            tags=[link.tag.name for link in sorted(source.tag_links, key=lambda link: link.tag.name.casefold())],
+            tags=[source.tag_slug] if source.tag_slug else [],
             locator=ChunkLocator(type="generated"),
             openai_file_id=candidate.openai_file_id,
             attributes=candidate.attributes,
         )
 
     @staticmethod
-    def _tag_summary(tag: Tag) -> TagSummary:
+    def _tag_summary_from_slug(slug: str, *, source: Literal["auto", "manual"] = "auto", source_count: int = 0) -> TagSummary:
         return TagSummary(
-            id=tag.id,
-            name=tag.name,
-            slug=tag.slug,
-            color=tag.color,
-            source=cast(Literal["auto", "manual"], tag.source),
-            source_count=len(tag.source_links),
+            id=slug,
+            name=slug,
+            slug=slug,
+            color=None,
+            source=source,
+            source_count=source_count,
         )
 
 
@@ -2961,10 +2859,8 @@ def build_vector_attributes(
         "virtual_path": virtual_path[:256],
         "virtual_name": virtual_name[:256],
         "created_at": created_at.timestamp(),
-        "tags": _tag_metadata_value(tag_slugs),
+        "tag": _tag_metadata_value(tag_slugs),
     }
-    for index, slug in enumerate(tag_slugs[:TAG_SLOT_COUNT], start=1):
-        attributes[f"tag_{index}"] = slug
     return attributes
 
 
@@ -2991,11 +2887,8 @@ def build_filter_groups(
     if include_created_at_filters and created_before is not None:
         filters.append({"type": "lte", "key": "created_at", "value": _as_utc(created_before).timestamp()})
     if tag_slugs:
-        tag_filters: list[CompoundFilter] = [_tag_slug_filter(slug) for slug in tag_slugs]
-        if len(tag_filters) == 1:
-            filters.append(tag_filters[0])
-        else:
-            filters.append({"type": "and" if tag_match_mode == "all" else "or", "filters": tag_filters})
+        del tag_match_mode
+        filters.append(_tag_slug_filter(tag_slugs[0]))
     if not filters:
         return None
     if len(filters) == 1:
@@ -3108,22 +3001,18 @@ def _clean_tag_name(value: str) -> str:
     return re.sub(r"\s+", " ", value.strip())[:80]
 
 
+def _clean_tag_slug(value: str | None) -> str | None:
+    if value is None:
+        return None
+    slug = slugify(value)
+    return slug if slug else None
+
+
 def _clean_tag_color(value: str | None) -> str | None:
     if value is None:
         return None
     cleaned = value.strip()
     return cleaned[:32] or None
-
-
-def _merge_tags(tags: list[Tag]) -> list[Tag]:
-    output: list[Tag] = []
-    seen: set[str] = set()
-    for tag in tags:
-        if tag.id in seen:
-            continue
-        seen.add(tag.id)
-        output.append(tag)
-    return output[:TAG_SLOT_COUNT]
 
 
 def _dedupe_text_values(values: Sequence[str], *, limit: int | None = None) -> list[str]:
@@ -3142,9 +3031,9 @@ def _dedupe_text_values(values: Sequence[str], *, limit: int | None = None) -> l
 
 
 def bounded_tag_ids(tag_ids: Sequence[str]) -> list[str]:
-    output = list(dict.fromkeys(tag_id.strip() for tag_id in tag_ids if tag_id.strip()))
-    if len(output) > TAG_SLOT_COUNT:
-        raise ValueError(f"A source can have at most {TAG_SLOT_COUNT} filterable tags.")
+    output = list(dict.fromkeys(slug for tag_id in tag_ids if (slug := _clean_tag_slug(tag_id)) is not None))
+    if len(output) > 1:
+        raise ValueError("A source can have at most one tag.")
     return output
 
 
@@ -3254,13 +3143,8 @@ def _chunk_matches_request_filters(
     if created_before is not None and source_created_at > _as_utc(created_before):
         return False
     if tag_ids:
-        selected_tag_ids = set(tag_ids)
-        source_tag_ids = {link.tag_id for link in source.tag_links}
-        return (
-            selected_tag_ids.issubset(source_tag_ids)
-            if tag_match_mode == "all"
-            else bool(selected_tag_ids & source_tag_ids)
-        )
+        del tag_match_mode
+        return source.tag_slug == tag_ids[0]
     return True
 
 
@@ -3287,13 +3171,8 @@ def _source_matches_request_filters(
     if created_before is not None and source_created_at > _as_utc(created_before):
         return False
     if tag_ids:
-        selected_tag_ids = set(tag_ids)
-        source_tag_ids = {link.tag_id for link in source.tag_links}
-        return (
-            selected_tag_ids.issubset(source_tag_ids)
-            if tag_match_mode == "all"
-            else bool(selected_tag_ids & source_tag_ids)
-        )
+        del tag_match_mode
+        return source.tag_slug == tag_ids[0]
     return True
 
 
@@ -3317,11 +3196,8 @@ def _or_filter(key: str, values: Sequence[str]) -> ComparisonFilter | CompoundFi
     return {"type": "or", "filters": [{"type": "eq", "key": key, "value": value} for value in values]}
 
 
-def _tag_slug_filter(slug: str) -> CompoundFilter:
-    return {
-        "type": "or",
-        "filters": [{"type": "eq", "key": f"tag_{index}", "value": slug} for index in range(1, TAG_SLOT_COUNT + 1)],
-    }
+def _tag_slug_filter(slug: str) -> ComparisonFilter:
+    return {"type": "eq", "key": "tag", "value": slug}
 
 
 def _normalize_filter_path(path: str) -> str:

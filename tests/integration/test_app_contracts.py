@@ -1177,31 +1177,13 @@ async def test_http_search_honors_tag_source_and_kind_filters(
             assert alpha_search.status_code == 200
             assert {hit["source_file_id"] for hit in alpha_search.json()["hits"]} == {alpha_source_id}
 
-            any_search = await client.post(
+            bravo_search = await client.post(
                 "/api/search",
                 headers=auth_headers,
-                json={
-                    "query": "retrieval",
-                    "tag_ids": [alpha_tag_slug, bravo_tag_id],
-                    "tag_match_mode": "any",
-                    "max_results": 8,
-                },
+                json={"query": "retrieval", "tag_ids": [bravo_tag_id], "max_results": 8},
             )
-            assert any_search.status_code == 200
-            assert {hit["source_file_id"] for hit in any_search.json()["hits"]} == {alpha_source_id, bravo_source_id}
-
-            all_search = await client.post(
-                "/api/search",
-                headers=auth_headers,
-                json={
-                    "query": "retrieval",
-                    "tag_ids": [alpha_tag_id, bravo_tag_id],
-                    "tag_match_mode": "all",
-                    "max_results": 8,
-                },
-            )
-            assert all_search.status_code == 200
-            assert all_search.json()["hits"] == []
+            assert bravo_search.status_code == 200
+            assert {hit["source_file_id"] for hit in bravo_search.json()["hits"]} == {bravo_source_id}
 
             source_scoped_search = await client.post(
                 "/api/search",
@@ -1394,6 +1376,7 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
             assert renamed.status_code == 200
             renamed_payload = renamed.json()
             assert renamed_payload["tag"]["slug"] == "alpha-renamed"
+            renamed_tag_id = renamed_payload["tag"]["id"]
             assert [task["kind"] for task in renamed_payload["tasks"]] == ["reindex"]
             await _wait_for_http_task(
                 client,
@@ -1405,7 +1388,7 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
             renamed_search = await client.post(
                 "/api/search",
                 headers=auth_headers,
-                json={"query": "retrieval", "tag_ids": [alpha_tag_id], "max_results": 8},
+                json={"query": "retrieval", "tag_ids": [renamed_tag_id], "max_results": 8},
             )
             assert renamed_search.status_code == 200
             assert {hit["source_file_id"] for hit in renamed_search.json()["hits"]} == {source_id}
@@ -1422,7 +1405,7 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
             tag_update = await client.post(
                 f"/api/sources/{source_id}/tags",
                 headers=auth_headers,
-                json={"tag_ids": [alpha_tag_id, manual_tag_id]},
+                json={"tag_ids": [manual_tag_id]},
             )
             assert tag_update.status_code == 200
             await _wait_for_http_task(
@@ -1446,7 +1429,7 @@ async def test_http_manual_tag_crud_reindexes_affected_sources(
 
             after_detail = await client.get(f"/api/sources/{source_id}", headers=auth_headers)
             assert after_detail.status_code == 200
-            assert [tag["id"] for tag in after_detail.json()["tags"]] == [alpha_tag_id]
+            assert after_detail.json()["tags"] == []
 
 
 @pytest.mark.asyncio

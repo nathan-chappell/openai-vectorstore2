@@ -436,7 +436,7 @@ class ResplitSourceRequest(BaseModel):
 
 
 class SourceTagsUpdateRequest(BaseModel):
-    tag_ids: list[str] = Field(default_factory=list)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
 
 
 class TagCreateRequest(BaseModel):
@@ -500,7 +500,7 @@ class ResearchImportCreateRequest(BaseModel):
     filename: str | None = Field(default=None, max_length=255)
     payload_base64: str | None = None
     media_type: str | None = Field(default=None, max_length=128)
-    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
     folder_id: str | None = None
     folder_name: str | None = Field(default=None, max_length=255)
     ingest_seed: bool = True
@@ -552,7 +552,7 @@ class ResearchLibraryBuildRequest(BaseModel):
     title: str | None = Field(default=None, max_length=512)
     folder_id: str | None = None
     folder_name: str | None = Field(default=None, max_length=255)
-    tag_ids: list[str] = Field(default_factory=list, max_length=8)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
     auto_ingest: bool = True
     discover_references: bool = True
     max_depth: int = Field(default=2, ge=0, le=4)
@@ -590,7 +590,7 @@ class ResearchCandidateStatusUpdateResponse(BaseModel):
 class ResearchCandidateIngestRequest(BaseModel):
     candidate_ids: list[str] | None = Field(default=None, max_length=100)
     task_id: str | None = None
-    tag_ids: list[str] | None = Field(default=None, max_length=8)
+    tag_ids: list[str] | None = Field(default=None, max_length=1)
     folder_id: str | None = None
 
 
@@ -603,7 +603,7 @@ class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     selected_source_ids: list[str] = Field(default_factory=list)
     source_kinds: list[SourceKind] = Field(default_factory=list)
-    tag_ids: list[str] = Field(default_factory=list)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
     tag_match_mode: TagMatchMode = "all"
     virtual_paths: list[str] = Field(default_factory=list)
     created_after: datetime | None = None
@@ -651,7 +651,7 @@ class BranchSearchResponse(BaseModel):
 class ActionRequestBase(BaseModel):
     prompt: str = Field(min_length=1)
     selected_source_ids: list[str] = Field(default_factory=list)
-    tag_ids: list[str] = Field(default_factory=list)
+    tag_ids: list[str] = Field(default_factory=list, max_length=1)
     tag_match_mode: TagMatchMode = "all"
     origin_thread_id: str | None = None
 
