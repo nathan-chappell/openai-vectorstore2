@@ -44,7 +44,7 @@ async def test_shared_admin_integration_can_load_private_package_adapter(
     configured_settings: AppSettings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    shared_src = Path(__file__).resolve().parents[2] / "ai-portfolio-admin" / "src"
+    shared_src = Path(__file__).resolve().parents[1] / "vendor" / "ai-portfolio-admin" / "src"
     monkeypatch.syspath_prepend(str(shared_src))
     settings = configured_settings.model_copy(
         update={

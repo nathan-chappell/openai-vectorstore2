@@ -10,6 +10,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "alembic",
+    "ai-portfolio-admin @ file:vendor/ai-portfolio-admin",
     "aiosqlite",
     "asyncpg",
     "clerk-backend-api",
@@ -51,6 +52,7 @@ pythonpath = ["."]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
 include = ["backend", "tests"]
+extraPaths = ["vendor/ai-portfolio-admin/src"]
 venvPath = "."
 venv = ".venv"
 reportUnknownVariableType = "none"

@@ -1,0 +1,3 @@
+[submodule "vendor/ai-portfolio-admin"]
+	path = vendor/ai-portfolio-admin
+	url = git@github.com:nathan-chappell/ai-portfolio-admin.git

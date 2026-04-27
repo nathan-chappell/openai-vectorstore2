@@ -292,6 +292,7 @@ Implementation plan:
 
 - Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, exposed typed payment integration status through `/api/billing/payment-status`, and documented the default public behavior versus private `ai-portfolio-admin` setup.
 - Completed shared package scaffold: `../ai-portfolio-admin` now has typed Python contracts, Clerk metadata helpers, free-credit policy evaluation, PayPal receipt-review policy, an admin credit workflow protocol, reusable frontend TypeScript contracts/components, tests, docs, and an `ai_portfolio_admin.openai_vectorstore2` adapter module that this repo can load when configured.
+- Completed submodule dependency pass: this repo and PlodAI now mount `git@github.com:nathan-chappell/ai-portfolio-admin.git` at `vendor/ai-portfolio-admin`; Python metadata points at that local package; this repo's shared-adapter test loads the submodule path; and PlodAI's duplicated Clerk metadata/`UserRole` helpers now delegate to the shared package while preserving its current API surface.
 - Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
 - Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
 - Add shared free-credit request contracts: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, and resulting credit grant ID.
@@ -450,6 +451,10 @@ Final MCP verification follow-ups:
 
 - Deployed MCP must be usable from the user's ChatGPT account against the beta service URL, not only through local clients.
 - FastMCP dev server should be the local verification path for MCP tool discovery, MCP Apps UI rendering, resource metadata, and end-to-end tool calls before deployment.
+- Add a small dev-only MCP entrypoint, such as `backend/app/mcp/dev_server.py`, that exports `mcp = create_dev_mcp_server(get_settings(), create_services(settings))` so FastMCP dev tooling can import the current unauthenticated dev server directly.
+- FastMCP Apps UI command should be documented as `./.venv/bin/fastmcp dev apps backend/app/mcp/dev_server.py:mcp --mcp-port 8001 --dev-port 8080 --no-reload`, using port `8001` to avoid colliding with the normal FastAPI app on `8000`.
+- FastMCP Inspector command should be documented as `./.venv/bin/fastmcp dev inspector backend/app/mcp/dev_server.py:mcp --ui-port 6274 --server-port 6277 --no-reload`.
+- Production/deployed HTTP MCP remains the FastAPI-mounted server at `/mcp/`; local FastMCP dev tooling should use `create_dev_mcp_server` because `create_mcp_server` includes the production token verifier.
 - MCP Apps UI should expose screenshot-worthy flows for research-library building/status, semantic search, tag filtering, source detail/preview, and recent task state.
 - MCP tools/resources should expose research actions and semantic/tag search clearly enough for ChatGPT hosts to use them without relying on the web frontend.
 - After an MCP file search, ChatGPT should be able to request and receive the raw file content or appropriate extracted text for selected results, subject to size/safety limits and without leaking unrelated files.
