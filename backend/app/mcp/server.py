@@ -37,6 +37,8 @@ from prefab_ui.components import (
     Row,
     Separator,
     Small,
+    Tab,
+    Tabs,
     Text,
 )
 from pydantic import BaseModel, Field
@@ -103,6 +105,8 @@ Separator: Any = Separator
 SetState: Any = SetState
 ShowToast: Any = ShowToast
 Small: Any = Small
+Tab: Any = Tab
+Tabs: Any = Tabs
 Text: Any = Text
 
 logger = logging.getLogger(__name__)
@@ -1095,7 +1099,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
             tag_ids=tag_ids or [],
             tag_match_mode="all",
             page=1,
-            page_size=30,
+            page_size=12,
         )
         payload = response.model_dump(mode="json")
         payload["query"] = query or ""
@@ -1114,7 +1118,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
         response = await services.actions.list_tasks(
             clerk_user_id=current_mcp_clerk_user_id(),
             kind=None,
-            limit=12,
+            limit=8,
         )
         return response.model_dump(mode="json")
 
@@ -1193,7 +1197,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
             task_id=task_id,
             status=status,
             page=1,
-            page_size=50,
+            page_size=16,
         )
         return response.model_dump(mode="json")
 
@@ -1241,17 +1245,18 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
         initial_tags = await refresh_tags_tool(ctx)
         initial_tasks = await refresh_tasks_tool(ctx)
         initial_research_candidates = await refresh_research_candidates_for_ui_tool(ctx)
-        with Card(css_class="max-w-5xl mx-auto") as view:
+        with Card(css_class="w-full max-w-2xl mx-auto") as view:
             with CardHeader(), Column(gap=1):
                 CardTitle("Indexed Files")
-                CardDescription("Browse files, filter by tags, search indexed source files, and inspect app tasks.")
-            with CardContent(), Column(gap=4):
-                with Column(gap=2):
+                CardDescription("Compact library controls for the ChatGPT side panel.")
+            with CardContent(), Tabs(value="files", variant="line", css_class="w-full"):
+                with Tab("Files", value="files"), Column(gap=2):
                     with Row(gap=2, align="center"):
                         h3("Files")
                         Button(
                             "Refresh",
                             variant="secondary",
+                            size="sm",
                             on_click=[
                                 CallTool(
                                     "refresh_sources",
@@ -1274,15 +1279,15 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             on_error=ShowToast(ERROR, variant="error"),
                         )
                     ):
-                        with Row(gap=2, align="center"):
+                        with Column(gap=2):
                             Input(
                                 name="file_query",
                                 input_type="search",
                                 placeholder="Query files, filenames, kinds, status",
                                 value=STATE.sources.query,
                             )
-                            Button("Query", button_type="submit")
-                    with Row(gap=2, align="center"):
+                            Button("Query", button_type="submit", size="sm")
+                    with Row(gap=1, align="center"):
                         Small("Tags")
                         Button(
                             "All",
@@ -1313,51 +1318,96 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                                     ),
                                 ],
                             )
-                with ForEach(STATE.sources.sources) as source, Card(css_class="border border-slate-200"):
-                    with CardContent(), Column(gap=2):
-                        with Row(gap=2, align="center"):
-                            Text(source.display_title)  # ty:ignore[invalid-argument-type]
-                            Badge(source.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                            Badge(source.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                        Small(source.original_filename)  # ty:ignore[invalid-argument-type]
-                        with Row(gap=2, align="center"):
-                            Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
-                            with ForEach(source.tags) as tag:
-                                Badge(tag.name, variant="outline")  # ty:ignore[invalid-argument-type]
-                        with Row(gap=2, align="center"):
-                            Button(
-                                "Inspect",
-                                on_click=CallTool(
-                                    "load_source_for_ui",
-                                    arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
-                                    on_success=SetState("selectedSource", RESULT),
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
+                    with ForEach(STATE.sources.sources) as source, Card(css_class="border border-slate-200"):
+                        with CardContent(), Column(gap=1):
+                            with Row(gap=1, align="center"):
+                                Text(source.display_title)  # ty:ignore[invalid-argument-type]
+                                Badge(source.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Badge(source.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                            Small(source.original_filename)  # ty:ignore[invalid-argument-type]
+                            with Row(gap=1, align="center"):
+                                Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
+                                Button(
+                                    "Inspect",
+                                    size="sm",
+                                    on_click=CallTool(
+                                        "load_source_for_ui",
+                                        arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
+                                        on_success=SetState("selectedSource", RESULT),
+                                        on_error=ShowToast(ERROR, variant="error"),
+                                    ),
+                                )
+                                Button(
+                                    "Re-split",
+                                    variant="secondary",
+                                    size="sm",
+                                    on_click=CallTool(
+                                        "resplit_source_for_ui",
+                                        arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
+                                        on_success=[
+                                            ShowToast("Re-split queued", variant="success"),
+                                            CallTool(
+                                                "refresh_sources",
+                                                on_success=SetState("sources", RESULT),
+                                                on_error=ShowToast(ERROR, variant="error"),
+                                            ),
+                                        ],
+                                        on_error=ShowToast(ERROR, variant="error"),
+                                    ),
+                                )
+                    with If(STATE.selectedSource):
+                        Separator()
+                        with Card(css_class="border border-slate-200"):
+                            with CardHeader(), Column(gap=1):
+                                CardTitle(STATE.selectedSource.display_title)  # ty:ignore[invalid-argument-type]
+                                CardDescription(STATE.selectedSource.original_filename)  # ty:ignore[invalid-argument-type]
+                            with CardContent(), Column(gap=2):
+                                with Row(gap=1, align="center"):
+                                    Badge(STATE.selectedSource.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                    Badge(STATE.selectedSource.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                    Muted(STATE.selectedSource.chunk_count)  # ty:ignore[invalid-argument-type]
+                                with ForEach(STATE.selectedSource.chunks) as chunk:
+                                    with Card(css_class="border border-slate-200"):
+                                        with CardContent(), Column(gap=1):
+                                            Small(chunk.title)  # ty:ignore[invalid-argument-type]
+                                            Muted(chunk.summary)  # ty:ignore[invalid-argument-type]
+
+                with Tab("Search", value="search"), Column(gap=2):
+                    h3("Chunk Query")
+                    with Form(
+                        on_submit=CallTool(
+                            "search_sources_for_ui",
+                            arguments={
+                                "query": EVENT.formData.chunk_query,
+                                "tag_ids": STATE.selectedTagIds,
+                                "max_results": 6,
+                            },
+                            on_success=SetState("searchResults", RESULT),
+                            on_error=ShowToast(ERROR, variant="error"),
+                        )
+                    ):
+                        with Column(gap=2):
+                            Input(
+                                name="chunk_query",
+                                input_type="search",
+                                placeholder="Search indexed files with the selected tag scope",
                             )
-                            Button(
-                                "Re-split",
-                                variant="secondary",
-                                on_click=CallTool(
-                                    "resplit_source_for_ui",
-                                    arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
-                                    on_success=[
-                                        ShowToast("Re-split queued", variant="success"),
-                                        CallTool(
-                                            "refresh_sources",
-                                            on_success=SetState("sources", RESULT),
-                                            on_error=ShowToast(ERROR, variant="error"),
-                                        ),
-                                    ],
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
-                            )
-                Separator()
-                with Column(gap=2):
+                            Button("Search chunks", button_type="submit", size="sm")
+                    with If(STATE.searchResults):
+                        with ForEach(STATE.searchResults.hits) as hit:
+                            with Card(css_class="border border-slate-200"):
+                                with CardContent(), Column(gap=1):
+                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
+                                    Small(hit.source_title)  # ty:ignore[invalid-argument-type]
+                                    Muted(hit.summary)  # ty:ignore[invalid-argument-type]
+
+                with Tab("Research", value="research"), Column(gap=2):
                     with Row(gap=2, align="center"):
                         h3("Research Library Builder")
                         Button(
-                            "Refresh candidates",
+                            "Refresh",
                             variant="secondary",
+                            size="sm",
                             on_click=CallTool(
                                 "refresh_research_candidates_for_ui",
                                 on_success=SetState("researchCandidates", RESULT),
@@ -1386,100 +1436,56 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             on_error=ShowToast(ERROR, variant="error"),
                         )
                     ):
-                        with Row(gap=2, align="center"):
+                        with Column(gap=2):
                             Input(
                                 name="research_query",
                                 input_type="search",
                                 placeholder="Topic or paper title",
                             )
-                            Input(
-                                name="research_seed_type",
-                                placeholder="topic or paper",
-                                value="topic",
-                            )
-                            Input(
-                                name="research_max_sources",
-                                input_type="number",
-                                value="12",
-                            )
-                            Input(
-                                name="research_max_depth",
-                                input_type="number",
-                                value="2",
-                            )
-                            Button("Build library", button_type="submit")
+                            with Row(gap=1, align="center"):
+                                Input(
+                                    name="research_seed_type",
+                                    placeholder="topic or paper",
+                                    value="topic",
+                                )
+                                Input(
+                                    name="research_max_sources",
+                                    input_type="number",
+                                    value="12",
+                                )
+                                Input(
+                                    name="research_max_depth",
+                                    input_type="number",
+                                    value="2",
+                                )
+                            Button("Build library", button_type="submit", size="sm")
                     with If(STATE.researchBuild):
                         with Card(css_class="border border-slate-200"):
-                            with CardContent(), Column(gap=2):
-                                with Row(gap=2, align="center"):
+                            with CardContent(), Column(gap=1):
+                                with Row(gap=1, align="center"):
                                     Text(STATE.researchBuild.task.title)  # ty:ignore[invalid-argument-type]
                                     Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                    Badge(STATE.researchBuild.target_folder_id, variant="secondary")  # ty:ignore[invalid-argument-type]
                                 Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
-                    with Row(gap=2, align="center"):
+                    with Row(gap=1, align="center"):
                         h3("Research Candidates")
                         Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
                     with ForEach(STATE.researchCandidates.candidates) as candidate:
                         with Card(css_class="border border-slate-200"):
-                            with CardContent(), Column(gap=2):
-                                with Row(gap=2, align="center"):
+                            with CardContent(), Column(gap=1):
+                                with Row(gap=1, align="center"):
                                     Text(candidate.title)  # ty:ignore[invalid-argument-type]
                                     Badge(candidate.status, variant="outline")  # ty:ignore[invalid-argument-type]
                                     Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
                                 Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
                                 Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
-                Separator()
-                with Column(gap=2):
-                    h3("Chunk Query")
-                    with Form(
-                        on_submit=CallTool(
-                            "search_sources_for_ui",
-                            arguments={
-                                "query": EVENT.formData.chunk_query,
-                                "tag_ids": STATE.selectedTagIds,
-                                "max_results": 8,
-                            },
-                            on_success=SetState("searchResults", RESULT),
-                            on_error=ShowToast(ERROR, variant="error"),
-                        )
-                    ):
-                        with Row(gap=2, align="center"):
-                            Input(
-                                name="chunk_query",
-                                input_type="search",
-                                placeholder="Search indexed files with the selected tag scope",
-                            )
-                            Button("Search chunks", button_type="submit")
-                    with If(STATE.searchResults):
-                        with ForEach(STATE.searchResults.hits) as hit:
-                            with Card(css_class="border border-slate-200"):
-                                with CardContent(), Column(gap=1):
-                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
-                                    Small(hit.source_title)  # ty:ignore[invalid-argument-type]
-                                    Muted(hit.summary)  # ty:ignore[invalid-argument-type]
-                with If(STATE.selectedSource):
-                    Separator()
-                    with Card(css_class="border border-slate-200"):
-                        with CardHeader(), Column(gap=1):
-                            CardTitle(STATE.selectedSource.display_title)  # ty:ignore[invalid-argument-type]
-                            CardDescription(STATE.selectedSource.original_filename)  # ty:ignore[invalid-argument-type]
-                        with CardContent(), Column(gap=2):
-                            with Row(gap=2, align="center"):
-                                Badge(STATE.selectedSource.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                Badge(STATE.selectedSource.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                Muted(STATE.selectedSource.chunk_count)  # ty:ignore[invalid-argument-type]
-                            with ForEach(STATE.selectedSource.chunks) as chunk:
-                                with Card(css_class="border border-slate-200"):
-                                    with CardContent(), Column(gap=1):
-                                        Small(chunk.title)  # ty:ignore[invalid-argument-type]
-                                        Muted(chunk.summary)  # ty:ignore[invalid-argument-type]
-                Separator()
-                with Column(gap=2):
+
+                with Tab("Activity", value="activity"), Column(gap=2):
                     with Row(gap=2, align="center"):
                         h3("Recent Tasks")
                         Button(
-                            "Refresh tasks",
+                            "Refresh",
                             variant="secondary",
+                            size="sm",
                             on_click=CallTool(
                                 "refresh_tasks",
                                 on_success=SetState("tasks", RESULT),
@@ -1487,12 +1493,13 @@ def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
                             ),
                         )
                     with ForEach(STATE.tasks.tasks) as task:
-                        with Row(gap=2, align="center"):
-                            Text(task.title)  # ty:ignore[invalid-argument-type]
-                            Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                            Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                Separator()
-                Muted("Use the search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
+                        with Card(css_class="border border-slate-200"):
+                            with CardContent(), Row(gap=1, align="center"):
+                                Text(task.title)  # ty:ignore[invalid-argument-type]
+                                Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
+                                Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                    Separator()
+                    Muted("Use search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
         return PrefabApp(
             title="Indexed Files",
             view=view,

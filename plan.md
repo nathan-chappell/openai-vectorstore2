@@ -598,6 +598,7 @@ Final MCP verification follow-ups:
 - FastMCP Inspector command should be documented as `./.venv/bin/fastmcp dev inspector backend/app/mcp/dev_server.py:mcp --ui-port 6274 --server-port 6277 --no-reload`.
 - Production/deployed HTTP MCP remains the FastAPI-mounted server at `/mcp/`; local FastMCP dev tooling should use `create_dev_mcp_server` because `create_mcp_server` includes the production token verifier.
 - MCP Apps UI should expose screenshot-worthy flows for research-library building/status, semantic search, tag filtering, source detail/preview, and recent task state.
+- Completed follow-up: the single MCP Apps `sources` UI is now optimized for a smaller ChatGPT side-panel viewport with internal Files/Search/Research/Activity tabs and smaller initial source/task/candidate payloads.
 - MCP tools/resources should expose research actions and semantic/tag search clearly enough for ChatGPT hosts to use them without relying on the web frontend.
 - After an MCP file search, ChatGPT should be able to request and receive the raw file content or appropriate extracted text for selected results, subject to size/safety limits and without leaking unrelated files.
 - Final screenshots should include the MCP Apps UI in ChatGPT or FastMCP dev tooling, plus at least one successful search-to-content retrieval flow.

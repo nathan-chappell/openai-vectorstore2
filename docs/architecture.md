@@ -47,7 +47,7 @@ Structured report documents live in `backend/app/schemas/reports.py` and render 
 `backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.
 
 - Data tools return structured JSON for hosts.
-- The `sources` render tool exposes a Prefab MCP Apps UI resource with file query, tag filters, source-file vector search, source detail, optional re-split controls, and recent tasks.
+- The `sources` render tool exposes one compact Prefab MCP Apps UI resource, internally split into Files, Search, Research, and Activity tabs so it fits better inside a ChatGPT side-panel view.
 - HTTP MCP is mounted at `/mcp`; stdio is available through `openai-vectorstore2-stdio`.
 - Local FastMCP Apps and Inspector workflows use `backend/app/mcp/dev_server.py:mcp`, which builds the same services with the dev MCP server factory and no production token verifier.
 
