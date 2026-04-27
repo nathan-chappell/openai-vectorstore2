@@ -39,7 +39,37 @@ Acceptance criteria:
 - SQLAlchemy JSON payloads are read/written through typed properties where practical.
 - Removed legacy code has either no remaining call sites or a current test that proves the replacement path.
 
-### 1. Split Explorer And Library Views
+### 1. TypeScript Contract And Legacy Cleanup
+
+Status: first foundation pass implemented.
+
+Goal:
+
+- Reduce frontend type drift, duplicate payload shapes, and compatibility code across React components, API clients, ChatKit client tools, and tests.
+- Use TypeScript deliberately to model the app's actual contracts without importing Python-specific patterns such as Pydantic or dataclasses.
+- Make API, task, filesystem, ChatKit, billing, report, and generated-asset payloads easier to evolve without scattered `any`, `unknown`, ad hoc casts, or repeated object literals.
+- Remove legacy and compatibility branches that are no longer needed before production data exists.
+
+Implementation plan:
+
+- Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
+- Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
+- Keep runtime parsing at API boundaries explicit and lightweight. Use structured guards only where external or optional data genuinely needs narrowing; do not add a heavy validation library unless the codebase has a clear need.
+- Prefer discriminated unions for task states, artifact kinds, source kinds, ChatKit client-tool events, and render/export statuses so switch statements become exhaustive and UI state cannot silently drift.
+- Type API client functions from their request/response contracts and let React state derive from those contracts instead of redefining local component copies.
+- Replace repeated string literals for route names, task kinds, source kinds, artifact kinds, and status values with shared literal unions or constants where that improves safety without making the code harder to read.
+- Remove old compatibility handling, duplicate normalization, stale optional fields, and broad `Record<string, unknown>` plumbing once call sites are migrated.
+- Keep edits incremental and verify with `npm run typecheck`, focused component tests if present, and Playwright coverage for affected user flows.
+
+Acceptance criteria:
+
+- Common frontend payloads are named once and reused across API clients, components, ChatKit tool handlers, and tests.
+- `npm run typecheck` remains clean without new `any` escapes or broad casts.
+- Important UI state machines use discriminated unions or equivalent exhaustive typing for impossible-state reduction.
+- Legacy/compat TypeScript code has either no remaining call sites or a current test proving the replacement behavior.
+- Frontend types stay aligned with backend schemas and generated/handwritten API contracts; mismatches are caught at compile time where practical.
+
+### 2. Split Explorer And Library Views
 
 Status: first pass implemented; needs browser polish and follow-up coverage.
 
@@ -80,7 +110,7 @@ Acceptance criteria:
 - Explorer hotkeys work when focus is inside the file list rows, including after mouse selection.
 - Playwright covers switching views, tag filtering, file reveal, selection, and preview behavior.
 
-### 2. Evidence Annotations
+### 3. Evidence Annotations
 
 Status: first pass implemented; needs browser verification.
 
@@ -104,7 +134,7 @@ Next:
 - If ChatKit exposes richer output annotations for custom source entities, replace or augment markdown links with native annotations.
 - Consider an evidence widget for answer summaries that need a stable source list outside prose.
 
-### 3. Report Compilation And Export
+### 4. Report Compilation And Export
 
 Status: planned.
 
@@ -116,8 +146,10 @@ Goal:
 
 Implementation notes:
 
-- Define a typed report document model for title, sections, prose blocks, lists, tables, citations/evidence links, equations/math blocks, figures/assets, and export metadata. Prefer Pydantic for API serialization and validation.
-- Add a canonical compile operation that takes a structured report and renders Markdown, then optionally renders PDF from the same source. Markdown should preserve citation links and KaTeX-compatible math.
+- Completed first pass: added a Pydantic structured report document model for title, sections, prose blocks, lists, tables, citations/evidence links, equations/math blocks, and figures/assets.
+- Completed first pass: added a canonical Markdown renderer that preserves citation links, KaTeX-compatible display/inline math, escaped tables, lists, figures, and references.
+- Next pass: add persistence and API/task boundaries so structured reports and compiled Markdown become library artifacts.
+- Later pass: optionally render PDF from the same structured report source.
 - Store compiled report artifacts through the same library/storage boundaries used for source files and generated assets, so reports can be searched, selected for ChatKit scope, previewed, downloaded, and cited later.
 - ChatKit should expose agent tools to draft/update a structured report, compile it, save it into a folder, render Markdown preview, render PDF preview, and return library links to the saved artifacts.
 - PDF download should normally mean "render PDF, save it in the library, then offer the saved library artifact for download" rather than producing an unmanaged transient file.
@@ -136,7 +168,7 @@ Acceptance criteria:
 - Download links point at saved library artifacts, not unmanaged temporary files.
 - Integration tests cover report creation, Markdown rendering, PDF artifact saving, progress/status reporting, and library selection/search behavior. Unit tests cover only tricky render normalization or inspection-rubric parsing.
 
-### 4. ChatKit Stability Verification
+### 5. ChatKit Stability Verification
 
 Status: partially fixed; needs live verification.
 
@@ -153,7 +185,7 @@ Next:
 - Confirm the minified React #185 / maximum update depth error is gone.
 - Fix any remaining refresh, polling, or event-callback loop.
 
-### 5. Browser Workflow Coverage
+### 6. Browser Workflow Coverage
 
 Status: ongoing.
 
@@ -167,7 +199,7 @@ Add Playwright coverage for normal file-library work:
 - Reveal a source from ChatKit or Library view.
 - Delete files and folders with progress/status feedback.
 
-### 6. Usage Credits And Stripe-Ready Billing
+### 7. Usage Credits And Stripe-Ready Billing
 
 Status: first backend pass implemented; admin UI, Stripe funding, and complete usage coverage remain planned.
 

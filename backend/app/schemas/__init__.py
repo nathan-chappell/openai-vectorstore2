@@ -80,6 +80,16 @@ from .records import (
     TaskStatus,
     VoiceGenerationRequest,
 )
+from .reports import (
+    ReportCitation,
+    ReportDocument,
+    ReportFigureBlock,
+    ReportListBlock,
+    ReportMathBlock,
+    ReportParagraphBlock,
+    ReportSection,
+    ReportTableBlock,
+)
 
 __all__ = [
     "ActionKind",
@@ -162,4 +172,12 @@ __all__ = [
     "TaskSummary",
     "TaskStatus",
     "VoiceGenerationRequest",
+    "ReportCitation",
+    "ReportDocument",
+    "ReportFigureBlock",
+    "ReportListBlock",
+    "ReportMathBlock",
+    "ReportParagraphBlock",
+    "ReportSection",
+    "ReportTableBlock",
 ]
