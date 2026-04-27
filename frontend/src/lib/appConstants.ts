@@ -11,7 +11,6 @@ export const TEXT_PREVIEW_LIMIT = 40_000;
 export const CHUNK_PREVIEW_LIMIT = 40;
 export const SOURCE_TAG_LIMIT = 8;
 export const SELECTED_FILE_LIMIT = 10;
-export const SOURCE_PAGE_SIZE = 100;
 export const EXPLORER_RENDER_LIMIT = 250;
 export const ACTIVE_TASK_REFRESH_INTERVAL_MS = 5_000;
 export const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
