@@ -33,6 +33,17 @@ Backend logs are written to `.local/logs/openai-vectorstore2.log` by default.
 
 VS Code users can press F5 to start the backend debugger. The workspace task `npm: build:watch` keeps the frontend bundle fresh for the backend-served app.
 
+## MCP Development
+
+The production HTTP app mounts authenticated MCP at `/mcp/`. For local FastMCP tooling, use the unauthenticated dev entrypoint:
+
+```bash
+./.venv/bin/fastmcp dev apps backend/app/mcp/dev_server.py:mcp --mcp-port 8001 --dev-port 8080 --no-reload
+./.venv/bin/fastmcp dev inspector backend/app/mcp/dev_server.py:mcp --ui-port 6274 --server-port 6277 --no-reload
+```
+
+This entrypoint uses the same app services and `.env` settings as the backend, so local tool calls read and write the same development database and storage.
+
 ## Verification
 
 - `./.venv/bin/pytest`

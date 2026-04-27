@@ -33,7 +33,7 @@ Functional final checks:
 - Verify research-builder flow on a small topic: discovery, ingest, vector indexing, scoped answer, progress visibility, and log traceability.
 - Verify report generation end to end: structured draft, Markdown render with KaTeX-compatible math/evidence links, saved library artifact, PDF render path when implemented, PDF inspection/retry behavior, and download links that point at saved artifacts.
 - Verify deployed MCP from the user's ChatGPT account: connect to the deployed MCP server, run exposed tools/resources from ChatGPT, and confirm the MCP Apps UI renders well enough for screenshots.
-- Verify FastMCP dev-server workflow locally before deployment: use it to exercise MCP tool discovery, Apps UI resources, research actions, semantic/tag search, source detail views, and raw-file/content retrieval.
+- Completed setup for FastMCP dev-server workflow: added `backend/app/mcp/dev_server.py:mcp`, documented Apps and Inspector commands, and covered the dev server tool surface in contract tests. Still run it manually against a realistic local library before deployment to exercise MCP tool discovery, Apps UI resources, research actions, semantic/tag search, source detail views, and raw-file/content retrieval.
 - Verify generated assets and stored artifacts are reachable from the library, selectable for ChatKit context where appropriate, and covered by cleanup/delete flows.
 - Verify billing/usage foundations are acceptable for beta: activation gate, admin credit grant, low-credit block, cost event creation for the main expensive paths, and clear logs with response/conversation IDs.
 - Run the standard verification suite plus at least one browser smoke pass against a seeded realistic library.

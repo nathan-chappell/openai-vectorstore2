@@ -39,9 +39,21 @@ Artifacts are written under `output/playwright/`, which is ignored.
 - REST route names against the capability matrix.
 - Frontend TypeScript fields against FastAPI OpenAPI schemas.
 - MCP tool discovery, destructive hints, and MCP Apps UI resource metadata.
+- The local FastMCP dev entrypoint exports the same tool surface as the authenticated server.
 - ChatKit tool parity.
 - ChatKit attachment and thread/task linkage.
 - Upload, source-level vector search, QA, tag/path filtering, reindexing, cleanup, and MCP file ingest flows.
+
+## FastMCP Dev Tools
+
+The dev entrypoint is `backend/app/mcp/dev_server.py:mcp`. It intentionally skips the production bearer-token verifier while keeping the same services, settings, database, and storage paths as the backend.
+
+```bash
+./.venv/bin/fastmcp dev apps backend/app/mcp/dev_server.py:mcp --mcp-port 8001 --dev-port 8080 --no-reload
+./.venv/bin/fastmcp dev inspector backend/app/mcp/dev_server.py:mcp --ui-port 6274 --server-port 6277 --no-reload
+```
+
+Use this before deployment to verify tool discovery, Apps UI rendering, research actions, semantic/tag search, source detail views, and raw-file/content retrieval against a realistic local library.
 
 `tests/test_migrations.py` checks:
 

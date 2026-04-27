@@ -19,6 +19,27 @@
       "python": "${workspaceFolder}/.venv/bin/python",
       "console": "integratedTerminal",
       "justMyCode": true
+    },
+    {
+      "name": "MCP: FastMCP Apps dev server",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "fastmcp",
+      "args": [
+        "dev",
+        "apps",
+        "backend/app/mcp/dev_server.py:mcp",
+        "--mcp-port",
+        "8001",
+        "--dev-port",
+        "8080",
+        "--no-reload"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "python": "${workspaceFolder}/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": true
     }
   ]
 }

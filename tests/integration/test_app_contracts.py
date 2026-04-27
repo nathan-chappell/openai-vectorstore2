@@ -3,9 +3,11 @@ from __future__ import annotations
 import asyncio
 from base64 import b64encode
 from datetime import UTC, datetime
+from importlib import import_module
 import json
 from pathlib import Path
 import re
+import sys
 from time import monotonic
 from typing import cast
 
@@ -16,7 +18,7 @@ import pytest
 from backend import create_fastapi_app
 from backend.app.bootstrap import AppServices, create_services
 from backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, rest_route_names
-from backend.app.core.config import AppSettings
+from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
 from backend.app.models import AppChatAttachment
 from backend.app.schemas import TaskDetail
@@ -1346,6 +1348,28 @@ async def test_mcp_server_exposes_app_first_tools(
     assert tools["search_chunks"].parameters["required"] == ["query"]
     assert tools["sources"].meta is not None
     assert tools["sources"].meta["ui"]["resourceUri"].startswith("ui://")
+
+
+@pytest.mark.asyncio
+async def test_mcp_dev_entrypoint_exports_local_tooling_server(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del configured_settings
+    del fake_openai
+    get_settings.cache_clear()
+    sys.modules.pop("backend.app.mcp.dev_server", None)
+    module = import_module("backend.app.mcp.dev_server")
+    server = getattr(module, "mcp")
+    services = cast(AppServices, getattr(module, "services"))
+    try:
+        tools = {tool.name for tool in await server.list_tools(run_middleware=False)}
+    finally:
+        await services.close()
+        sys.modules.pop("backend.app.mcp.dev_server", None)
+        get_settings.cache_clear()
+
+    assert tools == mcp_tool_names()
 
 
 @pytest.mark.asyncio
