@@ -298,6 +298,7 @@ Submodule structure:
 Provider/agent architecture:
 
 - Completed first pass: added `chat_completions_v1` runtime settings, a typed OpenAI-compatible chat-completions gateway boundary, known model context-window resolution, 75/25-style context-compaction budget helpers, a simple POST web-search gateway contract, and tests for model context/summary behavior.
+- Completed routing foundation: ChatKit can choose the Agents SDK `OpenAIChatCompletionsModel` when `AGENT_MODEL_PROVIDER=chat_completions_v1`, while `openai_responses` remains the default Responses/Conversations path. The compatibility route uses app-owned active history instead of OpenAI conversation IDs and avoids direct OpenAI file attachments.
 - Add an app-level model-provider abstraction for agent turns with at least two implementations: `openai_responses` and `chat_completions_v1`.
 - Preserve the current OpenAI Responses/Conversations ChatKit implementation for best capability, tracing, server-side state, and advanced tool use.
 - Add a `chat_completions_v1` compatibility mode for the widely supported `/v1/chat/completions` message/tool API surface. This mode must work with OpenAI chat-completions models and with `oss-small`/`gpt-oss-20b` served through SGLang or the smallest/easiest compatible serving option if SGLang is not viable.

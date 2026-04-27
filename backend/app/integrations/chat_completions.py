@@ -219,11 +219,7 @@ class ChatCompletionsGateway:
 
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
-        api_key = settings.chat_completions_api_key or settings.openai_api_key
-        kwargs: dict[str, object] = {"api_key": api_key.get_secret_value()}
-        if settings.chat_completions_base_url is not None:
-            kwargs["base_url"] = str(settings.chat_completions_base_url).rstrip("/")
-        self._client = AsyncOpenAI(**cast(Any, kwargs))
+        self._client = create_chat_completions_client(settings)
 
     async def close(self) -> None:
         await self._client.close()
@@ -373,3 +369,11 @@ def _web_search_response_from_mapping(
 
 def _string_value(value: object) -> str | None:
     return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def create_chat_completions_client(settings: AppSettings) -> AsyncOpenAI:
+    api_key = settings.chat_completions_api_key or settings.openai_api_key
+    kwargs: dict[str, object] = {"api_key": api_key.get_secret_value()}
+    if settings.chat_completions_base_url is not None:
+        kwargs["base_url"] = str(settings.chat_completions_base_url).rstrip("/")
+    return AsyncOpenAI(**cast(Any, kwargs))

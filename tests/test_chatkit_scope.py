@@ -18,6 +18,7 @@ from backend.app.chatkit.server import (
     clean_thread_title,
     chatkit_source_deeplink,
     chatkit_model_settings_for_model,
+    chatkit_metadata_with_chat_completions_state,
     chatkit_metadata_with_openai_state,
     chatkit_openai_state,
     chatkit_progress_update_event,
@@ -100,6 +101,19 @@ def test_chatkit_openai_state_round_trips_metadata() -> None:
     assert metadata["existing"] == "value"
     assert state.conversation_id == "conv_123"
     assert state.previous_response_id == "resp_456"
+
+
+def test_chatkit_chat_completions_state_round_trips_metadata() -> None:
+    metadata = chatkit_metadata_with_chat_completions_state(
+        {"existing": "value"},
+        model="oss-small",
+        previous_response_id="chatcmpl_123",
+    )
+
+    assert metadata["existing"] == "value"
+    assert metadata["agent_model_provider"] == "chat_completions_v1"
+    assert metadata["chat_completions_model"] == "oss-small"
+    assert metadata["chat_completions_previous_response_id"] == "chatcmpl_123"
 
 
 def test_chatkit_model_settings_enable_server_side_compaction() -> None:
