@@ -56,6 +56,7 @@ Implementation plan:
 - Completed legacy compression pass: removed the dead legacy source-list app path and its duplicate source fetch/filter/upload explorer code.
 - Completed component split pass: moved source preview, raw content preview, and chunk-row rendering into a focused typed React component module.
 - Completed ChatKit component split: moved ChatKit rendering/configuration into a focused typed component while keeping app-owned callbacks in `App.tsx`.
+- Completed header component split: moved workspace header presentation into a focused typed component.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
 - Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
