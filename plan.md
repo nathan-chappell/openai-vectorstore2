@@ -12,6 +12,48 @@ The app has three coordinated surfaces:
 
 The product is file-library first. Ingestion stores the original source file, publishes that source file to an OpenAI vector store, and searches the source-level index with app-owned filters for tags, paths, source type, selected files, and dates. Semantic splitting remains available as an explicit inspection or re-split tool, but it is not part of normal ingestion.
 
+## Wrap-Up Checklist For 0.1.0 Beta
+
+Goal:
+
+- Get the project to a polished, realistic demo state: a credible RAG system, a repeatable agentic workflow, advanced OpenAI API usage, and a live project that is strong enough to reference from a resume.
+- Deploy it as a sister service to PlodAI with roughly the same production posture. Assume `../plodai` is good enough as the deployment reference and this project mainly needs its own database/storage/API environment values.
+- Target beta-production readiness, not a large new roadmap. Finish the important proof points, document them, and avoid taking on nonessential product expansion before the first deployed version.
+
+Release scope:
+
+- Version starts at `0.1.0` for both Python and frontend package metadata.
+- Primary demo path: upload/build a small research library, inspect files, run tag and semantic search, ask grounded questions with evidence, generate a structured report, render/preview/export it, and show logs/progress/cost tracking for OpenAI-backed work.
+- The project should demonstrate source-level OpenAI vector-store RAG, ChatKit agent tools, MCP surface area, task/progress updates, generated artifacts, billing/usage accounting foundations, and deployable app architecture.
+
+Functional final checks:
+
+- Verify tag filtering and semantic Library search with a realistic library: all/any tag mode, nonblank fallback query, source metadata display, selected-result chat scope, file reveal, and evidence links.
+- Verify grounded ChatKit answers from selected Explorer files and Library search results, including citation clicks and browser-side reveal behavior.
+- Verify research-builder flow on a small topic: discovery, ingest, vector indexing, scoped answer, progress visibility, and log traceability.
+- Verify report generation end to end: structured draft, Markdown render with KaTeX-compatible math/evidence links, saved library artifact, PDF render path when implemented, PDF inspection/retry behavior, and download links that point at saved artifacts.
+- Verify generated assets and stored artifacts are reachable from the library, selectable for ChatKit context where appropriate, and covered by cleanup/delete flows.
+- Verify billing/usage foundations are acceptable for beta: activation gate, admin credit grant, low-credit block, cost event creation for the main expensive paths, and clear logs with response/conversation IDs.
+- Run the standard verification suite plus at least one browser smoke pass against a seeded realistic library.
+
+Deployment checklist:
+
+- Add a Dockerfile that builds the Vite frontend, installs the Python app in the `.venv`/package style expected by the repo, runs Alembic migrations or documents the migration command, and starts the backend HTTP service.
+- Add a `.dockerignore` that excludes `.venv`, `node_modules`, local logs, local storage, debug artifacts, Playwright output, and secrets.
+- Add a Railway deployment guide or config notes covering service start command, health check, required env vars, storage choice, and migration workflow.
+- Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:0.1.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
+- Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
+- Confirm mandatory env vars are documented: `OPENAI_API_KEY`, database URL, Clerk values if auth is enabled, storage backend/S3-compatible values if not using local ephemeral storage, app base URL, allowed origins, billing/admin settings, and any ChatKit/OpenAI model settings.
+- Decide beta storage explicitly: local container storage is acceptable only for throwaway demos; persistent Railway volume or S3-compatible storage is preferred for a live resume link.
+- Confirm logs work in Railway without leaking prompts, secrets, or bulky content, and that enough IDs are present to debug OpenAI API calls from platform logs.
+
+Resume/demo checklist:
+
+- Update README with a concise feature list, architecture diagram or section, local run commands, Docker/Railway deployment notes, and a demo script.
+- Add screenshots or a short walkthrough showing Explorer, Library semantic search, ChatKit grounded answer, report artifact, and deployment/runtime logs if useful.
+- Call out the strongest technical points plainly: OpenAI vector-store file search with app-owned metadata filters, ChatKit agent tools, MCP adapters, task progress, typed Python/TypeScript contracts, usage accounting, and artifact/report workflows.
+- Keep the live beta route stable enough to show, but make clear in copy and logs that it is beta and may use admin-gated access.
+
 ## Current Priorities
 
 ### 0. Typed Payload And Legacy Compression Refactor
@@ -57,6 +99,7 @@ Implementation plan:
 - Completed component split pass: moved source preview, raw content preview, and chunk-row rendering into a focused typed React component module.
 - Completed ChatKit component split: moved ChatKit rendering/configuration into a focused typed component while keeping app-owned callbacks in `App.tsx`.
 - Completed header component split: moved workspace header presentation into a focused typed component.
+- Completed Library view component split: moved tag/semantic search controls and result-row rendering into a focused typed component.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
 - Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
