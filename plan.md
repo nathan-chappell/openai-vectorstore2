@@ -40,8 +40,8 @@ Functional final checks:
 
 Deployment checklist:
 
-- Add a Dockerfile that builds the Vite frontend, installs the Python app in the `.venv`/package style expected by the repo, runs Alembic migrations or documents the migration command, and starts the backend HTTP service.
-- Add a `.dockerignore` that excludes `.venv`, `node_modules`, local logs, local storage, debug artifacts, Playwright output, and secrets.
+- Completed Docker image pass: added a Dockerfile that builds the Vite frontend, installs the Python app runtime, copies migrations, exposes port `8000`, and starts `openai-vectorstore2-http`; migrations are documented as a pre-start command for deployment.
+- Completed `.dockerignore` pass: excludes `.venv`, `node_modules`, frontend build output, local logs/storage, test/debug artifacts, caches, databases, Git metadata, VS Code config, and secrets.
 - Completed docs pass: added Docker/Railway deployment notes covering service start command, health check, required env vars, storage choice, migration workflow, logs, admin integration, billing defaults, and image build/push commands.
 - Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:1.0.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
@@ -204,7 +204,7 @@ Next:
 
 ### 4. Report Compilation And Export
 
-Status: first foundation pass implemented.
+Status: Markdown model, renderer, source persistence, REST, ChatKit, and MCP paths implemented; PDF export remains planned.
 
 Goal:
 
