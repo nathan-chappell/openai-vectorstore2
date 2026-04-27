@@ -269,13 +269,13 @@ Add Playwright coverage for normal file-library work:
 
 ### 7. Shared Admin, Auth, And Payments Submodule
 
-Status: adapter boundary first pass in progress; private submodule extraction, admin UI sharing, and provider-backed payments remain planned.
+Status: shared submodule foundation complete; host persistence/UI integration, free-credit request storage, and provider-backed payments remain planned.
 
 Goal:
 
 - Extract common sign-up, login, auth, admin-user management, credit/billing, and payment-provider code into a private shared project that PlodAI and this repo can consume.
 - Use `git@github.com:nathan-chappell/ai-portfolio-admin.git` as the private source of truth, likely mounted as a git submodule in each portfolio app.
-- Keep sensitive/admin implementation details out of the public-facing project repos while still preserving a clear boundary and a default implementation that lets each repo run without the private submodule.
+- Keep sensitive/admin implementation details out of the public-facing project repos while still preserving a clear boundary and a default provider path that lets each repo run without private production payment/admin wiring.
 - Support payments through a provider-neutral boundary, with PayPal as an important planned provider and Stripe still possible later.
 - Support a "request free credits" flow for early access, beta testers, and trusted networks such as LinkedIn connections. Admins must be able to approve, reject, and manually grant credits with clear audit history even before payment providers are fully automated.
 
@@ -285,27 +285,30 @@ Decision:
 - Each app should expose a narrow integration layer: current user, role/active state, credit balance, admin user operations, payment checkout/start, payment webhook/confirmation, credit grant, and cost debit.
 - Free-credit requests are a first-class admin workflow, not a hidden manual database operation. They should produce request records, decision records, and eventual credit grants with source/reason metadata.
 - The private submodule can provide the production implementation for Clerk, admin panels, credit ledgers, and payment providers.
-- This repo must also provide a default/local implementation that works without the submodule: local-dev auth, manual activation/credit grants, billing status, and clear "payments unavailable" behavior.
-- The fallback boundary is important both for developer experience and for making the app understandable when the private submodule is absent.
+- This repo must also provide a default/local provider path: local-dev auth, manual activation/credit grants, billing status, and clear "payments unavailable" behavior.
+- The fallback boundary is important both for developer experience and for making the app understandable when private production payment/admin wiring is not configured. A fresh clone still needs `git submodule update --init --recursive` because shared contracts are now a declared dependency.
 
-Implementation plan:
+Completed:
 
 - Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, exposed typed payment integration status through `/api/billing/payment-status`, and documented the default public behavior versus private `ai-portfolio-admin` setup.
-- Completed shared package scaffold: `../ai-portfolio-admin` now has typed Python contracts, Clerk metadata helpers, free-credit policy evaluation, PayPal receipt-review policy, an admin credit workflow protocol, reusable frontend TypeScript contracts/components, tests, docs, and an `ai_portfolio_admin.openai_vectorstore2` adapter module that this repo can load when configured.
+- Completed shared package scaffold: `../ai-portfolio-admin` now has typed Python contracts, Clerk metadata helpers, free-credit policy evaluation, PayPal receipt-review policy, an admin credit workflow protocol, reusable frontend TypeScript contracts/components, tests, and docs.
 - Completed submodule dependency pass: this repo and PlodAI now mount `git@github.com:nathan-chappell/ai-portfolio-admin.git` at `vendor/ai-portfolio-admin`; Python metadata points at that local package; this repo's shared-adapter test loads the submodule path; and PlodAI's duplicated Clerk metadata/`UserRole` helpers now delegate to the shared package while preserving its current API surface.
-- Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
-- Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
-- Add shared free-credit request contracts: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, and resulting credit grant ID.
-- Add policy support for configured automatic grants, such as `linkedin_connection -> 5.00 USD`, while keeping verification pluggable. The shared package should decide from typed evidence and policy; host apps should own persistence and any external identity lookup.
-- Add shared admin-panel frontend pieces for user search, activation, manual credit grant, free-credit request review, payment attempt review, and audit/decision notes. Host apps should pass API callbacks rather than the component importing app-specific clients.
+- Completed circularity cleanup: `ai-portfolio-admin` no longer imports host apps. Host-specific adapters live in each host repo; this repo uses `backend.app.admin.shared_adapter`.
+- Completed shared contract/interface foundation: shared package now owns generic user/admin/credit/free-credit/payment receipt contracts, Clerk metadata helpers, policy evaluators, a credit workflow protocol, and callback-driven frontend admin types/components.
+
+Remaining implementation plan:
+
+- Wire this repo's admin UI to either the shared callback-driven admin panel or a local panel that uses the shared frontend contracts. It should support user search, activation/deactivation, manual credit grants, free-credit request review, payment attempt review, and audit/decision notes.
+- Add host-owned persistence for free-credit requests: requester identity, requested amount, reason, source channel, optional LinkedIn/profile evidence, status, decision note, reviewer, timestamps, resulting credit grant ID, idempotency key, and duplicate/active-request checks.
+- Use shared free-credit policy evaluation from `ai-portfolio-admin` in host endpoints. The shared package decides from typed evidence and policy; host apps own persistence and external evidence verification.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
-- Continue expanding the adapter module in this repo so it can load the shared submodule implementation when present and configured, otherwise fall back to the default local implementation.
+- Expand host-local adapters only where they compose local services with shared contracts. Do not add host imports back into `ai-portfolio-admin`.
 - Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
-- Add submodule setup docs with the private URL: `git@github.com:nathan-chappell/ai-portfolio-admin.git`.
-- Document how a public clone behaves without the private submodule: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
+- Add/update submodule setup docs with the private URL, clone command, and `git submodule update --init --recursive`.
+- Document clone/submodule setup and how the default provider behaves without private production wiring: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
-- Add a PayPal receipt-based temporary access provider as the MVP-friendly bridge before full PayPal Checkout or Stripe integration exists.
-- Add a manual credit grant flow that logs grants for all users with admin ID, amount, note, source, optional payment/free-credit request reference, and resulting balance.
+- Implement the PayPal receipt-based temporary access provider in host persistence/API/UI using shared receipt-review contracts.
+- Extend the manual credit grant flow so grants are auditable for all users with admin ID, amount, note, source, optional payment/free-credit request reference, and resulting balance.
 - Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
 
 Free-credit request workflow:
@@ -338,16 +341,17 @@ PayPal receipt-based temporary access:
 
 Acceptance criteria:
 
-- This repo can run and pass tests without the private submodule installed.
-- With the private submodule installed/configured, shared auth/admin/payment code is used through a small adapter boundary.
-- Public app code does not import private implementation details outside the adapter layer.
+- This repo can run and pass tests with the submodule initialized, while still using the default provider when private production admin/payment wiring is not configured.
+- With the private submodule installed/configured, shared contracts/helpers/components are used through host-owned adapter and API boundaries.
+- Public app code does not import private implementation details outside the host adapter/UI boundary.
+- `ai-portfolio-admin` imports no host app modules; dependency direction remains host app -> shared submodule.
 - Manual credit grants and usage debits still work in the default implementation.
 - Payment-provider events are idempotent, auditable, and can grant credits without duplicating balances.
-- PayPal implementation details are captured in the shared project plan before payment work begins.
+- Free-credit requests and PayPal receipt reviews are persisted, reviewable by admins, and can result in audited credit grants.
 
 ### 8. Usage Credits And Provider-Ready Billing
 
-Status: first backend pass implemented; admin UI/shared-admin extraction, payment-provider funding, and complete usage coverage remain planned.
+Status: first backend pass implemented; shared-admin foundation complete; admin UI, free-credit/payment funding, and complete usage coverage remain planned.
 
 Reference `../plodai` directly during implementation and align models/services/schemas with it where the concepts match, adapting names only where this app's library/task surfaces need richer references.
 
