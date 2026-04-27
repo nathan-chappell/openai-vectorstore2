@@ -12,7 +12,7 @@ The app has three coordinated surfaces:
 
 The product is file-library first. Ingestion stores the original source file, publishes that source file to an OpenAI vector store, and searches the source-level index with app-owned filters for tags, paths, source type, selected files, and dates. Semantic splitting remains available as an explicit inspection or re-split tool, but it is not part of normal ingestion.
 
-## Wrap-Up Checklist For 0.1.0 Beta
+## Wrap-Up Checklist For 1.0.0 Beta
 
 Goal:
 
@@ -22,7 +22,7 @@ Goal:
 
 Release scope:
 
-- Version starts at `0.1.0` for both Python and frontend package metadata.
+- Version starts at `1.0.0` for both Python and frontend package metadata.
 - Primary demo path: upload/build a small research library, inspect files, run tag and semantic search, ask grounded questions with evidence, generate a structured report, render/preview/export it, and show logs/progress/cost tracking for OpenAI-backed work.
 - The project should demonstrate source-level OpenAI vector-store RAG, ChatKit agent tools, MCP surface area, task/progress updates, generated artifacts, billing/usage accounting foundations, and deployable app architecture.
 
@@ -43,7 +43,7 @@ Deployment checklist:
 - Add a Dockerfile that builds the Vite frontend, installs the Python app in the `.venv`/package style expected by the repo, runs Alembic migrations or documents the migration command, and starts the backend HTTP service.
 - Add a `.dockerignore` that excludes `.venv`, `node_modules`, local logs, local storage, debug artifacts, Playwright output, and secrets.
 - Add a Railway deployment guide or config notes covering service start command, health check, required env vars, storage choice, and migration workflow.
-- Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:0.1.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
+- Prefer Docker deploys for Railway. Publish images as `nathanschappell/openai-vectorstore2:1.0.0` and later tags with `docker push nathanschappell/openai-vectorstore2:tagname`.
 - Provision a Railway Postgres database if it can sleep or otherwise fits the beta budget. Match PlodAI's deployment pattern where possible and switch this app's DB env vars to the new service.
 - Confirm mandatory env vars are documented: `OPENAI_API_KEY`, database URL, Clerk values if auth is enabled, storage backend/S3-compatible values if not using local ephemeral storage, app base URL, allowed origins, billing/admin settings, and any ChatKit/OpenAI model settings.
 - Decide whether beta admin/auth/payments come from this repo's default implementation or the private shared `ai-portfolio-admin` submodule; either path must leave the app bootable and demoable.

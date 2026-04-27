@@ -1,0 +1,17 @@
+.venv/
+node_modules/
+frontend/dist/
+.local/
+.pytest_cache/
+.ruff_cache/
+output/
+tmp/
+test-results/
+playwright-report/
+*.db
+*.pyc
+__pycache__/
+.git/
+.vscode/
+.env
+.env.*
