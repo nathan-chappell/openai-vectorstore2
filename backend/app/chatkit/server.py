@@ -832,7 +832,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Found {len(response.hits)} file match{'' if len(response.hits) == 1 else 'es'} across {source_count} source{'' if source_count == 1 else 's'}.",
             )
-            return compact_chatkit_search_payload(response.model_dump(mode="json"))
+            compact_payload = compact_chatkit_search_payload(response.model_dump(mode="json"))
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_results",
+                arguments={
+                    "origin": "search_chunks",
+                    "query": query,
+                    "results": compact_payload.get("hits", []),
+                },
+            )
+            return compact_payload
 
         @function_tool(name_override="branch_search")
         async def branch_search_tool(
@@ -866,7 +875,21 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Explored {len(response.levels)} level{'' if len(response.levels) == 1 else 's'} with {hit_count} hit{'' if hit_count == 1 else 's'}.",
             )
-            return compact_chatkit_branch_search_payload(response.model_dump(mode="json"))
+            compact_payload = compact_chatkit_branch_search_payload(response.model_dump(mode="json"))
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_results",
+                arguments={
+                    "origin": "branch_search",
+                    "query": query,
+                    "results": [
+                        hit
+                        for level in _mapping_list(compact_payload.get("levels"))
+                        if isinstance(level, Mapping)
+                        for hit in _mapping_list(level.get("hits"))
+                    ],
+                },
+            )
+            return compact_payload
 
         @function_tool(name_override="preview_semantic_split")
         async def preview_semantic_split_tool(
@@ -1216,7 +1239,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Research answer ready with {len(response.hits)} cited match{'' if len(response.hits) == 1 else 'es'}.",
             )
-            return compact_chatkit_action_payload(response.model_dump(mode="json"))
+            compact_payload = compact_chatkit_action_payload(response.model_dump(mode="json"))
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_results",
+                arguments={
+                    "origin": "answer_research_library",
+                    "query": question,
+                    "results": compact_payload.get("sources", []),
+                },
+            )
+            return compact_payload
 
         @function_tool(name_override="resplit_source")
         async def resplit_source_tool(
@@ -1360,7 +1392,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Grounded answer complete as task {response.task_id[:8]} with {len(response.hits)} citation{'' if len(response.hits) == 1 else 's'}.",
             )
-            return compact_chatkit_action_payload(response.model_dump(mode="json"))
+            compact_payload = compact_chatkit_action_payload(response.model_dump(mode="json"))
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_results",
+                arguments={
+                    "origin": "answer_from_library",
+                    "query": prompt,
+                    "results": compact_payload.get("sources", []),
+                },
+            )
+            return compact_payload
 
         @function_tool(name_override="freeform_from_library")
         async def freeform_from_library_tool(
@@ -1393,7 +1434,16 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 "check-circle",
                 f"Draft complete as task {response.task_id[:8]} with {len(response.hits)} retrieved chunk{'' if len(response.hits) == 1 else 's'}.",
             )
-            return compact_chatkit_action_payload(response.model_dump(mode="json"))
+            compact_payload = compact_chatkit_action_payload(response.model_dump(mode="json"))
+            ctx.context.client_tool_call = ClientToolCall(
+                name="show_results",
+                arguments={
+                    "origin": "freeform_from_library",
+                    "query": prompt,
+                    "results": compact_payload.get("sources", []),
+                },
+            )
+            return compact_payload
 
         @function_tool(name_override="save_report_markdown")
         async def save_report_markdown_tool(

@@ -7,7 +7,7 @@ import type {
   RefObject,
 } from "react";
 
-import type { LibrarySearchResult, WorkspaceFileView } from "../lib/appTypes";
+import type { ChatResultItem, LibrarySearchResult, WorkspaceFileView } from "../lib/appTypes";
 import type {
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
@@ -18,6 +18,7 @@ import type {
 import { clamp, isEditableShortcutTarget } from "../lib/uiState";
 import { FileEntryRow } from "./FileEntryRow";
 import { LibrarySearchView } from "./LibrarySearchView";
+import { ResultsView } from "./ResultsView";
 import { SourcePreview } from "./SourcePreview";
 
 export const FileExplorer = memo(function FileExplorer({
@@ -32,6 +33,7 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResults,
   librarySearching,
   libraryTagMatchMode,
+  chatResults,
   previewGridRef,
   previewLayoutStyle,
   previewSplitPercent,
@@ -57,6 +59,7 @@ export const FileExplorer = memo(function FileExplorer({
   onRenameSelected,
   onResplit,
   onRunLibrarySearch,
+  onClearChatResults,
   onSelectEntries,
   onShowShortcuts,
   onLibraryQueryChange,
@@ -77,6 +80,7 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
   libraryTagMatchMode: TagMatchMode;
+  chatResults: ChatResultItem[];
   previewGridRef: RefObject<HTMLDivElement | null>;
   previewLayoutStyle: CSSProperties & Record<"--preview-list-width", string>;
   previewSplitPercent: number;
@@ -102,6 +106,7 @@ export const FileExplorer = memo(function FileExplorer({
   onRenameSelected: () => void;
   onResplit: () => void;
   onRunLibrarySearch: (mode: "replace" | "append") => void;
+  onClearChatResults: () => void;
   onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
   onShowShortcuts: () => void;
   onLibraryQueryChange: (value: string) => void;
@@ -283,6 +288,16 @@ export const FileExplorer = memo(function FileExplorer({
         >
           Library
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeFileView === "results"}
+          className={activeFileView === "results" ? "view-tab active" : "view-tab"}
+          onClick={() => onActiveFileViewChange("results")}
+        >
+          Results
+          {chatResults.length ? <span className="view-tab-count">{chatResults.length}</span> : null}
+        </button>
       </div>
       <div className="explorer-commandbar">
         <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy}>
@@ -299,7 +314,21 @@ export const FileExplorer = memo(function FileExplorer({
           ?
         </button>
       </div>
-      {activeFileView === "library" ? (
+      {activeFileView === "results" ? (
+        <div
+          ref={previewGridRef}
+          className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}
+          style={selectedSource ? previewLayoutStyle : undefined}
+        >
+          <ResultsView
+            results={chatResults}
+            previewedSourceId={selectedSource?.id ?? null}
+            onClear={onClearChatResults}
+            onOpenSource={onOpenSource}
+          />
+          {previewPane}
+        </div>
+      ) : activeFileView === "library" ? (
         <div
           ref={previewGridRef}
           className={selectedSource ? "filesystem-layout has-preview" : "filesystem-layout"}

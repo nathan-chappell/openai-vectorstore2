@@ -1263,6 +1263,21 @@ kbd {
   background: #eff6ff;
 }
 
+.view-tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.15rem;
+  height: 1.15rem;
+  margin-left: 0.25rem;
+  border-radius: 999px;
+  padding: 0 0.28rem;
+  color: #1d4ed8;
+  background: #ffffff;
+  font-size: 0.68rem;
+  font-weight: 800;
+}
+
 .explorer-commandbar {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1447,6 +1462,7 @@ kbd {
 }
 
 .filesystem-layout > .library-search-view,
+.filesystem-layout > .results-view,
 .explorer-view-body {
   min-width: 0;
   min-height: 0;
@@ -1513,7 +1529,11 @@ kbd {
 .library-file-list-header,
 .library-file-rows [role="row"],
 .filesystem-layout.has-preview .library-file-list-header,
-.filesystem-layout.has-preview .library-file-rows [role="row"] {
+.filesystem-layout.has-preview .library-file-rows [role="row"],
+.results-file-list-header,
+.results-file-rows [role="row"],
+.filesystem-layout.has-preview .results-file-list-header,
+.filesystem-layout.has-preview .results-file-rows [role="row"] {
   grid-template-columns: minmax(13rem, 1fr) 4.2rem 6.5rem minmax(11rem, 1.2fr);
 }
 
@@ -1554,7 +1574,8 @@ kbd {
   box-shadow: inset 3px 0 #2563eb;
 }
 
-.library-file-rows [role="row"] {
+.library-file-rows [role="row"],
+.results-file-rows [role="row"] {
   cursor: pointer;
 }
 

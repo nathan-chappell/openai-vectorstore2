@@ -24,11 +24,28 @@ export type RevealTarget = {
   entryId?: string | null;
 };
 
-export type WorkspaceFileView = "explorer" | "library";
+export type WorkspaceFileView = "explorer" | "library" | "results";
 
 export type LibrarySearchResult = {
   hit: ChunkHit;
   entry: FilesystemEntrySummary | null;
+};
+
+export type ChatResultItem = {
+  key: string;
+  sourceId: string;
+  entryId: string | null;
+  name: string;
+  path: string | null;
+  sourceType: string | null;
+  score: number | null;
+  title: string | null;
+  summary: string | null;
+  text: string | null;
+  locator: string | null;
+  origin: string;
+  query: string | null;
+  seenCount: number;
 };
 
 export type ChatKitClientToolCall = {

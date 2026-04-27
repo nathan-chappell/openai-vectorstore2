@@ -35,6 +35,7 @@ import {
 } from "./lib/appConstants";
 import type {
   AppProps,
+  ChatResultItem,
   ChatKitClientToolCall,
   ChatKitClientToolResult,
   DeleteDialogState,
@@ -64,6 +65,7 @@ import {
   readStoredPreviewSplit,
   readStoredWorkspaceSplit,
   sameStringArray,
+  stringFromUnknown,
 } from "./lib/uiState";
 
 type EntitySearchItem = {
@@ -92,6 +94,7 @@ export function App({ authMode }: AppProps) {
   const [libraryResults, setLibraryResults] = useState<LibrarySearchResult[]>([]);
   const [libraryResultCount, setLibraryResultCount] = useState(0);
   const [librarySearching, setLibrarySearching] = useState(false);
+  const [chatResults, setChatResults] = useState<ChatResultItem[]>([]);
   const [selectedEntryIds, setSelectedEntryIds] = useState<string[]>([]);
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
   const [selectionAnchorEntryId, setSelectionAnchorEntryId] = useState<string | null>(null);
@@ -703,6 +706,20 @@ export function App({ authMode }: AppProps) {
         const entryId = typeof toolCall.params.entry_id === "string" ? toolCall.params.entry_id : null;
         return await revealFileInExplorer({ sourceId, entryId });
       }
+      if (toolCall.name === "show_results") {
+        const nextResults = chatResultItemsFromClientTool(toolCall.params, knownEntriesRef.current);
+        scheduleClientToolUiUpdate(() => {
+          if (nextResults.length) {
+            setChatResults((current) => mergeChatResults(nextResults, current));
+            rememberEntitySearchItems(nextResults.map(entitySearchItemFromChatResult));
+            setActiveFileView("results");
+            setStatus(
+              `Added ${nextResults.length} chat result${nextResults.length === 1 ? "" : "s"} to the Results view.`,
+            );
+          }
+        });
+        return { ok: true, result_count: nextResults.length };
+      }
       if (toolCall.name === "show_research_builder") {
         const query = typeof toolCall.params.query === "string" ? toolCall.params.query : null;
         const result = asResearchBuildResponse(toolCall.params.result);
@@ -744,7 +761,7 @@ export function App({ authMode }: AppProps) {
       }
       return { ok: false, message: `Unknown client tool: ${toolCall.name}` };
     },
-    [currentFolderId, loadFolder, revealFileInExplorer, scheduleClientToolUiUpdate],
+    [currentFolderId, loadFolder, rememberEntitySearchItems, revealFileInExplorer, scheduleClientToolUiUpdate],
   );
 
   const beginWorkspaceResize = useCallback((event: ReactPointerEvent<HTMLButtonElement>): void => {
@@ -838,6 +855,7 @@ export function App({ authMode }: AppProps) {
           libraryResults={libraryResults}
           librarySearching={librarySearching}
           libraryTagMatchMode={libraryTagMatchMode}
+          chatResults={chatResults}
           previewGridRef={previewGridRef}
           previewLayoutStyle={previewLayoutStyle}
           previewSplitPercent={previewSplitPercent}
@@ -863,6 +881,7 @@ export function App({ authMode }: AppProps) {
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
           onRunLibrarySearch={(mode) => void runLibrarySearch(mode)}
+          onClearChatResults={() => setChatResults([])}
           onSelectEntries={applyExplorerSelection}
           onShowShortcuts={() => setShortcutDialogOpen(true)}
           onLibraryQueryChange={setLibraryQuery}
@@ -961,6 +980,114 @@ function entitySearchItemFromLibraryResult(result: LibrarySearchResult): EntityS
       .filter(Boolean)
       .join(" "),
   };
+}
+
+function entitySearchItemFromChatResult(result: ChatResultItem): EntitySearchItem {
+  const title = result.path ?? result.name;
+  return {
+    key: result.sourceId,
+    title,
+    path: result.path ?? result.name,
+    sourceId: result.sourceId,
+    entryId: result.entryId,
+    icon: "lucide:file-text",
+    searchableText: [
+      result.name,
+      result.path,
+      result.sourceType,
+      result.title,
+      result.summary,
+      result.text,
+      result.locator,
+      result.origin,
+      result.query,
+    ]
+      .filter(Boolean)
+      .join(" "),
+  };
+}
+
+function mergeChatResults(incoming: ChatResultItem[], current: ChatResultItem[]): ChatResultItem[] {
+  const byKey = new Map<string, ChatResultItem>();
+  for (const result of current) {
+    byKey.set(result.key, result);
+  }
+  for (const result of incoming) {
+    const existing = byKey.get(result.key);
+    byKey.set(result.key, existing ? { ...existing, ...result, seenCount: existing.seenCount + 1 } : result);
+  }
+  return [...incoming.map((result) => byKey.get(result.key) ?? result), ...current.filter((result) => !incoming.some((item) => item.key === result.key))].slice(0, 100);
+}
+
+function chatResultItemsFromClientTool(
+  params: Record<string, unknown>,
+  knownEntries: Record<string, FilesystemEntrySummary>,
+): ChatResultItem[] {
+  const origin = stringFromUnknown(params.origin) ?? "chat";
+  const query = stringFromUnknown(params.query);
+  const rawResults = firstArray(params.results, params.sources, params.hits);
+  const entriesBySourceId = new Map(
+    Object.values(knownEntries)
+      .filter((entry) => entry.source_id)
+      .map((entry) => [entry.source_id as string, entry]),
+  );
+  return rawResults.flatMap((rawResult) => {
+    if (!isRecord(rawResult)) {
+      return [];
+    }
+    const sourceId = stringFromUnknown(rawResult.id) ?? stringFromUnknown(rawResult.source_id) ?? stringFromUnknown(rawResult.source_file_id);
+    if (!sourceId) {
+      return [];
+    }
+    const entry = entriesBySourceId.get(sourceId) ?? null;
+    const chunkId = stringFromUnknown(rawResult.chunk_id);
+    const title = stringFromUnknown(rawResult.title);
+    const locator = stringFromUnknown(rawResult.locator);
+    const key = [sourceId, chunkId, title, locator].filter(Boolean).join(":");
+    const name =
+      entry?.name ??
+      stringFromUnknown(rawResult.name) ??
+      stringFromUnknown(rawResult.source_title) ??
+      title ??
+      stringFromUnknown(rawResult.original_filename) ??
+      "Source";
+    const score = numberFromUnknown(rawResult.score);
+    return [
+      {
+        key,
+        sourceId,
+        entryId: entry?.id ?? null,
+        name,
+        path: entry?.path ?? stringFromUnknown(rawResult.path) ?? stringFromUnknown(rawResult.virtual_path),
+        sourceType: entry?.source_kind ?? stringFromUnknown(rawResult.type) ?? stringFromUnknown(rawResult.source_kind),
+        score: score === null ? null : Math.max(0, Math.min(1, score)),
+        title,
+        summary: stringFromUnknown(rawResult.summary),
+        text: stringFromUnknown(rawResult.text),
+        locator,
+        origin,
+        query,
+        seenCount: 1,
+      },
+    ];
+  });
+}
+
+function firstArray(...values: unknown[]): unknown[] {
+  for (const value of values) {
+    if (Array.isArray(value)) {
+      return value;
+    }
+  }
+  return [];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function numberFromUnknown(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function fuzzyRankEntitySearchItems(items: EntitySearchItem[], query: string): EntitySearchItem[] {

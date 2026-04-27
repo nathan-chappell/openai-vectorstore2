@@ -172,6 +172,7 @@ Next:
 - Completed follow-up: full path/context moved into the preview/details pane, including a dedicated path metadata field.
 - Completed follow-up: Markdown source previews now render through a scoped Markdown preview renderer with compact headings, lists, code blocks, tables, links, and paragraph spacing.
 - Completed follow-up: visible manual tag creation/editing was removed from normal Explorer/Library flows; tags are now displayed and filtered as AI-managed metadata.
+- Completed follow-up: added a Results view that aggregates references from ChatKit file-search, branch-search, grounded-answer, and citation-like tool outputs as the model works, with row styling similar to Explorer/Library and preview-in-place behavior.
 - Consider a later admin tag-cleanup view for merge/delete/rename workflows if realistic libraries still accumulate noisy tags after generation limits.
 
 Acceptance criteria:
@@ -188,6 +189,7 @@ Acceptance criteria:
 - Empty Library query submissions use a deliberate fallback query rather than sending a blank API request.
 - `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not disturb ChatKit entity-reference behavior.
 - Revealing a file from ChatKit opens the correct file in Explorer; clicking a Library result previews it in place without stealing Explorer focus.
+- ChatKit retrieval and answer tools can push source references into a Results view that accumulates across calls, dedupes repeated citations, and lets users preview a referenced source without forcing Explorer focus.
 - Explorer hotkeys work when focus is inside the file list rows, including after mouse selection.
 - Explorer shortcut help, such as `frontend/src/components/ExplorerDialogs.tsx`, documents Up/Down selection and Left/Right folder-history navigation rather than the older parent-folder-only behavior.
 - Folder history is deterministic: opening a folder pushes history, Left goes back, Right goes forward, and new navigation after going back truncates forward history.
