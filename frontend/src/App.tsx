@@ -809,6 +809,36 @@ export function App({ authMode }: AppProps) {
     [libraryQuery, libraryTagMatchMode, selectedExplorerTagIds],
   );
 
+  const toggleLibrarySourceSelection = useCallback((sourceId: string): void => {
+    const entry = Object.values(knownEntriesRef.current).find((item) => item.source_id === sourceId) ?? null;
+    setSelectedSourceIds((current) =>
+      current.includes(sourceId)
+        ? current.filter((id) => id !== sourceId)
+        : Array.from(new Set([...current, sourceId])).slice(0, SELECTED_FILE_LIMIT),
+    );
+    if (entry) {
+      setSelectedEntryIds((current) =>
+        current.includes(entry.id) ? current.filter((id) => id !== entry.id) : Array.from(new Set([...current, entry.id])),
+      );
+      setFocusedEntryId(entry.id);
+      setSelectionAnchorEntryId(entry.id);
+    }
+  }, []);
+
+  const selectLibraryResultsForChat = useCallback((): void => {
+    const sourceIds = libraryResults.map((result) => result.hit.source_file_id).slice(0, SELECTED_FILE_LIMIT);
+    const entryIds = libraryResults.flatMap((result) => (result.entry ? [result.entry.id] : [])).slice(0, SELECTED_FILE_LIMIT);
+    setSelectedSourceIds(sourceIds);
+    setSelectedEntryIds(entryIds);
+    setFocusedEntryId(entryIds[0] ?? null);
+    setSelectionAnchorEntryId(entryIds[0] ?? null);
+    setStatus(
+      `Selected ${sourceIds.length} semantic result${sourceIds.length === 1 ? "" : "s"} for ChatKit${
+        sourceIds.length > entryIds.length ? "; some files are not loaded in Explorer yet" : ""
+      }.`,
+    );
+  }, [libraryResults]);
+
   const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
@@ -1187,6 +1217,8 @@ export function App({ authMode }: AppProps) {
           onTagToggle={toggleSelectedSourceTagDraft}
           onLibraryQueryChange={setLibraryQuery}
           onLibraryTagMatchModeChange={setLibraryTagMatchMode}
+          onSelectLibraryResults={selectLibraryResultsForChat}
+          onToggleLibrarySourceSelection={toggleLibrarySourceSelection}
           onToggleExplorerTag={toggleExplorerTag}
           onUpload={() => void handleUpload()}
           onUploadGuidanceChange={setUploadGuidance}
@@ -1708,6 +1740,8 @@ const FileExplorer = memo(function FileExplorer({
   onTagToggle,
   onLibraryQueryChange,
   onLibraryTagMatchModeChange,
+  onSelectLibraryResults,
+  onToggleLibrarySourceSelection,
   onToggleExplorerTag,
   onUpload,
   onUploadGuidanceChange,
@@ -1778,6 +1812,8 @@ const FileExplorer = memo(function FileExplorer({
   onTagToggle: (tagId: string) => void;
   onLibraryQueryChange: (value: string) => void;
   onLibraryTagMatchModeChange: (value: "all" | "any") => void;
+  onSelectLibraryResults: () => void;
+  onToggleLibrarySourceSelection: (sourceId: string) => void;
   onToggleExplorerTag: (tagId: string) => void;
   onUpload: () => void;
   onUploadGuidanceChange: (value: string) => void;
@@ -1969,6 +2005,7 @@ const FileExplorer = memo(function FileExplorer({
           selectedSourceIdSet={selectedSourceIdSet}
           selectedTagIdSet={selectedExplorerTagIdSet}
           tags={tags}
+          onSelectResults={onSelectLibraryResults}
           onOpenSource={(sourceId) => {
             const entry = Object.values(sourceEntriesById).find((item) => item.source_id === sourceId) ?? null;
             if (entry) {
@@ -1981,6 +2018,7 @@ const FileExplorer = memo(function FileExplorer({
           onQueryChange={onLibraryQueryChange}
           onRunSearch={onRunLibrarySearch}
           onTagMatchModeChange={onLibraryTagMatchModeChange}
+          onToggleSourceSelection={onToggleLibrarySourceSelection}
           onToggleTag={onToggleExplorerTag}
         />
       ) : (
@@ -2133,10 +2171,12 @@ function LibrarySearchView({
   selectedSourceIdSet,
   selectedTagIdSet,
   tags,
+  onSelectResults,
   onOpenSource,
   onQueryChange,
   onRunSearch,
   onTagMatchModeChange,
+  onToggleSourceSelection,
   onToggleTag,
 }: {
   busy: boolean;
@@ -2148,10 +2188,12 @@ function LibrarySearchView({
   selectedSourceIdSet: Set<string>;
   selectedTagIdSet: Set<string>;
   tags: TagSummary[];
+  onSelectResults: () => void;
   onOpenSource: (sourceId: string) => void;
   onQueryChange: (value: string) => void;
   onRunSearch: (mode: "replace" | "append") => void;
   onTagMatchModeChange: (value: "all" | "any") => void;
+  onToggleSourceSelection: (sourceId: string) => void;
   onToggleTag: (tagId: string) => void;
 }) {
   const disabled = busy || librarySearching;
@@ -2219,24 +2261,36 @@ function LibrarySearchView({
       <div className="library-result-summary">
         <strong>{libraryResults.length} source{libraryResults.length === 1 ? "" : "s"}</strong>
         <span>{libraryResultCount ? `${libraryResultCount} vector hit${libraryResultCount === 1 ? "" : "s"}` : "Press Enter to search."}</span>
+        <button type="button" className="secondary-button" onClick={onSelectResults} disabled={!libraryResults.length}>
+          Select results
+        </button>
       </div>
 
       <div className="library-result-list">
-        {libraryResults.map(({ hit, entry }) => (
-          <button
-            key={hit.source_file_id}
-            type="button"
-            className={selectedSourceIdSet.has(hit.source_file_id) ? "library-result-row selected-file-row" : "library-result-row"}
-            onClick={() => onOpenSource(hit.source_file_id)}
-          >
-            <span>
-              <strong>{entry?.name ?? hit.source_title}</strong>
-              <small>{entry?.path ?? hit.original_filename}</small>
-            </span>
-            <span className="library-hit-score">{Math.round(hit.score * 100)}%</span>
-            <span className="library-hit-text">{hit.text || hit.summary}</span>
-          </button>
-        ))}
+        {libraryResults.map(({ hit, entry }) => {
+          const resultName = entry?.name ?? stringAttribute(hit.attributes, "virtual_name") ?? hit.source_title;
+          const resultPath = entry?.path ?? stringAttribute(hit.attributes, "virtual_path") ?? hit.original_filename;
+          const selected = selectedSourceIdSet.has(hit.source_file_id);
+          return (
+            <div key={hit.source_file_id} className={selected ? "library-result-row selected-file-row" : "library-result-row"}>
+              <input
+                aria-label={`Select ${resultName} for chat`}
+                checked={selected}
+                className="file-select-checkbox"
+                onChange={() => onToggleSourceSelection(hit.source_file_id)}
+                type="checkbox"
+              />
+              <button type="button" className="library-result-open" onClick={() => onOpenSource(hit.source_file_id)}>
+                <span>
+                  <strong>{resultName}</strong>
+                  <small>{resultPath}</small>
+                </span>
+                <span className="library-hit-score">{Math.round(hit.score * 100)}%</span>
+                <span className="library-hit-text">{hit.text || hit.summary}</span>
+              </button>
+            </div>
+          );
+        })}
         {!libraryResults.length ? <div className="empty-file-list">No semantic results yet.</div> : null}
       </div>
     </section>
@@ -3403,6 +3457,11 @@ function formatLocator(chunk: ChunkSummary): string {
       : `${Math.round(locator.start_seconds)}s`;
   }
   return chunk.strategy_label;
+}
+
+function stringAttribute(attributes: ChunkHit["attributes"], key: string): string | null {
+  const value = attributes?.[key];
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 function readStoredWorkspaceSplit(): number {

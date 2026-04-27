@@ -65,8 +65,8 @@ Implementation notes:
 
 Next:
 
-- Improve Library result richness when a semantic hit is not already in the local entry cache.
-- Add a direct “select result for chat” control in Library rows instead of relying only on reveal/open behavior.
+- Completed follow-up: Library rows fall back to vector-result attributes such as `virtual_name` and `virtual_path` when a semantic hit is not already in the local entry cache.
+- Completed follow-up: Library rows now have direct chat-scope checkboxes plus a bulk “Select results” action.
 - Consider moving research builder into Library view or a third task-focused area so Explorer stays purely file-browser oriented.
 
 Acceptance criteria:
@@ -104,7 +104,39 @@ Next:
 - If ChatKit exposes richer output annotations for custom source entities, replace or augment markdown links with native annotations.
 - Consider an evidence widget for answer summaries that need a stable source list outside prose.
 
-### 3. ChatKit Stability Verification
+### 3. Report Compilation And Export
+
+Status: planned.
+
+Goal:
+
+- Agents should be able to create, revise, persist, preview, and export report documents from library context.
+- A report should be stored as a loosely structured document that maps naturally to Markdown and supports math notation such as KaTeX.
+- Reports should be first-class library artifacts: creation writes the structured report into the library, and generated previews/exports are saved back into the library before download.
+
+Implementation notes:
+
+- Define a typed report document model for title, sections, prose blocks, lists, tables, citations/evidence links, equations/math blocks, figures/assets, and export metadata. Prefer Pydantic for API serialization and validation.
+- Add a canonical compile operation that takes a structured report and renders Markdown, then optionally renders PDF from the same source. Markdown should preserve citation links and KaTeX-compatible math.
+- Store compiled report artifacts through the same library/storage boundaries used for source files and generated assets, so reports can be searched, selected for ChatKit scope, previewed, downloaded, and cited later.
+- ChatKit should expose agent tools to draft/update a structured report, compile it, save it into a folder, render Markdown preview, render PDF preview, and return library links to the saved artifacts.
+- PDF download should normally mean "render PDF, save it in the library, then offer the saved library artifact for download" rather than producing an unmanaged transient file.
+- Add a PDF inspection loop for the PDF-producing agent: render PDF pages to images with `pdf-lib`, `pdf.js`, or an equivalent renderer; send page images to a 5.4-class vision model for layout/content critique; if the critique is good enough, publish the PDF, otherwise revise and re-render once or twice before returning the best PDF with a clear message for the user.
+- Keep the inspection rubric concrete: missing content, broken math, clipped text, unreadable tables, bad page breaks, citation/link problems, figure rendering, and obvious visual defects.
+- Follow the app's existing task/progress conventions so ChatKit and browser users see drafting, compilation, rendering, inspection, retry, save, and download-ready states.
+- Log meaningful report lifecycle events at service boundaries: report ID, source/library artifact IDs, export type, renderer, model used for inspection, duration, retry count, and outcome. Avoid logging report body text, prompts, secrets, or large rendered payloads.
+- Keep failures allowed to propagate unless a deliberate user-facing recovery path exists; partial artifacts should either be saved with explicit status metadata or cleaned up by the task boundary.
+
+Acceptance criteria:
+
+- A ChatKit agent can create a structured report from selected library sources and save it as a library artifact.
+- The same report can be rendered to Markdown with KaTeX-compatible math and evidence links intact.
+- The report can be rendered to PDF, inspected from rendered page images by a vision model, improved if needed within a bounded retry loop, and saved back into the library.
+- Browser and ChatKit progress accurately show compile/render/inspection/save states without noisy step-by-step logs.
+- Download links point at saved library artifacts, not unmanaged temporary files.
+- Integration tests cover report creation, Markdown rendering, PDF artifact saving, progress/status reporting, and library selection/search behavior. Unit tests cover only tricky render normalization or inspection-rubric parsing.
+
+### 4. ChatKit Stability Verification
 
 Status: partially fixed; needs live verification.
 
@@ -121,7 +153,7 @@ Next:
 - Confirm the minified React #185 / maximum update depth error is gone.
 - Fix any remaining refresh, polling, or event-callback loop.
 
-### 4. Browser Workflow Coverage
+### 5. Browser Workflow Coverage
 
 Status: ongoing.
 
@@ -135,7 +167,7 @@ Add Playwright coverage for normal file-library work:
 - Reveal a source from ChatKit or Library view.
 - Delete files and folders with progress/status feedback.
 
-### 5. Usage Credits And Stripe-Ready Billing
+### 6. Usage Credits And Stripe-Ready Billing
 
 Status: first backend pass implemented; admin UI, Stripe funding, and complete usage coverage remain planned.
 
@@ -248,7 +280,7 @@ Status: complete for the current baseline.
 
 ### Browser UX Fixes
 
-Status: mostly complete; view split remains next.
+Status: mostly complete; view split first pass implemented.
 
 - Hidden empty preview.
 - Wider selected-file preview.
@@ -259,6 +291,7 @@ Status: mostly complete; view split remains next.
 - `F2`, `Backspace`, `Alt+Left`, `Delete`, and `?` shortcut help.
 - Closable/resizable preview.
 - Reduced active-task polling to a slower background cadence with targeted refreshes after actions.
+- Explorer/Library tab split with local Explorer filtering and semantic Library search.
 
 ## Architecture Guardrails
 
@@ -286,6 +319,7 @@ Current standard checks:
 Targeted checks to keep using:
 
 - `npm run test:e2e -- --grep "workspace shell"`
+- `npm run test:e2e -- --grep "explorer local search"`
 - `npm run test:e2e -- --grep "file explorer shortcuts"`
 - `npm run test:e2e -- --grep "research library builder directly indexes"`
 

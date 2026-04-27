@@ -259,10 +259,10 @@ test("explorer local search and library semantic append use separate views", asy
         query: payload.query,
         hits: [
           {
-            chunk_id: `source:${payload.query.includes("bravo") ? "source-bravo" : "source-alpha"}`,
-            source_file_id: payload.query.includes("bravo") ? "source-bravo" : "source-alpha",
-            source_title: payload.query.includes("bravo") ? "Bravo Plan" : "Alpha Notes",
-            original_filename: payload.query.includes("bravo") ? "bravo-plan.txt" : "alpha-notes.txt",
+            chunk_id: `source:${payload.query.includes("bravo") ? "source-charlie" : "source-alpha"}`,
+            source_file_id: payload.query.includes("bravo") ? "source-charlie" : "source-alpha",
+            source_title: payload.query.includes("bravo") ? "Charlie Paper" : "Alpha Notes",
+            original_filename: payload.query.includes("bravo") ? "charlie-paper.pdf" : "alpha-notes.txt",
             score: 0.91,
             title: "Match",
             summary: "Matched semantic text.",
@@ -270,7 +270,9 @@ test("explorer local search and library semantic append use separate views", asy
             tags: payload.tag_ids,
             locator: { type: "generated", start_page: null, end_page: null, start_line: null, end_line: null, start_seconds: null, end_seconds: null },
             openai_file_id: null,
-            attributes: null,
+            attributes: payload.query.includes("bravo")
+              ? { virtual_name: "charlie-paper.pdf", virtual_path: "/Archives/charlie-paper.pdf" }
+              : null,
           },
         ],
       },
@@ -293,7 +295,11 @@ test("explorer local search and library semantic append use separate views", asy
   await page.keyboard.press("Control+Enter");
   await expect.poll(() => searchQueries).toEqual(["indexed files", "bravo"]);
   await expect(page.locator(".library-result-list")).toContainText("alpha-notes.txt");
-  await expect(page.locator(".library-result-list")).toContainText("bravo-plan.txt");
+  await expect(page.locator(".library-result-list")).toContainText("charlie-paper.pdf");
+  await expect(page.locator(".library-result-list")).toContainText("/Archives/charlie-paper.pdf");
+  await page.getByRole("button", { name: "Select results" }).click();
+  await expect(page.getByRole("checkbox", { name: "Select alpha-notes.txt for chat" })).toBeChecked();
+  await expect(page.getByRole("checkbox", { name: "Select charlie-paper.pdf for chat" })).toBeChecked();
   await page.screenshot({ path: testInfo.outputPath("workspace-library-search.png"), fullPage: true });
 });
 

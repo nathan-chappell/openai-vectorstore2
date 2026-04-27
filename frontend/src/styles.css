@@ -1309,8 +1309,8 @@ kbd {
 
 .library-result-row {
   display: grid;
-  grid-template-columns: minmax(14rem, 0.8fr) 4rem minmax(12rem, 1.2fr);
-  gap: 0.65rem;
+  grid-template-columns: 1.5rem minmax(0, 1fr);
+  gap: 0.45rem;
   align-items: center;
   min-height: 3.4rem;
   border: 0;
@@ -1322,9 +1322,27 @@ kbd {
   text-align: left;
 }
 
-.library-result-row:hover:not(:disabled),
+.library-result-row:hover,
 .library-result-row.selected-file-row {
   background: #eef6ff;
+}
+
+.library-result-open {
+  display: grid;
+  grid-template-columns: minmax(14rem, 0.8fr) 4rem minmax(12rem, 1.2fr);
+  gap: 0.65rem;
+  align-items: center;
+  min-width: 0;
+  min-height: 2.6rem;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.library-result-open:hover:not(:disabled) {
+  background: transparent;
 }
 
 .library-result-row strong,
@@ -1350,6 +1368,13 @@ kbd {
   background: #eff6ff;
   font-size: 0.72rem;
   font-weight: 700;
+}
+
+.library-result-summary button {
+  margin-left: auto;
+  min-height: 1.75rem;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.74rem;
 }
 
 .filesystem-query {
