@@ -32,111 +32,77 @@ import {
   updateSourceTags,
   uploadSource,
 } from "./lib/api";
+import {
+  ACTIVE_TASK_REFRESH_INTERVAL_MS,
+  CHUNK_PREVIEW_LIMIT,
+  DEFAULT_LIBRARY_QUERY,
+  DEFAULT_SPLIT_GUIDANCE,
+  EXPLORER_RENDER_LIMIT,
+  MODEL_CHOICES,
+  PREVIEW_SPLIT_STORAGE_KEY,
+  RESEARCH_SEED_CHOICES,
+  RESEARCH_STATUS_LABELS,
+  RESEARCH_STATUS_PROGRESS,
+  SELECTED_FILE_LIMIT,
+  SOURCE_PAGE_SIZE,
+  SOURCE_TAG_LIMIT,
+  TEXT_PREVIEW_LIMIT,
+  WORKSPACE_SPLIT_STORAGE_KEY,
+} from "./lib/appConstants";
+import type {
+  AppProps,
+  ChatKitClientToolCall,
+  DeleteDialogState,
+  LibrarySearchResult,
+  PreviewResource,
+  ResearchBuilderSeedKind,
+  RevealTarget,
+  WorkspaceFileView,
+} from "./lib/appTypes";
+import {
+  asResearchBuildResponse,
+  asResearchCandidates,
+  asResearchIngested,
+  displayResearchCandidateStatus,
+  mergeResearchCandidates,
+  mergeResearchIngested,
+} from "./lib/researchUi";
+import { filterFilesystemEntries, fuzzyRankFilesystemEntries } from "./lib/search";
 import type {
   AuthUser,
-  ChunkHit,
   ChunkSummary,
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
   FilesystemListResponse,
-  ResearchImportCandidateSummary,
-  ResearchCandidateStatus,
   ResearchLibraryBuildResponse,
-  ResearchSeedKind,
   SourceDetail,
   SourceSummary,
   SplitPreviewResponse,
   TagSummary,
   TaskSummary,
 } from "./lib/types";
-
-type AppProps = {
-  authMode: "clerk" | "local-dev";
-};
-
-type PreviewResource =
-  | { state: "idle" }
-  | { state: "loading" }
-  | { state: "text"; text: string; truncated: boolean; mediaType: string }
-  | { state: "file"; url: string; mediaType: string }
-  | { state: "error"; message: string };
-
-const MODEL_CHOICES = [
-  { id: "balanced", label: "Balanced", description: "Everyday retrieval and synthesis" },
-  { id: "powerful", label: "Powerful", description: "Best reasoning pass" },
-  { id: "lightweight", label: "Lightweight", description: "Fast exploratory pass" },
-] as const;
-
-const TEXT_PREVIEW_LIMIT = 40_000;
-const CHUNK_PREVIEW_LIMIT = 40;
-const SOURCE_TAG_LIMIT = 8;
-const SELECTED_FILE_LIMIT = 10;
-const SOURCE_PAGE_SIZE = 100;
-const EXPLORER_RENDER_LIMIT = 250;
-const ACTIVE_TASK_REFRESH_INTERVAL_MS = 5_000;
-const WORKSPACE_SPLIT_STORAGE_KEY = "openai-vectorstore2.workspaceSplitPercent";
-const PREVIEW_SPLIT_STORAGE_KEY = "openai-vectorstore2.previewSplitPercent";
-const DEFAULT_SPLIT_GUIDANCE = "Optional split notes; indexing keeps the source file intact.";
-type ResearchBuilderSeedKind = Extract<ResearchSeedKind, "topic" | "paper">;
-type DeleteDialogState = {
-  entries: FilesystemEntrySummary[];
-  phase: "confirming" | "deleting";
-};
-type RevealTarget = {
-  sourceId?: string | null;
-  entryId?: string | null;
-};
-type WorkspaceFileView = "explorer" | "library";
-type LibrarySearchResult = {
-  hit: ChunkHit;
-  entry: FilesystemEntrySummary | null;
-};
-const DEFAULT_LIBRARY_QUERY = "indexed files";
-const RESEARCH_SEED_CHOICES: { id: ResearchBuilderSeedKind; label: string }[] = [
-  { id: "topic", label: "Topic" },
-  { id: "paper", label: "Paper" },
-];
-const RESEARCH_STATUS_LABELS: Record<ResearchCandidateStatus, string> = {
-  pending: "queued",
-  approved: "queued",
-  rejected: "skipped",
-  ingesting: "indexing",
-  ingested: "indexed",
-  failed: "failed",
-  duplicate: "duplicate",
-};
-const RESEARCH_STATUS_PROGRESS: Record<ResearchCandidateStatus, number> = {
-  pending: 18,
-  approved: 28,
-  rejected: 100,
-  ingesting: 62,
-  ingested: 100,
-  failed: 100,
-  duplicate: 100,
-};
-
-function displayResearchCandidateStatus(
-  candidate: ResearchImportCandidateSummary,
-  linkedEntry: FilesystemEntrySummary | undefined,
-): ResearchCandidateStatus {
-  if (!linkedEntry?.status || candidate.status === "duplicate" || candidate.status === "rejected") {
-    return candidate.status;
-  }
-  if (linkedEntry.status === "ready") {
-    return candidate.status === "ingesting" || candidate.status === "ingested" ? "ingested" : candidate.status;
-  }
-  if (linkedEntry.status === "failed") {
-    return candidate.status === "ingesting" || candidate.status === "ingested" ? "failed" : candidate.status;
-  }
-  return candidate.status === "ingested" ? "ingesting" : candidate.status;
-}
-
-const dateFormatter = new Intl.DateTimeFormat(undefined, {
-  month: "short",
-  day: "numeric",
-  hour: "2-digit",
-  minute: "2-digit",
-});
+import {
+  canPreviewSource,
+  entryTypeLabel,
+  formatBytes,
+  formatDate,
+  formatLocator,
+  formatNumber,
+  isActiveTask,
+  isTextPreview,
+  sourceExtension,
+  stringAttribute,
+} from "./lib/uiFormat";
+import {
+  clamp,
+  isEditableShortcutTarget,
+  readStoredPreviewSplit,
+  readStoredWorkspaceSplit,
+  safeJsonStringArray,
+  sameStringArray,
+  sameStringSet,
+  stringFromUnknown,
+} from "./lib/uiState";
 
 async function loadAllSources(): Promise<{ sources: SourceSummary[]; totalCount: number }> {
   const sources: SourceSummary[] = [];
@@ -151,49 +117,6 @@ async function loadAllSources(): Promise<{ sources: SourceSummary[]; totalCount:
     }
     page += 1;
   }
-}
-
-function mergeResearchCandidates(
-  current: ResearchImportCandidateSummary[],
-  updates: ResearchImportCandidateSummary[],
-): ResearchImportCandidateSummary[] {
-  const updateById = new Map(updates.map((candidate) => [candidate.id, candidate]));
-  const currentIds = new Set(current.map((candidate) => candidate.id));
-  return [
-    ...current.map((candidate) => updateById.get(candidate.id) ?? candidate),
-    ...updates.filter((candidate) => !currentIds.has(candidate.id)),
-  ];
-}
-
-function mergeResearchIngested(
-  current: ResearchLibraryBuildResponse["ingested"],
-  updates: ResearchLibraryBuildResponse["ingested"],
-): ResearchLibraryBuildResponse["ingested"] {
-  const updateBySourceId = new Map(updates.map((item) => [item.source.id, item]));
-  const currentSourceIds = new Set(current.map((item) => item.source.id));
-  return [
-    ...current.map((item) => updateBySourceId.get(item.source.id) ?? item),
-    ...updates.filter((item) => !currentSourceIds.has(item.source.id)),
-  ];
-}
-
-function asResearchBuildResponse(value: unknown): ResearchLibraryBuildResponse | null {
-  if (!value || typeof value !== "object") {
-    return null;
-  }
-  const candidate = value as Partial<ResearchLibraryBuildResponse>;
-  if (!candidate.task || !Array.isArray(candidate.candidates) || !Array.isArray(candidate.ingested)) {
-    return null;
-  }
-  return candidate as ResearchLibraryBuildResponse;
-}
-
-function asResearchCandidates(value: unknown): ResearchImportCandidateSummary[] {
-  return Array.isArray(value) ? (value as ResearchImportCandidateSummary[]) : [];
-}
-
-function asResearchIngested(value: unknown): ResearchLibraryBuildResponse["ingested"] {
-  return Array.isArray(value) ? (value as ResearchLibraryBuildResponse["ingested"]) : [];
 }
 
 export function App({ authMode }: AppProps) {
@@ -964,7 +887,7 @@ export function App({ authMode }: AppProps) {
   );
 
   const handleClientTool = useCallback(
-    async (toolCall: { name: string; params: Record<string, unknown> }): Promise<Record<string, unknown>> => {
+    async (toolCall: ChatKitClientToolCall): Promise<Record<string, unknown>> => {
       if (toolCall.name === "set_file_selection") {
         const rawIds = Array.isArray(toolCall.params.source_ids) ? toolCall.params.source_ids : [];
         const sourceIds = rawIds.filter((id): id is string => typeof id === "string").slice(0, SELECTED_FILE_LIMIT);
@@ -3299,203 +3222,6 @@ const ChunkRow = memo(function ChunkRow({ chunk }: { chunk: ChunkSummary }) {
   );
 });
 
-function entryTypeLabel(entry: FilesystemEntrySummary): string {
-  if (entry.kind === "folder") {
-    return "";
-  }
-  const extension = entry.name.split(".").pop()?.slice(0, 4).toUpperCase();
-  return extension && extension !== entry.name.toUpperCase() ? extension : (entry.source_kind ?? "file").slice(0, 4).toUpperCase();
-}
-
-function safeJsonStringArray(value: string): string[] {
-  try {
-    const parsed: unknown = JSON.parse(value);
-    return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function filterFilesystemEntries(entries: FilesystemEntrySummary[], query: string): FilesystemEntrySummary[] {
-  return fuzzyRankFilesystemEntries(entries, query);
-}
-
-function fuzzyRankFilesystemEntries(entries: FilesystemEntrySummary[], query: string): FilesystemEntrySummary[] {
-  const normalizedQuery = normalizeSearchText(query);
-  if (!normalizedQuery) {
-    return entries;
-  }
-  return entries
-    .map((entry) => ({ entry, score: fuzzyEntryScore(entry, normalizedQuery) }))
-    .filter((item) => item.score > 0)
-    .sort((left, right) => right.score - left.score || left.entry.name.localeCompare(right.entry.name))
-    .map((item) => item.entry);
-}
-
-function fuzzyEntryScore(entry: FilesystemEntrySummary, normalizedQuery: string): number {
-  const fields = [
-    entry.name,
-    entry.path,
-    entry.description,
-    entry.summary,
-    entry.source_kind,
-    entry.media_type,
-    ...entry.suggested_tags,
-    ...entry.tags.map((tag) => tag.name),
-  ];
-  let bestScore = 0;
-  for (const field of fields) {
-    const candidate = normalizeSearchText(field ?? "");
-    if (!candidate) {
-      continue;
-    }
-    if (candidate === normalizedQuery) {
-      bestScore = Math.max(bestScore, 100);
-    } else if (candidate.startsWith(normalizedQuery)) {
-      bestScore = Math.max(bestScore, 80);
-    } else if (candidate.includes(normalizedQuery)) {
-      bestScore = Math.max(bestScore, 60);
-    } else if (isOrderedSubsequence(normalizedQuery, candidate)) {
-      bestScore = Math.max(bestScore, 30 + Math.min(20, normalizedQuery.length));
-    }
-  }
-  return bestScore;
-}
-
-function normalizeSearchText(value: string): string {
-  return value.trim().toLocaleLowerCase();
-}
-
-function isOrderedSubsequence(needle: string, haystack: string): boolean {
-  let needleIndex = 0;
-  for (const character of haystack) {
-    if (character === needle[needleIndex]) {
-      needleIndex += 1;
-      if (needleIndex === needle.length) {
-        return true;
-      }
-    }
-  }
-  return false;
-}
-
-function sameStringSet(left: string[], right: string[]): boolean {
-  if (left.length !== right.length) {
-    return false;
-  }
-  const rightSet = new Set(right);
-  return left.every((item) => rightSet.has(item));
-}
-
-function sameStringArray(left: string[], right: string[]): boolean {
-  return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-function isActiveTask(task: TaskSummary): boolean {
-  return task.status === "queued" || task.status === "running";
-}
-
-function canPreviewSource(source: SourceDetail): boolean {
-  return ["pdf", "text", "conversation", "image", "audio", "video"].includes(source.source_kind);
-}
-
-function isTextPreview(source: SourceDetail, mediaType: string): boolean {
-  const normalized = mediaType.toLowerCase();
-  return (
-    source.source_kind === "text" ||
-    source.source_kind === "conversation" ||
-    normalized.startsWith("text/") ||
-    normalized.includes("json") ||
-    normalized.includes("csv") ||
-    normalized.includes("xml")
-  );
-}
-
-function sourceExtension(source: Pick<SourceSummary, "original_filename" | "source_kind">): string {
-  const extension = source.original_filename.split(".").pop()?.slice(0, 4).toUpperCase();
-  return extension && extension !== source.original_filename.toUpperCase() ? extension : source.source_kind.slice(0, 4).toUpperCase();
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes < 1024) {
-    return `${bytes} B`;
-  }
-  const units = ["KB", "MB", "GB"];
-  let value = bytes / 1024;
-  let unit = units[0];
-  for (let index = 1; value >= 1024 && index < units.length; index += 1) {
-    value /= 1024;
-    unit = units[index];
-  }
-  return `${value.toFixed(value >= 10 ? 0 : 1)} ${unit}`;
-}
-
-function formatDate(value: string): string {
-  const parsed = Date.parse(value);
-  return Number.isNaN(parsed) ? value : dateFormatter.format(parsed);
-}
-
-function formatNumber(value: number): string {
-  return new Intl.NumberFormat().format(value);
-}
-
-function formatLocator(chunk: ChunkSummary): string {
-  const locator = chunk.locator;
-  if (locator.type === "page_range" && locator.start_page !== null) {
-    return locator.end_page && locator.end_page !== locator.start_page
-      ? `pp. ${locator.start_page}-${locator.end_page}`
-      : `p. ${locator.start_page}`;
-  }
-  if (locator.type === "line_range" && locator.start_line !== null) {
-    return locator.end_line && locator.end_line !== locator.start_line
-      ? `lines ${locator.start_line}-${locator.end_line}`
-      : `line ${locator.start_line}`;
-  }
-  if (locator.type === "time_range" && locator.start_seconds !== null) {
-    return locator.end_seconds && locator.end_seconds !== locator.start_seconds
-      ? `${Math.round(locator.start_seconds)}-${Math.round(locator.end_seconds)}s`
-      : `${Math.round(locator.start_seconds)}s`;
-  }
-  return chunk.strategy_label;
-}
-
-function stringAttribute(attributes: ChunkHit["attributes"], key: string): string | null {
-  const value = attributes?.[key];
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
-function readStoredWorkspaceSplit(): number {
-  if (typeof window === "undefined") {
-    return 64;
-  }
-  const stored = Number(window.localStorage.getItem(WORKSPACE_SPLIT_STORAGE_KEY));
-  return Number.isFinite(stored) ? clamp(stored, 46, 76) : 64;
-}
-
-function readStoredPreviewSplit(): number {
-  if (typeof window === "undefined") {
-    return 46;
-  }
-  const stored = Number(window.localStorage.getItem(PREVIEW_SPLIT_STORAGE_KEY));
-  return Number.isFinite(stored) ? clamp(stored, 34, 70) : 46;
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-function isEditableShortcutTarget(target: EventTarget | null): boolean {
-  if (!(target instanceof HTMLElement)) {
-    return false;
-  }
-  const tagName = target.tagName;
-  return target.isContentEditable || tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || tagName === "BUTTON";
-}
-
-function stringFromUnknown(value: unknown): string | null {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
-}
-
 const ChatPane = memo(function ChatPane({
   onEntityClick,
   onEntitySearch,
@@ -3504,7 +3230,7 @@ const ChatPane = memo(function ChatPane({
 }: {
   onEntityClick: (entity: Entity) => void;
   onEntitySearch: (query: string) => Promise<Entity[]>;
-  onClientTool: (toolCall: { name: string; params: Record<string, unknown> }) => Promise<Record<string, unknown>>;
+  onClientTool: (toolCall: ChatKitClientToolCall) => Promise<Record<string, unknown>>;
   onRevealFile: (target: RevealTarget) => Promise<Record<string, unknown>>;
 }) {
   const chatKitConfig = getChatKitConfig();

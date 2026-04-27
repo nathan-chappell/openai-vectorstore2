@@ -41,7 +41,7 @@ Acceptance criteria:
 
 ### 1. TypeScript Contract And Legacy Cleanup
 
-Status: planned.
+Status: first utility/contract extraction implemented; continue component/API cleanup.
 
 Goal:
 
@@ -52,8 +52,9 @@ Goal:
 
 Implementation plan:
 
+- Completed first pass: extracted shared app contracts, workspace constants, ChatKit client-tool payload shape, filesystem fuzzy search, research-result merge/narrowing helpers, UI formatting helpers, and local UI-state helpers from the current large `App.tsx`.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
-- First pass should focus on low-risk extraction from the current large `App.tsx`: shared ID aliases, source/filesystem/library result types, ChatKit client-tool payload types, and pure utility modules for fuzzy matching and selection derivation.
+- Next pass should remove the dead legacy source-list app path and then split the remaining workspace components into focused modules.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
 - Keep runtime parsing at API boundaries explicit and lightweight. Use structured guards only where external or optional data genuinely needs narrowing; do not add a heavy validation library unless the codebase has a clear need.
 - Prefer discriminated unions for task states, artifact kinds, source kinds, ChatKit client-tool events, and render/export statuses so switch statements become exhaustive and UI state cannot silently drift.
