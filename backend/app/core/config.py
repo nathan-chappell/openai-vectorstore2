@@ -65,6 +65,8 @@ class AppSettings(BaseSettings):
     billing_default_credit_floor_usd: float = -1.0
     billing_platform_markup_multiplier: float = 1.3
     billing_unknown_model_policy: Literal["block", "zero"] = "zero"
+    admin_integration_provider: Literal["default", "ai_portfolio_admin"] = "default"
+    admin_shared_module: str = "ai_portfolio_admin.openai_vectorstore2"
 
     semantic_split_pdf_batch_pages: int = 25
     semantic_split_text_batch_lines: int = 2_000

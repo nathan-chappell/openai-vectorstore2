@@ -32,6 +32,10 @@ CLERK_ACTIVE_METADATA_KEY=active
 CLERK_ROLE_METADATA_KEY=role
 ```
 
+## Admin Boundary
+
+The default public implementation uses the in-repo auth and billing services. A private shared admin/auth/payments package can be enabled later with `ADMIN_INTEGRATION_PROVIDER=ai_portfolio_admin`; see [Admin Integration](admin-integration.md).
+
 ## MCP HTTP
 
 FastMCP uses `VectorstoreTokenVerifier`.

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 
 from agents import set_default_openai_key
 
+from backend.app.admin import build_auth_service
 from backend.app.chatkit.server import VectorstoreChatKitServer
 from backend.app.chatkit.store import VectorstoreChatStore
 from backend.app.core.config import AppSettings
@@ -48,7 +49,7 @@ def create_services(settings: AppSettings) -> AppServices:
     )
     set_default_openai_key(settings.openai_api_key.get_secret_value())
     database = DatabaseManager(settings)
-    auth = AuthService(settings)
+    auth = build_auth_service(settings)
     billing = BillingService(settings=settings, database=database)
     storage = build_storage_service(settings)
     openai = OpenAIGateway(settings)

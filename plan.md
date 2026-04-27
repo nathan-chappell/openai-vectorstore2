@@ -262,7 +262,7 @@ Add Playwright coverage for normal file-library work:
 
 ### 7. Shared Admin, Auth, And Payments Submodule
 
-Status: planned.
+Status: adapter boundary first pass in progress; private submodule extraction, admin UI sharing, and provider-backed payments remain planned.
 
 Goal:
 
@@ -281,16 +281,35 @@ Decision:
 
 Implementation plan:
 
+- Completed first adapter pass: added app settings for `ADMIN_INTEGRATION_PROVIDER` and `ADMIN_SHARED_MODULE`, introduced `backend.app.admin` as the only public-app import boundary for private admin/auth/payment code, wired service bootstrap through that boundary, and documented the default public behavior versus private `ai-portfolio-admin` setup.
 - Define the integration interface first in app-owned terms: authenticated `AppUser`, active/admin flags, credit floor/current balance, cost events, credit grants, provider checkout sessions, payment confirmation/webhook events, and admin user summaries.
 - Move or duplicate only the generic pieces into `ai-portfolio-admin`: Clerk metadata helpers, sign-up/login assumptions, admin user activation/deactivation, credit balance/grant/debit primitives, payment provider abstractions, shared frontend admin components, and shared TypeScript types.
 - Keep app-specific billing events local where they refer to source IDs, thread IDs, task IDs, report IDs, OpenAI response IDs, and vector-store operations; pass those as metadata into the shared credit/cost boundary.
-- Add an adapter module in this repo that can load the shared submodule implementation when present and configured, otherwise falls back to the default local implementation.
+- Continue expanding the adapter module in this repo so it can load the shared submodule implementation when present and configured, otherwise fall back to the default local implementation.
 - Keep database ownership explicit. If shared admin tables are introduced, decide whether migrations live in `ai-portfolio-admin` and are included by host apps, or whether host apps vendor the table definitions into their own Alembic migration stream.
 - Add submodule setup docs with the private URL: `git@github.com:nathan-chappell/ai-portfolio-admin.git`.
 - Document how a public clone behaves without the private submodule: auth mode options, disabled payment checkout, manual/admin credit grant fallback, and test fixtures.
 - Add a provider-neutral payment lifecycle: create checkout/payment request, receive provider callback/webhook, verify provider event, idempotently grant credits, record provider IDs/status, and expose user-facing balance updates.
-- Add the PayPal-specific flow from the ChatGPT notes once pasted into this plan: order/session creation, approval URL, capture/confirmation, webhook verification, idempotency key, payment-to-credit mapping, refund/chargeback handling, and audit logging.
+- Add a PayPal receipt-based temporary access provider as the MVP-friendly bridge before full PayPal Checkout or Stripe integration exists.
 - Continue reserving fields for Stripe or other providers, but do not bake provider-specific names into core credit/cost tables unless they are in a provider metadata payload.
+
+PayPal receipt-based temporary access:
+
+- Goal: let a user pay externally through PayPal, upload proof of payment, and receive temporary access if the receipt plausibly matches the expected payment. Final payment truth must still come from PayPal-side data or admin confirmation.
+- User flow: create pending payment attempt; show amount, currency, recipient PayPal account/payment link, and unique reference code; accept uploaded receipt/screenshot/PDF/email confirmation; run AI receipt review; grant temporary access only when policy passes; expire temporary access automatically unless reconciled; let admin confirm, reject, flag, extend, or revoke.
+- Access statuses: `pending_payment`, `temporarily_approved`, `confirmed_paid`, `rejected_payment`, `expired_temporary_access`, and `manual_review_required`.
+- AI receipt review should return structured data, not prose: amount, currency, payment date/time, PayPal transaction ID when present, payer name/email, recipient name/email, payment note/reference code, whether it appears to be a PayPal receipt, mismatch flags, tampering/suspicion flags, confidence/risk level, and a decision recommendation.
+- Treat AI as evidence extractor and provisional gatekeeper only. It may grant temporary access under narrow policy; permanent access requires admin approval, PayPal-side verification, or future checkout/webhook confirmation.
+- Temporary approval requires matching expected amount, currency, recipient, recent payment date, unique reference code when available, unused transaction ID or unused receipt evidence, and no obvious fraud/tampering signals.
+- Approval levels: level 0 uploaded/plausible receipt grants short temporary access; level 1 strong receipt match with amount/currency/recipient/recent date/reference or transaction ID grants longer temporary access; level 2 PayPal-side/admin confirmation grants confirmed paid access; level 3 full PayPal Checkout/webhook/capture integration grants automatic confirmed access.
+- Admin dashboard should show user account, expected amount/currency, reference code, uploaded receipt, AI-extracted payment details, confidence/risk assessment, access status, temporary expiry, PayPal transaction ID, decision history, and internal notes.
+- Admin actions should include confirm payment, reject payment, extend temporary access, revoke access, mark for manual review, and add internal note.
+- Reconciliation sources can include PayPal email notifications, PayPal dashboard review, PayPal transaction search/API when available, admin review, and future PayPal Checkout/webhook integration.
+- Fraud controls: unique reference per attempt, no reused transaction IDs, no reused receipt evidence across accounts, automatic temporary expiry, stronger confirmation for permanent access, manual review for suspicious uploads, logged AI decisions, logged admin decisions, rate/attempt limits for temporary access, and automatic blocking for mismatched amount/currency/recipient or stale payment date.
+- Risk flags include missing transaction ID, missing/wrong recipient, wrong amount, wrong currency, old payment date, reused transaction ID, visible screenshot edits, cropped/incomplete receipt, payer identity mismatch, missing reference code, and multiple failed attempts by one user.
+- User messaging should be explicit: uploaded proof may grant temporary access while payment is verified; temporary approval can expire; confirmed payment activates access normally; rejection should tell the user to check amount, currency, recipient, and reference code.
+- MVP scope: pending attempt creation, PayPal payment instructions, reference code generation, receipt upload, AI extraction/plausibility review, temporary access grants, automatic expiry, admin review dashboard, manual confirm/reject/revoke actions, and audit logging.
+- Out of MVP scope: full Stripe integration, full PayPal Checkout integration, subscriptions, refunds, tax handling, invoice generation, chargeback/dispute workflows, and fully automated permanent confirmation.
 
 Acceptance criteria:
 
