@@ -101,6 +101,8 @@ export function App({ authMode }: AppProps) {
   const [busy, setBusy] = useState(false);
   const workspaceGridRef = useRef<HTMLElement | null>(null);
   const previewGridRef = useRef<HTMLDivElement | null>(null);
+  const currentFolderIdRef = useRef<string | null>(null);
+  const selectedSourceIdRef = useRef<string | null>(null);
   const knownEntriesRef = useRef<Record<string, FilesystemEntrySummary>>({});
   const tagsRef = useRef<TagSummary[]>([]);
   const clientToolUiQueueRef = useRef<Array<() => void | Promise<void>>>([]);
@@ -134,6 +136,8 @@ export function App({ authMode }: AppProps) {
     return entriesBySourceId;
   }, [knownEntries]);
   const selectedSourceId = selectedSource?.id ?? null;
+  currentFolderIdRef.current = currentFolderId;
+  selectedSourceIdRef.current = selectedSourceId;
   const selectedSourceTagChanged = selectedSource
     ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
     : false;
@@ -249,8 +253,10 @@ export function App({ authMode }: AppProps) {
   const refreshAll = useCallback(async (): Promise<void> => {
     setBusy(true);
     try {
-      const detailPromise = selectedSourceId
-        ? getSource(selectedSourceId).catch(() => null)
+      const activeSourceId = selectedSourceIdRef.current;
+      const activeFolderId = currentFolderIdRef.current;
+      const detailPromise = activeSourceId
+        ? getSource(activeSourceId).catch(() => null)
         : Promise.resolve<SourceDetail | null>(null);
       const [me, tagList, taskList, detail] = await Promise.all([getAuthenticatedUser(), listTags(), listTasks(), detailPromise]);
       setUser(me);
@@ -259,7 +265,7 @@ export function App({ authMode }: AppProps) {
       if (detail) {
         setSelectedSource(detail);
       }
-      const response = await loadFolder(currentFolderId);
+      const response = await loadFolder(activeFolderId);
       const activeTask = taskList.tasks.find(isActiveTask);
       setStatus(activeTask ? `${activeTask.kind} ${activeTask.status}: ${activeTask.title}.` : `Ready at ${response.current.path}.`);
     } catch (error) {
@@ -267,7 +273,7 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }, [currentFolderId, loadFolder, selectedSourceId]);
+  }, [loadFolder]);
 
   useEffect(() => {
     knownEntriesRef.current = knownEntries;
@@ -299,13 +305,6 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     void refreshAll();
   }, [refreshAll]);
-
-  useEffect(() => {
-    const timeoutId = window.setTimeout(() => {
-      void refreshExplorer();
-    }, 180);
-    return () => window.clearTimeout(timeoutId);
-  }, [refreshExplorer]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent): void {
@@ -347,7 +346,8 @@ export function App({ authMode }: AppProps) {
         .filter((entry) => entry.kind === "file" && entry.status === "ready" && Boolean(entry.source_id))
         .map((entry) => entry.source_id as string)
         .slice(0, SELECTED_FILE_LIMIT);
-      setSelectedSourceIds(Array.from(new Set(readySourceIds)));
+      const nextSourceIds = Array.from(new Set(readySourceIds));
+      setSelectedSourceIds((current) => (sameStringArray(current, nextSourceIds) ? current : nextSourceIds));
     },
     [knownEntries],
   );
@@ -355,9 +355,10 @@ export function App({ authMode }: AppProps) {
   const applyExplorerSelection = useCallback(
     (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null): void => {
       const nextEntryIds = Array.from(new Set(entryIds));
-      setSelectedEntryIds(nextEntryIds);
-      setFocusedEntryId(focusedEntryId);
-      setSelectionAnchorEntryId(anchorEntryId ?? focusedEntryId);
+      const nextAnchorEntryId = anchorEntryId ?? focusedEntryId;
+      setSelectedEntryIds((current) => (sameStringArray(current, nextEntryIds) ? current : nextEntryIds));
+      setFocusedEntryId((current) => current === focusedEntryId ? current : focusedEntryId);
+      setSelectionAnchorEntryId((current) => current === nextAnchorEntryId ? current : nextAnchorEntryId);
       syncChatSelection(nextEntryIds);
       const focusedEntry = knownEntries[focusedEntryId] ?? visibleEntries.find((entry) => entry.id === focusedEntryId);
       if (focusedEntry?.source_id) {
