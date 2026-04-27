@@ -1,9 +1,11 @@
 import { memo, useEffect, useState } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 import { readSourceContentBlob } from "../lib/api";
-import { CHUNK_PREVIEW_LIMIT, SOURCE_TAG_LIMIT, TEXT_PREVIEW_LIMIT } from "../lib/appConstants";
+import { CHUNK_PREVIEW_LIMIT, TEXT_PREVIEW_LIMIT } from "../lib/appConstants";
 import type { PreviewResource } from "../lib/appTypes";
-import type { ChunkSummary, SourceDetail, TagSummary } from "../lib/types";
+import type { ChunkSummary, SourceDetail } from "../lib/types";
 import {
   canPreviewSource,
   formatBytes,
@@ -17,29 +19,13 @@ import {
 export function SourcePreview({
   busy,
   selectedSource,
-  selectedSourceTagChanged,
-  selectedSourceTagDraftIdSet,
-  tags,
   uploadGuidance,
-  newTagName,
-  onCreateTag,
-  onNewTagNameChange,
-  onSaveTags,
-  onTagToggle,
   onUploadGuidanceChange,
   onResplit,
 }: {
   busy: boolean;
   selectedSource: SourceDetail | null;
-  selectedSourceTagChanged: boolean;
-  selectedSourceTagDraftIdSet: Set<string>;
-  tags: TagSummary[];
   uploadGuidance: string;
-  newTagName: string;
-  onCreateTag: () => void;
-  onNewTagNameChange: (value: string) => void;
-  onSaveTags: () => void;
-  onTagToggle: (tagId: string) => void;
   onUploadGuidanceChange: (value: string) => void;
   onResplit: () => void;
 }) {
@@ -105,7 +91,7 @@ export function SourcePreview({
     return (
       <section className="source-preview empty-preview">
         <h2>Select a file to preview it.</h2>
-        <p>Selected ready files become the ChatKit file scope.</p>
+        <p>Use @ in ChatKit to reference files in conversation.</p>
       </section>
     );
   }
@@ -119,7 +105,7 @@ export function SourcePreview({
           <div className="source-title-row">
             <div>
               <h2>{selectedSource.display_title}</h2>
-              <p>{selectedSource.original_filename}</p>
+              <p>{selectedSource.virtual_path ?? selectedSource.original_filename}</p>
             </div>
             <span className="file-type-large">{sourceExtension(selectedSource)}</span>
           </div>
@@ -143,6 +129,12 @@ export function SourcePreview({
 
         <aside className="metadata-panel">
           <dl>
+            <div className="metadata-path-row">
+              <dt>Path</dt>
+              <dd title={selectedSource.virtual_path ?? selectedSource.original_filename}>
+                {selectedSource.virtual_path ?? selectedSource.original_filename}
+              </dd>
+            </div>
             <div>
               <dt>Kind</dt>
               <dd>{selectedSource.source_kind}</dd>
@@ -180,50 +172,14 @@ export function SourcePreview({
           <button type="button" className="secondary-button" onClick={onResplit} disabled={busy}>
             Re-split
           </button>
-          <div className="tag-editor">
-            <strong>Tags {selectedSourceTagDraftIdSet.size}/{SOURCE_TAG_LIMIT}</strong>
-            <div className="tag-create-row compact-tag-create">
-              <input
-                aria-label="New tag name"
-                value={newTagName}
-                onChange={(event) => onNewTagNameChange(event.currentTarget.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    onCreateTag();
-                  }
-                }}
-                placeholder="New tag"
-              />
-              <button type="button" className="secondary-button" onClick={onCreateTag} disabled={busy || !newTagName.trim()}>
-                Add
-              </button>
-            </div>
+          <div className="tag-inspection">
+            <strong>AI-managed tags</strong>
             <div className="tag-picker-list">
-              {tags.map((tag) => {
-                const checked = selectedSourceTagDraftIdSet.has(tag.id);
-                return (
-                  <label key={tag.id} className="tag-checkbox">
-                    <input
-                      type="checkbox"
-                      checked={checked}
-                      onChange={() => onTagToggle(tag.id)}
-                      disabled={busy || selectedSource.status === "processing" || (!checked && selectedSourceTagDraftIdSet.size >= SOURCE_TAG_LIMIT)}
-                    />
-                    <span>{tag.name}</span>
-                  </label>
-                );
-              })}
-              {!tags.length ? <span className="subtle">No tags yet</span> : null}
+              {selectedSource.tags.map((tag) => (
+                <span key={tag.id} className="tag-chip selected">{tag.name}</span>
+              ))}
+              {!selectedSource.tags.length ? <span className="subtle">No tags yet</span> : null}
             </div>
-            <button
-              type="button"
-              className="secondary-button"
-              onClick={onSaveTags}
-              disabled={busy || selectedSource.status === "processing" || !selectedSourceTagChanged}
-            >
-              Save Tags
-            </button>
           </div>
         </aside>
       </div>
@@ -244,6 +200,14 @@ function RawPreview({ resource, source }: { resource: PreviewResource; source: S
     );
   }
   if (resource.state === "text") {
+    if (isMarkdownSource(source, resource.mediaType)) {
+      return (
+        <div className="raw-preview markdown-preview">
+          <MarkdownPreview text={resource.text} />
+          {resource.truncated ? <p className="subtle">Showing the first {formatNumber(TEXT_PREVIEW_LIMIT)} characters.</p> : null}
+        </div>
+      );
+    }
     return (
       <div className="raw-preview text-preview">
         <pre>{resource.text}</pre>
@@ -292,6 +256,31 @@ function RawPreview({ resource, source }: { resource: PreviewResource; source: S
       <span>Optional split preview is available below.</span>
     </div>
   );
+}
+
+function MarkdownPreview({ text }: { text: string }) {
+  return (
+    <div className="markdown-preview-body">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          a: ({ href, children }) => (
+            <a href={href} target={href?.startsWith("#") ? undefined : "_blank"} rel="noreferrer">
+              {children}
+            </a>
+          ),
+        }}
+      >
+        {text}
+      </ReactMarkdown>
+    </div>
+  );
+}
+
+function isMarkdownSource(source: SourceDetail, mediaType: string): boolean {
+  const normalizedMediaType = mediaType.toLowerCase();
+  const filename = (source.virtual_path ?? source.original_filename).toLowerCase();
+  return normalizedMediaType.includes("markdown") || filename.endsWith(".md") || filename.endsWith(".markdown");
 }
 
 const ChunkRow = memo(function ChunkRow({ chunk }: { chunk: ChunkSummary }) {

@@ -13,7 +13,6 @@ import { FileExplorer } from "./components/FileExplorer";
 import { WorkspaceHeader } from "./components/WorkspaceHeader";
 import {
   createFolder,
-  createTag,
   deleteFilesystemEntries,
   getAuthenticatedUser,
   getSource,
@@ -25,7 +24,6 @@ import {
   searchFilesystem,
   setChatKitMetadataGetter,
   updateFilesystemEntry,
-  updateSourceTags,
 } from "./lib/api";
 import {
   DEFAULT_LIBRARY_QUERY,
@@ -66,7 +64,6 @@ import {
   readStoredPreviewSplit,
   readStoredWorkspaceSplit,
   sameStringArray,
-  sameStringSet,
 } from "./lib/uiState";
 
 type EntitySearchItem = {
@@ -99,8 +96,6 @@ export function App({ authMode }: AppProps) {
   const [focusedEntryId, setFocusedEntryId] = useState<string | null>(null);
   const [selectionAnchorEntryId, setSelectionAnchorEntryId] = useState<string | null>(null);
   const [selectedSource, setSelectedSource] = useState<SourceDetail | null>(null);
-  const [selectedSourceTagDraftIds, setSelectedSourceTagDraftIds] = useState<string[]>([]);
-  const [newTagName, setNewTagName] = useState("");
   const [uploadGuidance, setUploadGuidance] = useState(DEFAULT_SPLIT_GUIDANCE);
   const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
   const [shortcutDialogOpen, setShortcutDialogOpen] = useState(false);
@@ -123,15 +118,11 @@ export function App({ authMode }: AppProps) {
 
   const selectedExplorerTagIdSet = useMemo(() => new Set(selectedExplorerTagIds), [selectedExplorerTagIds]);
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
-  const selectedSourceTagDraftIdSet = useMemo(() => new Set(selectedSourceTagDraftIds), [selectedSourceTagDraftIds]);
   const folderEntries = filesystem?.entries ?? [];
   const visibleEntries = folderEntries;
   const selectedSourceId = selectedSource?.id ?? null;
   currentFolderIdRef.current = currentFolderId;
   selectedSourceIdRef.current = selectedSourceId;
-  const selectedSourceTagChanged = selectedSource
-    ? !sameStringSet(selectedSourceTagDraftIds, selectedSource.tags.map((tag) => tag.id))
-    : false;
   const workspaceStyle = useMemo(
     () =>
       ({
@@ -330,10 +321,6 @@ export function App({ authMode }: AppProps) {
     return () => window.removeEventListener("keydown", handleKeyDown);
   }, [busy, refreshAll]);
 
-  useEffect(() => {
-    setSelectedSourceTagDraftIds(selectedSource?.tags.map((tag) => tag.id) ?? []);
-  }, [selectedSource]);
-
   const openSource = useCallback(async (sourceId: string): Promise<void> => {
     setStatus("Loading file preview.");
     try {
@@ -520,24 +507,6 @@ export function App({ authMode }: AppProps) {
     [refreshExplorer],
   );
 
-  const createExplorerTag = useCallback(async (): Promise<void> => {
-    const name = newTagName.trim();
-    if (!name) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const response = await createTag({ name });
-      setTags(await listTags());
-      setNewTagName("");
-      setStatus(`Tag ready: ${response.tag?.name ?? name}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Tag create failed.");
-    } finally {
-      setBusy(false);
-    }
-  }, [newTagName]);
-
   const runLibrarySearch = useCallback(
     async (
       mode: "replace" | "append",
@@ -614,26 +583,6 @@ export function App({ authMode }: AppProps) {
     [runLibrarySearch, selectedExplorerTagIds],
   );
 
-  const saveSelectedSourceTags = useCallback(async (): Promise<void> => {
-    if (!selectedSource) {
-      return;
-    }
-    setBusy(true);
-    try {
-      const response = await updateSourceTags(selectedSource.id, { tag_ids: selectedSourceTagDraftIds });
-      const detail = await getSource(selectedSource.id);
-      setSelectedSource(detail);
-      setTags(await listTags());
-      setTasks((await listTasks()).tasks);
-      await refreshExplorer();
-      setStatus(`Queued tag reindex for ${response.source.virtual_path ?? response.source.display_title}.`);
-    } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Tag update failed.");
-    } finally {
-      setBusy(false);
-    }
-  }, [refreshExplorer, selectedSource, selectedSourceTagDraftIds]);
-
   const resplitSelectedSource = useCallback(async (): Promise<void> => {
     if (!selectedSource) {
       return;
@@ -652,12 +601,6 @@ export function App({ authMode }: AppProps) {
       setBusy(false);
     }
   }, [refreshExplorer, selectedSource, uploadGuidance]);
-
-  const toggleSelectedSourceTagDraft = useCallback((tagId: string): void => {
-    setSelectedSourceTagDraftIds((current) =>
-      current.includes(tagId) ? current.filter((id) => id !== tagId) : [...current, tagId],
-    );
-  }, []);
 
   const revealFileInExplorer = useCallback(
     async ({ sourceId, entryId }: RevealTarget): Promise<ChatKitClientToolResult> => {
@@ -895,7 +838,6 @@ export function App({ authMode }: AppProps) {
           libraryResults={libraryResults}
           librarySearching={librarySearching}
           libraryTagMatchMode={libraryTagMatchMode}
-          newTagName={newTagName}
           previewGridRef={previewGridRef}
           previewLayoutStyle={previewLayoutStyle}
           previewSplitPercent={previewSplitPercent}
@@ -903,21 +845,17 @@ export function App({ authMode }: AppProps) {
           selectedEntryIdSet={selectedEntryIdSet}
           selectedExplorerTagIdSet={selectedExplorerTagIdSet}
           selectedSource={selectedSource}
-          selectedSourceTagChanged={selectedSourceTagChanged}
-          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
           selectionAnchorEntryId={selectionAnchorEntryId}
           tags={tags}
           uploadGuidance={uploadGuidance}
           onActiveFileViewChange={setActiveFileView}
           onChooseEntries={chooseEntries}
           onCreateFolder={() => void createFolderInCurrentFolder()}
-          onCreateTag={() => void createExplorerTag()}
           onDeleteSelected={requestDeleteSelectedEntries}
           onDropEntries={(entryIds, folderId) => void moveEntriesToFolder(entryIds, folderId)}
           onGoBackFolder={goBackFolder}
           onGoForwardFolder={goForwardFolder}
           onGoToFolder={goToFolder}
-          onNewTagNameChange={setNewTagName}
           onClosePreview={() => setSelectedSource(null)}
           onOpenEntry={openEntry}
           onOpenSource={(sourceId) => void openSource(sourceId)}
@@ -925,10 +863,8 @@ export function App({ authMode }: AppProps) {
           onRenameSelected={() => void renameFocusedEntry()}
           onResplit={() => void resplitSelectedSource()}
           onRunLibrarySearch={(mode) => void runLibrarySearch(mode)}
-          onSaveTags={() => void saveSelectedSourceTags()}
           onSelectEntries={applyExplorerSelection}
           onShowShortcuts={() => setShortcutDialogOpen(true)}
-          onTagToggle={toggleSelectedSourceTagDraft}
           onLibraryQueryChange={setLibraryQuery}
           onLibraryTagMatchModeChange={changeLibraryTagMatchMode}
           onToggleExplorerTag={toggleExplorerTag}

@@ -10,7 +10,7 @@ The app has three coordinated surfaces:
 2. MCP: tools and MCP Apps resources exposing the same library capabilities.
 3. App core: typed services, schemas, database models, and tests that keep REST, ChatKit, MCP, and frontend contracts aligned.
 
-The product is file-library first. Ingestion stores the original source file, publishes that source file to an OpenAI vector store, and searches the source-level index with app-owned filters for tags, paths, source type, selected files, and dates. Semantic splitting remains available as an explicit inspection or re-split tool, but it is not part of normal ingestion.
+The product is file-library first. Ingestion stores the original source file, publishes that source file to an OpenAI vector store, and searches the source-level index with app-owned filters for tags, paths, source type, explicit source IDs, and dates. Semantic splitting remains available as an explicit inspection or re-split tool, but it is not part of normal ingestion.
 
 ## Wrap-Up Checklist For 1.0.0 Beta
 
@@ -29,8 +29,8 @@ Release scope:
 
 Functional final checks:
 
-- Verify tag filtering and semantic Library search with a realistic library: all/any tag mode, nonblank fallback query, source metadata display, selected-result chat scope, file reveal, and evidence links.
-- Verify grounded ChatKit answers from selected Explorer files and Library search results, including citation clicks and browser-side reveal behavior.
+- Verify tag filtering and semantic Library search with a realistic library: all/any tag mode, nonblank fallback query, source metadata display, explicit `@` file references, file reveal, and evidence links.
+- Verify grounded ChatKit answers from explicit Explorer/Library file references and Library search results, including citation clicks and browser-side reveal behavior.
 - Verify research-builder flow on a small topic: discovery, ingest, vector indexing, scoped answer, progress visibility, and log traceability.
 - Verify report generation end to end: structured draft, Markdown render with KaTeX-compatible math/evidence links, saved library artifact, PDF render path when implemented, PDF inspection/retry behavior, and download links that point at saved artifacts.
 - Verify deployed MCP from the user's ChatGPT account: connect to the deployed MCP server, run exposed tools/resources from ChatGPT, and confirm the MCP Apps UI renders well enough for screenshots.
@@ -144,8 +144,8 @@ Decision:
 
 - The file explorer and tag/query filtering should become separate first-class views.
 - Explorer view should feel like a normal file browser: folders, files, preview, rename, move, delete, upload, selection, keyboard shortcuts, and lightweight metadata.
-- Library view should focus on filtering and discovery: query, tags, type/date filters, result summaries, and source metadata. Tag controls should live primarily here instead of crowding the explorer.
-- ChatKit should work with both views: selected files from Explorer and filtered/search results from Library should be usable as agent context.
+- Library view should focus on filtering and discovery: query, AI-managed tags, type/date filters, result summaries, and source metadata. Tag filters can be visible here, but manual tag creation/editing should stay out of the normal user UI unless a later admin-only cleanup flow proves necessary.
+- ChatKit should work with both views through composer `@` file references, citation links, and reveal/search client tools rather than a persistent selected-file retrieval scope.
 
 Implementation notes:
 
@@ -155,7 +155,7 @@ Implementation notes:
 - Reuse the same fuzzy matching behavior for ChatKit composer entity search so file tags feel consistent with the Explorer.
 - Library view is tag/semantic-search focused: start from a nonblank fallback query when the field is empty, show tags as pill-style multi-select controls, support `all` / `any` tag matching, and run OpenAI-backed source search from the query bar.
 - In Library view, `Enter` replaces the current result set and `Ctrl+Enter` appends/dedupes into it.
-- Results from Library view should be selectable as ChatKit file scope and reveal/open the corresponding file in Explorer.
+- Results from Library view should preview in place and remain discoverable through ChatKit `@` file references; explicit citation/entity clicks should still reveal/open the corresponding file in Explorer.
 - ChatKit `set_file_search` should move the user to Library view and apply query/tag filters instead of crowding Explorer.
 - Refine Explorer shortcut behavior around simple arrows: Up/Down move file focus/selection, Shift+Up/Down extends selection, Left/Right navigate backward/forward through a stack-based folder path history, `F2` renames, and `Delete` deletes.
 - Keep a simple folder-history stack for Explorer navigation instead of treating backward navigation as "go to parent folder"; entering folders, revealing files, and ChatKit/Library-driven folder jumps should push usable history entries without creating loops.
@@ -164,26 +164,34 @@ Implementation notes:
 Next:
 
 - Completed follow-up: Library rows fall back to vector-result attributes such as `virtual_name` and `virtual_path` when a semantic hit is not already in the local entry cache.
-- Completed follow-up: Library rows now have direct chat-scope checkboxes plus a bulk “Select results” action.
+- Completed follow-up: removed the confusing visible chat-scope file selection path; ChatKit now relies on `@` file references and a rolling entity-search history of currently/recently shown files.
 - Completed follow-up: add-file, split-preview, and research-builder workflows moved out of the Explorer pane and into ChatKit starter prompts/attachments/tooling, leaving Explorer and Library less crowded.
-- Current follow-up: Library tag filtering is too visually noisy with realistic auto-generated tags. Compact the tag display, prioritize selected/relevant tags, make tag clicks rerun the current Library search immediately, and reduce model/app auto-tag creation so future libraries do not accumulate excessive one-off tags.
+- Completed follow-up: Library tag filtering now caps the default visible pill set, prioritizes selected/relevant tags, reruns the current Library search when tags are clicked, and asks semantic splitting to produce fewer broad auto-tags.
 - Completed follow-up: Explorer Left/Right folder-history navigation is wired and covered by the desktop browser shortcut spec; Backspace/Alt+Left still navigate to the parent folder.
-- Consider a later tag-management view for merge/delete/rename workflows if realistic libraries still accumulate noisy tags after generation limits.
+- Completed follow-up: Explorer and Library rows now use denser name-first columns with a compact type/icon column, size/date/relevance context, and status/relevance near the end instead of path subtitles under every row.
+- Completed follow-up: full path/context moved into the preview/details pane, including a dedicated path metadata field.
+- Completed follow-up: Markdown source previews now render through a scoped Markdown preview renderer with compact headings, lists, code blocks, tables, links, and paragraph spacing.
+- Completed follow-up: visible manual tag creation/editing was removed from normal Explorer/Library flows; tags are now displayed and filtered as AI-managed metadata.
+- Consider a later admin tag-cleanup view for merge/delete/rename workflows if realistic libraries still accumulate noisy tags after generation limits.
 
 Acceptance criteria:
 
 - Explorer no longer needs prominent tag chips or dense search controls to feel complete.
+- Explorer rows show name-first, compact type/icon, size/date as useful, and status last; long paths do not crowd the row or hide important table columns.
+- Source previews expose the full path and metadata clearly enough that removing per-row path subtitles does not reduce inspection quality.
+- Markdown previews render through the app renderer with scoped styles that look professional inside the split preview pane and do not inherit oversized document defaults.
 - Explorer search filters only the current folder and remains responsive without billing or OpenAI calls.
 - Library filtering has enough space to show tags, query, result status, and source metadata clearly.
+- Normal users cannot manually add tags from the Explorer/Library UI; tags remain AI-managed metadata while tag filters and tag visibility still support discovery.
 - Tag pills in Library stay readable with large tag vocabularies, selected tags remain visible, and clicking a tag immediately refreshes the Library result set.
 - Auto-generated tags are bounded and broad enough for retrieval filtering rather than creating many narrow one-off topic tags.
 - Empty Library query submissions use a deliberate fallback query rather than sending a blank API request.
-- `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not lose existing selected chat scope.
-- Selecting or revealing a file from Library opens the correct file in Explorer.
+- `Enter` and `Ctrl+Enter` semantics are covered in the browser UI and do not disturb ChatKit entity-reference behavior.
+- Revealing a file from ChatKit opens the correct file in Explorer; clicking a Library result previews it in place without stealing Explorer focus.
 - Explorer hotkeys work when focus is inside the file list rows, including after mouse selection.
 - Explorer shortcut help, such as `frontend/src/components/ExplorerDialogs.tsx`, documents Up/Down selection and Left/Right folder-history navigation rather than the older parent-folder-only behavior.
 - Folder history is deterministic: opening a folder pushes history, Left goes back, Right goes forward, and new navigation after going back truncates forward history.
-- Playwright covers switching views, tag filtering, file reveal, selection, and preview behavior.
+- Playwright covers switching views, tag filtering, file reveal, entity reference, and preview behavior.
 
 ### 3. Evidence Annotations
 
@@ -226,7 +234,7 @@ Implementation notes:
 - Completed first persistence/API pass: added a typed `POST /api/reports/markdown` boundary that renders a structured report to Markdown, saves it through canonical source ingestion, stores report metadata on the resulting source, returns the source/task, and exposes matching frontend contracts.
 - Completed agent tool pass: ChatKit and MCP now expose `save_report_markdown`, using the same typed structured report request and canonical source-ingestion save path as REST.
 - Later pass: optionally render PDF from the same structured report source.
-- Store compiled report artifacts through the same library/storage boundaries used for source files and generated assets, so reports can be searched, selected for ChatKit scope, previewed, downloaded, and cited later.
+- Store compiled report artifacts through the same library/storage boundaries used for source files and generated assets, so reports can be searched, referenced from ChatKit, previewed, downloaded, and cited later.
 - ChatKit should expose agent tools to draft/update a structured report, compile it, save it into a folder, render Markdown preview, render PDF preview, and return library links to the saved artifacts.
 - PDF download should normally mean "render PDF, save it in the library, then offer the saved library artifact for download" rather than producing an unmanaged transient file.
 - Add a PDF inspection loop for the PDF-producing agent: render PDF pages to images with `pdf-lib`, `pdf.js`, or an equivalent renderer; send page images to a 5.4-class vision model for layout/content critique; if the critique is good enough, publish the PDF, otherwise revise and re-render once or twice before returning the best PDF with a clear message for the user.
@@ -237,12 +245,12 @@ Implementation notes:
 
 Acceptance criteria:
 
-- A ChatKit agent can create a structured report from selected library sources and save it as a library artifact.
+- A ChatKit agent can create a structured report from referenced library sources and save it as a library artifact.
 - The same report can be rendered to Markdown with KaTeX-compatible math and evidence links intact.
 - The report can be rendered to PDF, inspected from rendered page images by a vision model, improved if needed within a bounded retry loop, and saved back into the library.
 - Browser and ChatKit progress accurately show compile/render/inspection/save states without noisy step-by-step logs.
 - Download links point at saved library artifacts, not unmanaged temporary files.
-- Integration tests cover report creation, Markdown rendering, PDF artifact saving, progress/status reporting, and library selection/search behavior. Unit tests cover only tricky render normalization or inspection-rubric parsing.
+- Integration tests cover report creation, Markdown rendering, PDF artifact saving, progress/status reporting, and library search/entity behavior. Unit tests cover only tricky render normalization or inspection-rubric parsing.
 
 ### 5. ChatKit Stability Verification
 
@@ -309,7 +317,7 @@ Provider/agent architecture:
 - Add a `chat_completions_v1` compatibility mode for the widely supported `/v1/chat/completions` message/tool API surface. This mode must work with OpenAI chat-completions models and with `oss-small`/`gpt-oss-20b` served through SGLang or the smallest/easiest compatible serving option if SGLang is not viable.
 - Use known context sizes only. Compatibility mode may assume either an OpenAI model with known limits or the configured OSS model served by SGLang; unknown model/context combinations should be blocked or require explicit config rather than guessed.
 - Compatibility mode should support messages, streaming when available, tool definitions, tool call parsing, structured output where practical, and explicit conversation-state storage in the app.
-- ChatKit should be able to route through either provider while preserving app-owned progress events, tool execution boundaries, selected-file scope, citation/link behavior, and cost/log metadata where applicable.
+- ChatKit should be able to route through either provider while preserving app-owned progress events, tool execution boundaries, explicit source-reference behavior, citation/link behavior, and cost/log metadata where applicable.
 - Tool calling should be normalized at the app boundary: the model provider proposes tool calls; app services execute them; results are serialized back in a provider-compatible shape.
 - Add clear capability flags so on-prem mode can expose unsupported features honestly, such as pgvector local retrieval instead of managed vector stores, weaker structured-output enforcement, different reasoning traces, and deferred image/voice/transcription features.
 - Add a smoke harness that can route ChatKit agent turns through `chat_completions_v1` using OpenAI chat-completions first, then the configured OSS/SGLang endpoint.
@@ -346,7 +354,7 @@ Fine-tuning and dataset builder:
 
 - Add a local skill or script workflow for building SFT examples from existing OpenAI platform logs, response logs, and stored conversation artifacts.
 - The dataset builder should convert multi-turn conversations into one or more supervised examples, controlled by parameters such as window size, target assistant turns, include/exclude tool calls, include system/developer messages, and redact/scrub sensitive fields.
-- Examples should preserve the production shape as much as possible: developer instructions, user request, selected context, tool calls/results, final assistant answer, and metadata about source workflow.
+- Examples should preserve the production shape as much as possible: developer instructions, user request, referenced context, tool calls/results, final assistant answer, and metadata about source workflow.
 - Include `chat_completions_v1` examples, web-search examples, local retrieval examples, and context-compaction examples when those workflows become representative enough to train from.
 - Build a small subjective eval set first: roughly 20 interesting examples, with about 5 "showcase" examples that demonstrate known-good behavior and about 15 held-out/generalization examples that are not used for training feedback.
 - The eval should be intentionally subjective and product-centered: quality of agent behavior, tool-use choices, evidence/citation behavior, refusal/defer behavior, report/search usefulness, and whether the answer feels like this app's agent.
@@ -383,7 +391,7 @@ Acceptance criteria:
 
 - The on-prem submodule is registered at `vendor/openai-vectorstore2-on-prem` and has a README explaining that it assumes the parent app checkout.
 - The base app has a documented provider boundary between OpenAI Responses/Conversations and `chat_completions_v1`.
-- ChatKit can run a smoke agent flow through `chat_completions_v1` using OpenAI chat completions without losing app-owned tool execution, progress, selected-file behavior, citation links, or context compaction.
+- ChatKit can run a smoke agent flow through `chat_completions_v1` using OpenAI chat completions without losing app-owned tool execution, progress, explicit source-reference behavior, citation links, or context compaction.
 - `chat_completions_v1` can compact long app-owned history according to the configured model context size, soft-hide or otherwise retire old ChatKit items, and inject a `Data` / `Conversation` / `Remarks` summary into the new active segment.
 - The compatibility provider can use a configured web-search POST endpoint and save useful search results back into the library.
 - On-prem/compatibility retrieval has a pgvector implementation plan or implementation, including a decision on whether `oss-small`/`gpt-oss-20b` can serve as an embedder.
@@ -543,7 +551,7 @@ Status: complete.
 
 - Added DB-backed folders, paths, source/file entries, recursive delete, rename, move, and current-folder ingest.
 - Added source path attributes to vector metadata within OpenAI metadata limits.
-- Added selected-file preparation for ChatKit file inputs.
+- Removed the selected-file retrieval-scope path from normal ChatKit usage in favor of explicit `@` file references, source IDs, and reveal/search tools.
 - Exposed filesystem operations through REST, ChatKit tools, MCP tools, and the frontend.
 
 ### Research Library Builder
@@ -570,10 +578,10 @@ Status: complete for the current baseline.
 
 - ChatKit tools cover source listing, filesystem operations, tags, search, branch search, research build, research answers, split preview/re-split, generated assets, and task visibility.
 - MCP exposes the same core capabilities as tools and Apps resources.
-- ChatKit threads persist selected-file scope and OpenAI conversation state.
+- ChatKit threads persist OpenAI conversation state without carrying browser file-selection scope.
 - ChatKit agent runs use OpenAI conversation IDs for durable context and track response IDs for logs/debugging.
-- Client-tool calls coordinate file selection, file reveal, search changes, and research builder state.
-- ChatKit treats selected files as retrieval scope first; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
+- Client-tool calls coordinate file reveal, search changes, entity references, and research builder state.
+- ChatKit treats explicit `@` file references and tool-provided source IDs as retrieval scope; direct file inputs are capped to a small number of small files and are only attached on user-message turns.
 - ChatKit Responses requests enable server-side context compaction with a configurable compact threshold.
 - ChatKit can name threads early through a side-effect tool that updates thread title metadata.
 - ChatKit tool responses are compacted to avoid passing OpenAI file IDs, full tag objects, raw metadata, and bulky result payloads back through conversation state.
@@ -607,7 +615,7 @@ Status: complete for the current baseline.
 Status: mostly complete; view split first pass implemented.
 
 - Hidden empty preview.
-- Wider selected-file preview.
+- Wider source preview.
 - Persisted explorer/chat splitter.
 - In-app delete confirmation with delete progress.
 - Recursive-folder delete warning.

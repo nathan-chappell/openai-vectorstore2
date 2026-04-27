@@ -16,7 +16,9 @@
     "@openai/chatkit": "^1.6.0",
     "@openai/chatkit-react": "^1.5.0",
     "react": "^19.2.5",
-    "react-dom": "^19.2.5"
+    "react-dom": "^19.2.5",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",

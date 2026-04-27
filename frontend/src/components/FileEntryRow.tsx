@@ -72,12 +72,13 @@ export const FileEntryRow = memo(function FileEntryRow({
       }}
     >
       <span role="cell" className="filesystem-name-cell">
-        <span className={entry.kind === "folder" ? "entry-icon folder-icon" : "entry-icon file-icon"}>{entry.kind === "folder" ? "" : entryTypeLabel(entry)}</span>
-        <span>
-          <strong>{entry.name || "Files"}</strong>
-          <small>{entry.path}</small>
-        </span>
+        <strong title={entry.path}>{entry.name || "Files"}</strong>
       </span>
+      <span role="cell" className="filesystem-type-cell">
+        <span className={entry.kind === "folder" ? "entry-icon folder-icon" : "entry-icon file-icon"}>{entry.kind === "folder" ? "" : entryTypeLabel(entry)}</span>
+      </span>
+      <span role="cell" className="muted-cell">{entry.byte_size === null ? "" : formatBytes(entry.byte_size)}</span>
+      <span role="cell" className="muted-cell">{formatDate(entry.updated_at)}</span>
       <span role="cell" className="status-cell">
         {entry.status ? <span className={`status-badge status-${entry.status}`}>{entry.status}</span> : ""}
         {entry.status ? (
@@ -86,8 +87,6 @@ export const FileEntryRow = memo(function FileEntryRow({
           </span>
         ) : null}
       </span>
-      <span role="cell" className="muted-cell">{entry.byte_size === null ? "" : formatBytes(entry.byte_size)}</span>
-      <span role="cell" className="muted-cell">{formatDate(entry.updated_at)}</span>
     </div>
   );
 });

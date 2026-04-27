@@ -32,7 +32,6 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResults,
   librarySearching,
   libraryTagMatchMode,
-  newTagName,
   previewGridRef,
   previewLayoutStyle,
   previewSplitPercent,
@@ -40,21 +39,17 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIdSet,
   selectedExplorerTagIdSet,
   selectedSource,
-  selectedSourceTagChanged,
-  selectedSourceTagDraftIdSet,
   selectionAnchorEntryId,
   tags,
   uploadGuidance,
   onActiveFileViewChange,
   onChooseEntries,
   onCreateFolder,
-  onCreateTag,
   onDeleteSelected,
   onDropEntries,
   onGoBackFolder,
   onGoForwardFolder,
   onGoToFolder,
-  onNewTagNameChange,
   onClosePreview,
   onOpenEntry,
   onOpenSource,
@@ -62,10 +57,8 @@ export const FileExplorer = memo(function FileExplorer({
   onRenameSelected,
   onResplit,
   onRunLibrarySearch,
-  onSaveTags,
   onSelectEntries,
   onShowShortcuts,
-  onTagToggle,
   onLibraryQueryChange,
   onLibraryTagMatchModeChange,
   onToggleExplorerTag,
@@ -84,7 +77,6 @@ export const FileExplorer = memo(function FileExplorer({
   libraryResults: LibrarySearchResult[];
   librarySearching: boolean;
   libraryTagMatchMode: TagMatchMode;
-  newTagName: string;
   previewGridRef: RefObject<HTMLDivElement | null>;
   previewLayoutStyle: CSSProperties & Record<"--preview-list-width", string>;
   previewSplitPercent: number;
@@ -92,21 +84,17 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagIdSet: Set<string>;
   selectedSource: SourceDetail | null;
-  selectedSourceTagChanged: boolean;
-  selectedSourceTagDraftIdSet: Set<string>;
   selectionAnchorEntryId: string | null;
   tags: TagSummary[];
   uploadGuidance: string;
   onActiveFileViewChange: (view: WorkspaceFileView) => void;
   onChooseEntries: (entry: FilesystemEntrySummary, event: ReactMouseEvent) => void;
   onCreateFolder: () => void;
-  onCreateTag: () => void;
   onDeleteSelected: () => void;
   onDropEntries: (entryIds: string[], folderId: string) => void;
   onGoBackFolder: () => void;
   onGoForwardFolder: () => void;
   onGoToFolder: (folderId: string | null) => void;
-  onNewTagNameChange: (value: string) => void;
   onClosePreview: () => void;
   onOpenEntry: (entry: FilesystemEntrySummary) => void;
   onOpenSource: (sourceId: string) => void;
@@ -114,10 +102,8 @@ export const FileExplorer = memo(function FileExplorer({
   onRenameSelected: () => void;
   onResplit: () => void;
   onRunLibrarySearch: (mode: "replace" | "append") => void;
-  onSaveTags: () => void;
   onSelectEntries: (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null) => void;
   onShowShortcuts: () => void;
-  onTagToggle: (tagId: string) => void;
   onLibraryQueryChange: (value: string) => void;
   onLibraryTagMatchModeChange: (value: TagMatchMode) => void;
   onToggleExplorerTag: (tagId: string) => void;
@@ -152,15 +138,7 @@ export const FileExplorer = memo(function FileExplorer({
         <SourcePreview
           busy={busy}
           selectedSource={selectedSource}
-          selectedSourceTagChanged={selectedSourceTagChanged}
-          selectedSourceTagDraftIdSet={selectedSourceTagDraftIdSet}
-          tags={tags}
           uploadGuidance={uploadGuidance}
-          newTagName={newTagName}
-          onCreateTag={onCreateTag}
-          onNewTagNameChange={onNewTagNameChange}
-          onSaveTags={onSaveTags}
-          onTagToggle={onTagToggle}
           onUploadGuidanceChange={onUploadGuidanceChange}
           onResplit={onResplit}
         />
@@ -376,9 +354,10 @@ export const FileExplorer = memo(function FileExplorer({
             <section className="file-browser" aria-label="File list">
               <div className="file-list-header">
                 <span>Name</span>
-                <span>Status</span>
+                <span>Type</span>
                 <span>Size</span>
                 <span>Modified</span>
+                <span>Status</span>
               </div>
               <div className="file-rows" role="treegrid" aria-label="Files and folders">
                 {entries.map((entry) => (

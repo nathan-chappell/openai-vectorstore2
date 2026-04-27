@@ -100,7 +100,7 @@ TEXT_EXTENSIONS = {
 }
 
 TAG_SLOT_COUNT = 8
-AUTO_TAG_LIMIT = 4
+AUTO_TAG_LIMIT = 3
 VECTOR_ATTRIBUTES_VERSION = 3
 CHAT_FILE_INPUT_LIMIT = 10
 PDF_PAGE_BLOCK_RE = re.compile(r"(?ms)^\[page (?P<page>\d+)\]\n(?P<text>.*?)(?=^\[page \d+\]\n|\Z)")

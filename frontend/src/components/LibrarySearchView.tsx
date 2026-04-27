@@ -3,9 +3,9 @@ import { useMemo, useState } from "react";
 import { DEFAULT_LIBRARY_QUERY } from "../lib/appConstants";
 import type { LibrarySearchResult } from "../lib/appTypes";
 import type { TagMatchMode, TagSummary } from "../lib/types";
-import { formatDate, stringAttribute } from "../lib/uiFormat";
+import { stringAttribute } from "../lib/uiFormat";
 
-const TAG_PREVIEW_LIMIT = 36;
+const TAG_PREVIEW_LIMIT = 20;
 
 export function LibrarySearchView({
   busy,
@@ -144,9 +144,9 @@ export function LibrarySearchView({
 
       <div className="file-list-header library-file-list-header">
         <span>Name</span>
+        <span>Type</span>
         <span>Relevance</span>
         <span>Match</span>
-        <span>Modified</span>
       </div>
 
       <div className="file-rows library-file-rows" role="treegrid" aria-label="Library search results">
@@ -177,11 +177,10 @@ export function LibrarySearchView({
               }}
             >
               <span role="cell" className="filesystem-name-cell">
+                <strong title={resultPath}>{resultName}</strong>
+              </span>
+              <span role="cell" className="filesystem-type-cell">
                 <span className="entry-icon file-icon">{entry?.source_kind?.toUpperCase().slice(0, 4) || "FILE"}</span>
-                <span>
-                  <strong>{resultName}</strong>
-                  <small>{resultPath}</small>
-                </span>
               </span>
               <span role="cell" className="status-cell">
                 <span className="status-badge status-ready">{scorePercent}%</span>
@@ -190,7 +189,6 @@ export function LibrarySearchView({
                 </span>
               </span>
               <span role="cell" className="muted-cell library-hit-text">{hit.text || hit.summary}</span>
-              <span role="cell" className="muted-cell">{entry ? formatDate(entry.updated_at) : ""}</span>
             </div>
           );
         })}

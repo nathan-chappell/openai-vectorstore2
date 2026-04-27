@@ -201,7 +201,7 @@ class OpenAIGateway:
                             "type": "input_text",
                             "text": (
                                 "Split this source into semantically meaningful retrieval chunks. "
-                                "Prefer complete ideas over fixed token windows. Return at most 4 broad, reusable tags that help filtering. "
+                                "Prefer complete ideas over fixed token windows. Return at most 3 broad, reusable tags that help filtering. "
                                 "Avoid author names, venue names, generic words, and one-off phrases as tags. "
                                 "For PDFs use page ranges when page markers are present; for conversations use time ranges when timestamps exist; "
                                 "otherwise use line ranges. Keep chunk text faithful to the source.\n\n"
