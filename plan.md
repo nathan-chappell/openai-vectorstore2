@@ -54,8 +54,9 @@ Implementation plan:
 
 - Completed first pass: extracted shared app contracts, workspace constants, ChatKit client-tool payload shape, filesystem fuzzy search, research-result merge/narrowing helpers, UI formatting helpers, and local UI-state helpers from the current large `App.tsx`.
 - Completed legacy compression pass: removed the dead legacy source-list app path and its duplicate source fetch/filter/upload explorer code.
+- Completed component split pass: moved source preview, raw content preview, and chunk-row rendering into a focused typed React component module.
 - Inventory repeated TypeScript shapes for sources, explorer entries, library results, tags, task status/progress, ChatKit tool payloads, billing summaries, generated assets, and future report artifacts.
-- Next pass should split the remaining workspace components into focused modules and continue moving API boundary payloads out of component code.
+- Next pass should split the remaining explorer/library workspace components into focused modules and continue moving API boundary payloads out of component code.
 - Create or consolidate shared frontend contract modules under the existing type/API organization, using `type` aliases, `interface`s, discriminated unions, branded/string ID aliases where useful, and mapped/utility types when they remove real duplication.
 - Keep runtime parsing at API boundaries explicit and lightweight. Use structured guards only where external or optional data genuinely needs narrowing; do not add a heavy validation library unless the codebase has a clear need.
 - Prefer discriminated unions for task states, artifact kinds, source kinds, ChatKit client-tool events, and render/export statuses so switch statements become exhaustive and UI state cannot silently drift.
