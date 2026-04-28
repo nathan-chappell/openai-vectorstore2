@@ -77,6 +77,7 @@ class TaskPayload(TypedDict, total=False):
     tag_ids: list[str]
     user_guidance: NotRequired[str | None]
 
+
 SourceKind: TypeAlias = Literal["pdf", "text", "conversation", "image", "audio", "video", "other"]
 SourceStatus: TypeAlias = Literal["processing", "ready", "failed"]
 FilesystemEntryKind: TypeAlias = Literal["folder", "file"]
@@ -89,6 +90,7 @@ TaskOriginSurface: TypeAlias = Literal["web", "mcp", "chatkit", "system"]
 TagMatchMode: TypeAlias = Literal["all", "any"]
 LocatorType: TypeAlias = Literal["page_range", "line_range", "time_range", "generated"]
 AssetKind: TypeAlias = Literal["image", "voice", "source_copy"]
+LibraryVisibility: TypeAlias = Literal["private", "public"]
 ResearchSeedKind: TypeAlias = Literal[
     "topic", "paper", "text", "url", "pdf_url", "arxiv_url", "uploaded_file", "linkedin_export"
 ]
@@ -423,6 +425,7 @@ class FilesystemSearchResponse(BaseModel):
 class FilesystemCreateFolderRequest(BaseModel):
     parent_id: str | None = None
     name: str = Field(min_length=1, max_length=255)
+    library_id: str | None = None
 
 
 class FilesystemUpdateEntryRequest(BaseModel):
@@ -469,6 +472,31 @@ class FileListResponse(BaseModel):
     page: int
     page_size: int
     has_more: bool
+
+
+class LibrarySummary(BaseModel):
+    id: str
+    title: str
+    description: str | None = None
+    visibility: LibraryVisibility
+    slug: str | None = None
+    source_count: int
+    writable: bool
+    personal: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class LibraryListResponse(BaseModel):
+    libraries: list[LibrarySummary] = Field(default_factory=list)
+    default_library_id: str
+
+
+class LibraryCreateRequest(BaseModel):
+    title: str = Field(min_length=1, max_length=255)
+    description: str | None = Field(default=None, max_length=1000)
+    visibility: LibraryVisibility = "public"
+    slug: str | None = Field(default=None, max_length=96)
 
 
 class IngestFinalizeResponse(BaseModel):
@@ -647,6 +675,7 @@ class ResearchCandidateIngestResponse(BaseModel):
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
+    library_id: str | None = None
     selected_source_ids: list[str] = Field(default_factory=list)
     source_kinds: list[SourceKind] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list, max_length=1)
@@ -696,6 +725,7 @@ class BranchSearchResponse(BaseModel):
 
 class ActionRequestBase(BaseModel):
     prompt: str = Field(min_length=1)
+    library_id: str | None = None
     selected_source_ids: list[str] = Field(default_factory=list)
     tag_ids: list[str] = Field(default_factory=list, max_length=1)
     tag_match_mode: TagMatchMode = "all"

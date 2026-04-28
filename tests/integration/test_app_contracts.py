@@ -540,6 +540,63 @@ async def test_report_markdown_save_api_persists_report_as_source(
 
 
 @pytest.mark.asyncio
+async def test_http_public_library_can_be_selected_without_polluting_personal_library(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    auth_headers: dict[str, str],
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            created = await client.post(
+                "/api/libraries",
+                headers=auth_headers,
+                json={"title": "Open RAGBench demo", "visibility": "public", "slug": "open-ragbench-demo"},
+            )
+            assert created.status_code == 200
+            public_library_id = created.json()["id"]
+
+            libraries = await client.get("/api/libraries", headers=auth_headers)
+            assert libraries.status_code == 200
+            library_payload = libraries.json()
+            assert public_library_id in {library["id"] for library in library_payload["libraries"]}
+            assert library_payload["default_library_id"] != public_library_id
+
+            upload = await client.post(
+                "/api/sources",
+                headers=auth_headers,
+                files={"file": ("public-note.txt", b"Public demo retrieval evidence.", "text/plain")},
+                data={"library_id": public_library_id},
+            )
+            assert upload.status_code == 200
+            source_id = upload.json()["source"]["id"]
+            await _wait_for_http_task(
+                client,
+                auth_headers=auth_headers,
+                task_id=upload.json()["task"]["id"],
+                expected_status="completed",
+            )
+
+            personal_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"query": "public demo retrieval", "max_results": 8},
+            )
+            assert personal_search.status_code == 200
+            assert source_id not in {hit["source_file_id"] for hit in personal_search.json()["hits"]}
+
+            public_search = await client.post(
+                "/api/search",
+                headers=auth_headers,
+                json={"library_id": public_library_id, "query": "public demo retrieval", "max_results": 8},
+            )
+            assert public_search.status_code == 200
+            assert {hit["source_file_id"] for hit in public_search.json()["hits"]} == {source_id}
+
+
+@pytest.mark.asyncio
 async def test_http_filesystem_recursive_folder_delete_removes_nested_sources(
     configured_settings: AppSettings,
     fake_openai: None,

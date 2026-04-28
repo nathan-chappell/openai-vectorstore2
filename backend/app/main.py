@@ -47,6 +47,9 @@ from backend.app.schemas import (
     FreeformRequest,
     ImageGenerationRequest,
     IngestFinalizeResponse,
+    LibraryCreateRequest,
+    LibraryListResponse,
+    LibrarySummary,
     LibrarySourceDetail,
     PaymentAttemptListResponse,
     PaymentAttemptStatus,
@@ -200,7 +203,9 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         _: AuthenticatedUser = Depends(require_authenticated_web_user),
     ) -> PaymentIntegrationResponse:
         integration = payment_integration_status(resolved_settings)
-        paypal_recipient_email = resolved_settings.paypal_recipient_email.strip() if resolved_settings.paypal_recipient_email else None
+        paypal_recipient_email = (
+            resolved_settings.paypal_recipient_email.strip() if resolved_settings.paypal_recipient_email else None
+        )
         paypal_payment_url = str(resolved_settings.paypal_payment_url) if resolved_settings.paypal_payment_url else None
         return PaymentIntegrationResponse(
             provider="paypal" if paypal_recipient_email else integration.provider,
@@ -247,7 +252,9 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     ) -> PaymentAttemptSummary:
         payload = await file.read()
         if len(payload) > 5_000_000:
-            raise HTTPException(status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Receipt upload is too large.")
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, detail="Receipt upload is too large."
+            )
         try:
             return await services.payments.review_receipt_upload(
                 clerk_user_id=user.clerk_user_id,
@@ -401,6 +408,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/sources")
     async def list_sources_api(
         user: AuthenticatedUser = Depends(require_active_web_user),
+        library_id: str | None = Query(default=None),
         query: str | None = Query(default=None, min_length=1),
         tag_ids: list[str] | None = Query(default=None),
         tag_match_mode: Literal["all", "any"] = Query(default="all"),
@@ -409,6 +417,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     ) -> FileListResponse:
         return await services.sources.list_sources(
             clerk_user_id=user.clerk_user_id,
+            library_id=library_id,
             query=query,
             tag_ids=tag_ids or [],
             tag_match_mode=tag_match_mode,
@@ -416,13 +425,36 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             page_size=page_size,
         )
 
+    @app.get("/api/libraries")
+    async def list_libraries_api(
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> LibraryListResponse:
+        return await services.sources.list_libraries(clerk_user_id=user.clerk_user_id)
+
+    @app.post("/api/libraries")
+    async def create_library_api(
+        payload: LibraryCreateRequest,
+        user: AuthenticatedUser = Depends(require_active_web_user),
+    ) -> LibrarySummary:
+        try:
+            return await services.sources.create_library(clerk_user_id=user.clerk_user_id, payload=payload)
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except PermissionError as exc:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
     @app.get("/api/filesystem")
     async def list_filesystem_api(
         user: AuthenticatedUser = Depends(require_active_web_user),
+        library_id: str | None = Query(default=None),
         folder_id: str | None = Query(default=None),
     ) -> FilesystemListResponse:
         try:
-            return await services.sources.list_filesystem(clerk_user_id=user.clerk_user_id, folder_id=folder_id)
+            return await services.sources.list_filesystem(
+                clerk_user_id=user.clerk_user_id,
+                library_id=library_id,
+                folder_id=folder_id,
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
         except ValueError as exc:
@@ -431,6 +463,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/api/filesystem/search")
     async def search_filesystem_api(
         user: AuthenticatedUser = Depends(require_billable_web_user),
+        library_id: str | None = Query(default=None),
         query: str | None = Query(default=None),
         tag_ids: list[str] | None = Query(default=None),
         tag_match_mode: Literal["all", "any"] = Query(default="all"),
@@ -440,6 +473,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         try:
             return await services.sources.search_filesystem(
                 clerk_user_id=user.clerk_user_id,
+                library_id=library_id,
                 query=query,
                 tag_ids=tag_ids or [],
                 tag_match_mode=tag_match_mode,
@@ -457,6 +491,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         try:
             return await services.sources.create_folder(
                 clerk_user_id=user.clerk_user_id,
+                library_id=payload.library_id,
                 parent_id=payload.parent_id,
                 name=payload.name,
             )
@@ -513,6 +548,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         user_guidance: str | None = Form(default=None),
         folder_id: str | None = Form(default=None),
         virtual_name: str | None = Form(default=None),
+        library_id: str | None = Form(default=None),
         user: AuthenticatedUser = Depends(require_billable_web_user),
     ) -> IngestFinalizeResponse:
         payload = await file.read()
@@ -528,6 +564,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 origin_surface="web",
                 folder_id=folder_id,
                 virtual_name=virtual_name,
+                library_id=library_id,
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -600,9 +637,14 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     async def get_source_api(
         source_id: str,
         user: AuthenticatedUser = Depends(require_active_web_user),
+        library_id: str | None = Query(default=None),
     ) -> LibrarySourceDetail:
         try:
-            return await services.sources.get_source(clerk_user_id=user.clerk_user_id, source_id=source_id)
+            return await services.sources.get_source(
+                clerk_user_id=user.clerk_user_id,
+                source_id=source_id,
+                library_id=library_id,
+            )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -621,10 +663,13 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     async def read_source_content_api(
         source_id: str,
         user: AuthenticatedUser = Depends(require_active_web_user),
+        library_id: str | None = Query(default=None),
     ) -> Response:
         try:
             detail, payload = await services.sources.read_source_bytes(
-                clerk_user_id=user.clerk_user_id, source_id=source_id
+                clerk_user_id=user.clerk_user_id,
+                source_id=source_id,
+                library_id=library_id,
             )
         except FileNotFoundError as exc:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
@@ -646,8 +691,11 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         return Response(content=payload, media_type=media_type or "application/octet-stream", headers=headers)
 
     @app.get("/api/tags")
-    async def list_tags_api(user: AuthenticatedUser = Depends(require_active_web_user)) -> list[TagSummary]:
-        return await services.sources.list_tags(clerk_user_id=user.clerk_user_id)
+    async def list_tags_api(
+        user: AuthenticatedUser = Depends(require_active_web_user),
+        library_id: str | None = Query(default=None),
+    ) -> list[TagSummary]:
+        return await services.sources.list_tags(clerk_user_id=user.clerk_user_id, library_id=library_id)
 
     @app.post("/api/research/imports")
     async def create_research_import_api(

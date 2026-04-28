@@ -89,6 +89,7 @@ class ActionService:
                 clerk_user_id=clerk_user_id,
                 request=SearchRequest(
                     query=payload.prompt,
+                    library_id=payload.library_id,
                     selected_source_ids=payload.selected_source_ids,
                     tag_ids=payload.tag_ids,
                     tag_match_mode=payload.tag_match_mode,
@@ -129,6 +130,7 @@ class ActionService:
                 clerk_user_id=clerk_user_id,
                 request=SearchRequest(
                     query=payload.prompt,
+                    library_id=payload.library_id,
                     selected_source_ids=payload.selected_source_ids,
                     tag_ids=payload.tag_ids,
                     tag_match_mode=payload.tag_match_mode,
@@ -175,6 +177,7 @@ class ActionService:
                 clerk_user_id=clerk_user_id,
                 request=SearchRequest(
                     query=payload.prompt,
+                    library_id=payload.library_id,
                     selected_source_ids=payload.selected_source_ids,
                     tag_ids=payload.tag_ids,
                     tag_match_mode=payload.tag_match_mode,
@@ -236,6 +239,7 @@ class ActionService:
                 clerk_user_id=clerk_user_id,
                 request=SearchRequest(
                     query=payload.prompt,
+                    library_id=payload.library_id,
                     selected_source_ids=payload.selected_source_ids,
                     tag_ids=payload.tag_ids,
                     tag_match_mode=payload.tag_match_mode,
@@ -255,8 +259,7 @@ class ActionService:
                 response_format=payload.response_format,
             )
             voice_cost = (
-                max(1, (len(speech_text) + 999) // 1000)
-                * self._settings.billing_voice_generation_cost_per_1k_chars_usd
+                max(1, (len(speech_text) + 999) // 1000) * self._settings.billing_voice_generation_cost_per_1k_chars_usd
             )
             await self._billing.record_fixed_cost_event(
                 clerk_user_id=clerk_user_id,

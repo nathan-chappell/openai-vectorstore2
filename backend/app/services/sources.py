@@ -48,6 +48,9 @@ from backend.app.schemas import (
     IngestFinalizeResponse,
     LibrarySourceDetail,
     LibrarySourceSummary,
+    LibraryCreateRequest,
+    LibraryListResponse,
+    LibrarySummary,
     OpenAIAttributes,
     SearchRequest,
     SearchResponse,
@@ -380,6 +383,7 @@ class SourceService:
         self,
         *,
         clerk_user_id: str,
+        library_id: str | None = None,
         query: str | None,
         tag_ids: list[str],
         tag_match_mode: TagMatchMode,
@@ -389,7 +393,7 @@ class SourceService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
             selected_tag_slugs = await self._tags_by_ids(session, library_id=library.id, tag_ids=tag_ids)
             selected_tag_slug = selected_tag_slugs[0] if selected_tag_slugs else None
             normalized_query = query.casefold().strip() if isinstance(query, str) else ""
@@ -421,16 +425,23 @@ class SourceService:
                 has_more=end < len(sources),
             )
 
-    async def list_filesystem(self, *, clerk_user_id: str, folder_id: str | None = None) -> FilesystemListResponse:
+    async def list_filesystem(
+        self, *, clerk_user_id: str, folder_id: str | None = None, library_id: str | None = None
+    ) -> FilesystemListResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
             root = await self._root_entry_for_library(session, library=library)
             folder = (
                 root
                 if folder_id is None
-                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=folder_id)
+                else await self._filesystem_entry_for_user(
+                    session,
+                    clerk_user_id=clerk_user_id,
+                    entry_id=folder_id,
+                    library_id=library.id,
+                )
             )
             if folder.kind != "folder":
                 raise ValueError("Only folders can be listed.")
@@ -458,6 +469,7 @@ class SourceService:
         self,
         *,
         clerk_user_id: str,
+        library_id: str | None = None,
         query: str | None,
         tag_ids: list[str],
         tag_match_mode: TagMatchMode,
@@ -471,6 +483,7 @@ class SourceService:
                 clerk_user_id=clerk_user_id,
                 request=SearchRequest(
                     query=normalized_query,
+                    library_id=library_id,
                     tag_ids=tag_ids,
                     tag_match_mode=tag_match_mode,
                     max_results=min(24, max(page * page_size, page_size)),
@@ -481,7 +494,7 @@ class SourceService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
             await self._root_entry_for_library(session, library=library)
             await session.commit()
             entries = (
@@ -544,18 +557,25 @@ class SourceService:
         clerk_user_id: str,
         parent_id: str | None,
         name: str,
+        library_id: str | None = None,
     ) -> FilesystemEntrySummary:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to create folders.")
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._writable_library_for_request(session, app_user=app_user, library_id=library_id)
             root = await self._root_entry_for_library(session, library=library)
             parent = (
                 root
                 if parent_id is None
-                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=parent_id)
+                else await self._filesystem_entry_for_user(
+                    session,
+                    clerk_user_id=clerk_user_id,
+                    entry_id=parent_id,
+                    library_id=library.id,
+                    writable=True,
+                )
             )
             if parent.kind != "folder":
                 raise ValueError("Folders can only be created inside folders.")
@@ -845,11 +865,84 @@ class SourceService:
             await session.commit()
         return output
 
-    async def list_tags(self, *, clerk_user_id: str) -> list[TagSummary]:
+    async def list_libraries(self, *, clerk_user_id: str) -> LibraryListResponse:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            library = await self._library_for_user(session, app_user=app_user)
+            personal = await self._library_for_user(session, app_user=app_user)
+            libraries = (
+                (
+                    await session.execute(
+                        select(UserLibrary)
+                        .where(
+                            or_(
+                                UserLibrary.user_id == app_user.id,
+                                UserLibrary.visibility == "public",
+                            )
+                        )
+                        .options(selectinload(UserLibrary.sources))
+                        .order_by(UserLibrary.visibility.asc(), UserLibrary.updated_at.desc())
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            libraries_by_id = {library.id: library for library in libraries}
+            libraries_by_id[personal.id] = personal
+            return LibraryListResponse(
+                default_library_id=personal.id,
+                libraries=[
+                    self._library_summary(library, app_user=app_user, personal_library_id=personal.id)
+                    for library in sorted(
+                        libraries_by_id.values(),
+                        key=lambda item: (item.id != personal.id, item.visibility != "public", item.title.casefold()),
+                    )
+                ],
+            )
+
+    async def create_library(self, *, clerk_user_id: str, payload: LibraryCreateRequest) -> LibrarySummary:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            if not app_user.active:
+                raise PermissionError("The active user is not allowed to create libraries.")
+            personal = await self._library_for_user(session, app_user=app_user)
+            slug = _clean_library_slug(payload.slug or payload.title) if payload.visibility == "public" else None
+            if slug is not None:
+                existing_id = await session.scalar(select(UserLibrary.id).where(UserLibrary.slug == slug))
+                if existing_id is not None:
+                    raise ValueError("Another public library already uses that slug.")
+            now = _utcnow()
+            library = UserLibrary(
+                user_id=app_user.id,
+                title=payload.title.strip(),
+                description=payload.description.strip()
+                if payload.description and payload.description.strip()
+                else None,
+                visibility=payload.visibility,
+                slug=slug,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(library)
+            await session.flush()
+            await self._root_entry_for_library(session, library=library)
+            await session.commit()
+            await session.refresh(library)
+            logger.info(
+                "library_created clerk_user_id=%s library_id=%s visibility=%s slug=%s",
+                clerk_user_id,
+                library.id,
+                library.visibility,
+                library.slug,
+            )
+            return self._library_summary(library, app_user=app_user, personal_library_id=personal.id)
+
+    async def list_tags(self, *, clerk_user_id: str, library_id: str | None = None) -> list[TagSummary]:
+        await self._database.ensure_ready()
+        async with self._database.session() as session:
+            app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+            library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
             counts: dict[str, int] = {}
             for source in library.sources:
                 if source.tag_slug:
@@ -1005,21 +1098,36 @@ class SourceService:
         )
         return TagMutationResponse(tag=None, tasks=tasks)
 
-    async def get_source(self, *, clerk_user_id: str, source_id: str) -> LibrarySourceDetail:
+    async def get_source(
+        self, *, clerk_user_id: str, source_id: str, library_id: str | None = None
+    ) -> LibrarySourceDetail:
         await self._database.ensure_ready()
         async with self._database.session() as session:
-            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            source = await self._source_for_user(
+                session,
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                library_id=library_id,
+                writable=False,
+            )
             return self._source_detail(source)
 
-    async def read_source_bytes(self, *, clerk_user_id: str, source_id: str) -> tuple[LibrarySourceDetail, bytes]:
-        detail = await self.get_source(clerk_user_id=clerk_user_id, source_id=source_id)
+    async def read_source_bytes(
+        self, *, clerk_user_id: str, source_id: str, library_id: str | None = None
+    ) -> tuple[LibrarySourceDetail, bytes]:
+        detail = await self.get_source(clerk_user_id=clerk_user_id, source_id=source_id, library_id=library_id)
         payload = await self._storage.get_bytes(key=detail.storage_key)
         return detail, payload
 
     async def delete_source(self, *, clerk_user_id: str, source_id: str) -> str:
         await self._database.ensure_ready()
         async with self._database.session() as session:
-            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            source = await self._source_for_user(
+                session,
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                writable=True,
+            )
             cleanup_result = await self._delete_openai_files_for_source(source=source)
             await self._storage.delete_object(key=source.storage_key)
             await session.execute(
@@ -1053,6 +1161,7 @@ class SourceService:
         origin_thread_id: str | None = None,
         folder_id: str | None = None,
         virtual_name: str | None = None,
+        library_id: str | None = None,
         metadata: dict[str, object] | None = None,
     ) -> IngestFinalizeResponse:
         await self._database.ensure_ready()
@@ -1060,13 +1169,19 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to ingest sources.")
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._writable_library_for_request(session, app_user=app_user, library_id=library_id)
             await self._ensure_vector_store(session, library=library, app_user=app_user)
             root = await self._root_entry_for_library(session, library=library)
             parent = (
                 root
                 if folder_id is None
-                else await self._filesystem_entry_for_user(session, clerk_user_id=clerk_user_id, entry_id=folder_id)
+                else await self._filesystem_entry_for_user(
+                    session,
+                    clerk_user_id=clerk_user_id,
+                    entry_id=folder_id,
+                    library_id=library.id,
+                    writable=True,
+                )
             )
             if parent.kind != "folder":
                 raise ValueError("Sources can only be uploaded into folders.")
@@ -1249,7 +1364,12 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to re-split sources.")
-            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            source = await self._source_for_user(
+                session,
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                writable=True,
+            )
             if source.status == "processing":
                 raise ValueError("Wait for the current source processing task to finish before re-splitting.")
             library = source.library
@@ -1321,7 +1441,12 @@ class SourceService:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
             if not app_user.active:
                 raise PermissionError("The active user is not allowed to update source tags.")
-            source = await self._source_for_user(session, clerk_user_id=clerk_user_id, source_id=source_id)
+            source = await self._source_for_user(
+                session,
+                clerk_user_id=clerk_user_id,
+                source_id=source_id,
+                writable=True,
+            )
             if source.status == "processing":
                 raise ValueError("Wait for the current source processing task to finish before updating tags.")
             library = source.library
@@ -1425,7 +1550,9 @@ class SourceService:
                         media_type=source.media_type,
                         payload=payload,
                     )
-                    existing_tag_slugs = sorted(dict.fromkeys(item.tag_slug for item in library.sources if item.tag_slug))
+                    existing_tag_slugs = sorted(
+                        dict.fromkeys(item.tag_slug for item in library.sources if item.tag_slug)
+                    )
                     tag_guidance_parts = [user_guidance or ""]
                     if existing_tag_slugs:
                         tag_guidance_parts.append(
@@ -2217,7 +2344,7 @@ class SourceService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
-            library = await self._library_for_user(session, app_user=app_user)
+            library = await self._library_for_request(session, app_user=app_user, library_id=request.library_id)
             if library.openai_vector_store_id is None:
                 return []
             selected_source_ids = await _resolve_source_or_filesystem_entry_ids(
@@ -2264,10 +2391,11 @@ class SourceService:
                                 selectinload(SourceFile.filesystem_entry),
                             )
                             .where(
+                                SourceFile.library_id == library.id,
                                 or_(
                                     SourceFile.id.in_(source_ids),
                                     SourceFile.openai_vector_file_id.in_(vector_file_ids),
-                                )
+                                ),
                             )
                         )
                     )
@@ -2317,6 +2445,7 @@ class SourceService:
             clerk_user_id=clerk_user_id,
             request=SearchRequest(
                 query=request.query,
+                library_id=request.library_id,
                 selected_source_ids=request.selected_source_ids,
                 source_kinds=request.source_kinds,
                 virtual_paths=request.virtual_paths,
@@ -2338,6 +2467,7 @@ class SourceService:
                     clerk_user_id=clerk_user_id,
                     request=SearchRequest(
                         query=branch_query,
+                        library_id=request.library_id,
                         selected_source_ids=request.selected_source_ids,
                         source_kinds=request.source_kinds,
                         virtual_paths=request.virtual_paths,
@@ -2371,7 +2501,8 @@ class SourceService:
     async def _library_for_user(self, session: Any, *, app_user: AppUser) -> UserLibrary:
         library = await session.scalar(
             select(UserLibrary)
-            .where(UserLibrary.user_id == app_user.id)
+            .where(UserLibrary.user_id == app_user.id, UserLibrary.visibility == "private", UserLibrary.slug.is_(None))
+            .order_by(UserLibrary.created_at.asc())
             .options(
                 selectinload(UserLibrary.sources).selectinload(SourceFile.chunks),
                 selectinload(UserLibrary.sources).selectinload(SourceFile.filesystem_entry),
@@ -2384,6 +2515,7 @@ class SourceService:
             user_id=app_user.id,
             title=f"{app_user.display_name or app_user.clerk_user_id}'s indexed file library",
             description="Personal OpenAI vector-store backed file library",
+            visibility="private",
             created_at=_utcnow(),
             updated_at=_utcnow(),
         )
@@ -2394,6 +2526,43 @@ class SourceService:
 
     async def library_for_user(self, session: Any, *, app_user: AppUser) -> UserLibrary:
         return await self._library_for_user(session, app_user=app_user)
+
+    async def _library_for_request(
+        self,
+        session: Any,
+        *,
+        app_user: AppUser,
+        library_id: str | None,
+    ) -> UserLibrary:
+        if library_id is None:
+            return await self._library_for_user(session, app_user=app_user)
+        library = await session.scalar(
+            select(UserLibrary)
+            .where(
+                UserLibrary.id == library_id,
+                or_(UserLibrary.user_id == app_user.id, UserLibrary.visibility == "public"),
+            )
+            .options(
+                selectinload(UserLibrary.sources).selectinload(SourceFile.chunks),
+                selectinload(UserLibrary.sources).selectinload(SourceFile.filesystem_entry),
+                selectinload(UserLibrary.filesystem_entries),
+            )
+        )
+        if library is None:
+            raise FileNotFoundError("Library not found.")
+        return library
+
+    async def _writable_library_for_request(
+        self,
+        session: Any,
+        *,
+        app_user: AppUser,
+        library_id: str | None,
+    ) -> UserLibrary:
+        library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
+        if library.user_id != app_user.id:
+            raise PermissionError("This library is read-only for the active user.")
+        return library
 
     async def _root_entry_for_library(self, session: Any, *, library: UserLibrary) -> FilesystemEntry:
         root = await session.scalar(
@@ -2425,12 +2594,17 @@ class SourceService:
         *,
         clerk_user_id: str,
         entry_id: str,
+        library_id: str | None = None,
+        writable: bool = False,
     ) -> FilesystemEntry:
         app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+        library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
+        if writable and library.user_id != app_user.id:
+            raise PermissionError("This library is read-only for the active user.")
         entry = await session.scalar(
             select(FilesystemEntry)
             .join(UserLibrary, UserLibrary.id == FilesystemEntry.library_id)
-            .where(FilesystemEntry.id == entry_id, UserLibrary.user_id == app_user.id)
+            .where(FilesystemEntry.id == entry_id, FilesystemEntry.library_id == library.id)
             .options(
                 selectinload(FilesystemEntry.library),
                 selectinload(FilesystemEntry.parent),
@@ -2513,12 +2687,22 @@ class SourceService:
         library.updated_at = _utcnow()
         await session.flush()
 
-    async def _source_for_user(self, session: Any, *, clerk_user_id: str, source_id: str) -> SourceFile:
+    async def _source_for_user(
+        self,
+        session: Any,
+        *,
+        clerk_user_id: str,
+        source_id: str,
+        library_id: str | None = None,
+        writable: bool = False,
+    ) -> SourceFile:
         app_user = await self.ensure_app_user(session, clerk_user_id=clerk_user_id)
+        library = await self._library_for_request(session, app_user=app_user, library_id=library_id)
+        if writable and library.user_id != app_user.id:
+            raise PermissionError("This library is read-only for the active user.")
         source = await session.scalar(
             select(SourceFile)
-            .join(UserLibrary, UserLibrary.id == SourceFile.library_id)
-            .where(SourceFile.id == source_id, UserLibrary.user_id == app_user.id)
+            .where(SourceFile.id == source_id, SourceFile.library_id == library.id)
             .options(
                 selectinload(SourceFile.chunks),
                 selectinload(SourceFile.library),
@@ -2890,6 +3074,28 @@ class SourceService:
             chunks=chunks,
         )
 
+    def _library_summary(
+        self,
+        library: UserLibrary,
+        *,
+        app_user: AppUser,
+        personal_library_id: str,
+    ) -> LibrarySummary:
+        loaded_sources = library.__dict__.get("sources")
+        source_count = len(loaded_sources) if isinstance(loaded_sources, list) else 0
+        return LibrarySummary(
+            id=library.id,
+            title=library.title,
+            description=library.description,
+            visibility=cast(Any, library.visibility),
+            slug=library.slug,
+            source_count=source_count,
+            writable=library.user_id == app_user.id,
+            personal=library.id == personal_library_id,
+            created_at=library.created_at,
+            updated_at=library.updated_at,
+        )
+
     def _source_summary(self, source: SourceFile) -> LibrarySourceSummary:
         metadata = source.source_metadata
         return LibrarySourceSummary(
@@ -3022,7 +3228,9 @@ class SourceService:
         )
 
     @staticmethod
-    def _tag_summary_from_slug(slug: str, *, source: Literal["auto", "manual"] = "auto", source_count: int = 0) -> TagSummary:
+    def _tag_summary_from_slug(
+        slug: str, *, source: Literal["auto", "manual"] = "auto", source_count: int = 0
+    ) -> TagSummary:
         return TagSummary(
             id=slug,
             name=slug,
@@ -3161,9 +3369,7 @@ def split_pdf_payload_by_size(*, filename: str, payload: bytes, max_part_bytes: 
             current_pages = candidate_pages
             continue
         if not current_pages:
-            raise ValueError(
-                f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting."
-            )
+            raise ValueError(f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting.")
         part_payload = _write_pdf_pages(reader, current_pages)
         parts.append(
             PdfPayloadPart(
@@ -3176,9 +3382,7 @@ def split_pdf_payload_by_size(*, filename: str, payload: bytes, max_part_bytes: 
         part_index += 1
         single_page_payload = _write_pdf_pages(reader, [page_index])
         if len(single_page_payload) > max_part_bytes:
-            raise ValueError(
-                f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting."
-            )
+            raise ValueError(f"PDF page {page_index + 1} is larger than the OpenAI file upload limit after splitting.")
         current_pages = [page_index]
 
     if current_pages:
@@ -3262,6 +3466,11 @@ def classify_source_kind(*, filename: str, media_type: str) -> SourceKind:
 def slugify(value: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
     return normalized[:80] or "tag"
+
+
+def _clean_library_slug(value: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", value.casefold()).strip("-")
+    return normalized[:96] or "library"
 
 
 def _clean_tag_name(value: str) -> str:

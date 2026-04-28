@@ -5,6 +5,7 @@ export type StructuredPayload = Record<string, unknown> | unknown[] | null;
 export type OpenAIAttributes = Record<string, string | number | boolean>;
 
 export type SearchFilterPayload = {
+  libraryId?: string | null;
   selectedSourceIds?: string[];
   sourceKinds?: SourceKind[];
   tagIds?: string[];
@@ -25,13 +26,15 @@ export type TaggedSearchParams = {
   tagMatchMode?: TagMatchMode;
 };
 
-export type SourceListParams = TaggedSearchParams & PaginationParams;
+export type SourceListParams = TaggedSearchParams & PaginationParams & { libraryId?: string | null };
 
 export type FilesystemListParams = {
+  libraryId?: string | null;
   folderId?: string | null;
 };
 
-export type FilesystemSearchParams = TaggedSearchParams & PaginationParams;
+export type FilesystemSearchParams = TaggedSearchParams & PaginationParams & { libraryId?: string | null };
+export type LibraryVisibility = "private" | "public";
 
 export type ResearchCandidateListParams = PaginationParams & {
   taskId?: string | null;
@@ -51,6 +54,7 @@ export type BranchSearchRequest = SearchFilterPayload & {
 
 export type QaActionRequest = {
   prompt: string;
+  libraryId?: string | null;
   selectedSourceIds?: string[];
   tagIds?: string[];
   tagMatchMode?: TagMatchMode;
@@ -59,17 +63,20 @@ export type QaActionRequest = {
 export type FreeformActionRequest = {
   prompt: string;
   mode: "grounded" | "creative";
+  libraryId?: string | null;
   selectedSourceIds?: string[];
 };
 
 export type ImageActionRequest = {
   prompt: string;
+  libraryId?: string | null;
   selectedSourceIds?: string[];
 };
 
 export type VoiceActionRequest = {
   prompt: string;
   sourceText?: string;
+  libraryId?: string | null;
   selectedSourceIds?: string[];
 };
 
@@ -300,6 +307,31 @@ export type SourceSummary = {
   vector_attributes: OpenAIAttributes | null;
 };
 
+export type LibrarySummary = {
+  id: string;
+  title: string;
+  description: string | null;
+  visibility: LibraryVisibility;
+  slug: string | null;
+  source_count: number;
+  writable: boolean;
+  personal: boolean;
+  created_at: string;
+  updated_at: string;
+};
+
+export type LibraryListResponse = {
+  libraries: LibrarySummary[];
+  default_library_id: string;
+};
+
+export type LibraryCreateRequest = {
+  title: string;
+  description?: string | null;
+  visibility?: LibraryVisibility;
+  slug?: string | null;
+};
+
 export type FilesystemEntryKind = "folder" | "file";
 
 export type FilesystemEntrySummary = {
@@ -346,6 +378,7 @@ export type FilesystemSearchResponse = {
 };
 
 export type FilesystemCreateFolderRequest = {
+  library_id?: string | null;
   parent_id?: string | null;
   name: string;
 };

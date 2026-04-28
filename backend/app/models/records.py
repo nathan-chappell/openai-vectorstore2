@@ -7,7 +7,13 @@ from uuid import uuid4
 from sqlalchemy import DateTime, Float, ForeignKey, Index, JSON, String, Text, UniqueConstraint, func
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
-from backend.app.schemas import OpenAIAttributes, OpenAIUsagePayload, ResearchProvenance, SourceMetadata, StructuredObject
+from backend.app.schemas import (
+    OpenAIAttributes,
+    OpenAIUsagePayload,
+    ResearchProvenance,
+    SourceMetadata,
+    StructuredObject,
+)
 
 
 def new_id() -> str:
@@ -182,14 +188,16 @@ class CostEvent(Base):
 class UserLibrary(Base):
     __tablename__ = "user_library"
     __table_args__ = (
-        UniqueConstraint("user_id", name="uq_user_library_user_id"),
         Index("ix_user_library_user_updated_at", "user_id", "updated_at"),
+        Index("ix_user_library_visibility_updated_at", "visibility", "updated_at"),
     )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=new_id)
     user_id: Mapped[int] = mapped_column(ForeignKey("app_user.id"), nullable=False, index=True)
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    visibility: Mapped[str] = mapped_column(String(24), nullable=False, default="private")
+    slug: Mapped[str | None] = mapped_column(String(96), nullable=True, unique=True, index=True)
     openai_vector_store_id: Mapped[str | None] = mapped_column(String(128), nullable=True, unique=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, server_default=func.now())

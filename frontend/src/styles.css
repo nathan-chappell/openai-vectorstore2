@@ -111,7 +111,7 @@ pre {
 
 .app-bar {
   display: grid;
-  grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr) minmax(9rem, 13rem) auto;
+  grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr) minmax(9rem, 13rem) minmax(12rem, 18rem) auto auto;
   gap: 0.55rem;
   align-items: center;
   min-width: 0;
@@ -123,7 +123,8 @@ pre {
 
 .app-identity,
 .app-status,
-.task-summary {
+.task-summary,
+.library-switcher {
   min-width: 0;
   display: grid;
   gap: 0.1rem;
@@ -141,11 +142,18 @@ pre {
 .app-identity span,
 .app-status span,
 .task-summary span,
+.library-switcher span,
 .subtle,
 .pending-file-list,
 .empty-state {
   color: var(--muted);
   font-size: 0.78rem;
+}
+
+.library-switcher select {
+  min-height: 1.7rem;
+  padding: 0.15rem 0.45rem;
+  font-size: 0.82rem;
 }
 
 .workspace-grid {
@@ -1953,7 +1961,8 @@ kbd {
   }
 
   .app-status span,
-  .task-summary {
+  .task-summary,
+  .library-switcher {
     display: none;
   }
 

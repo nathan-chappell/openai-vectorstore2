@@ -239,6 +239,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             role=role,
             credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
+            library_id=_string_or_none(metadata.get("library_id")),
             selected_source_ids=[],
             thread_origin=_string_or_none(metadata.get("origin")),
         )
@@ -263,6 +264,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             role=role,
             credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
+            library_id=None,
             selected_source_ids=[],
             thread_origin=None,
         )
@@ -472,7 +474,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             ",".join(openai_platform_log_urls(response_ids)) or None,
             result_conversation_id,
             openai_platform_log_url(result_conversation_id),
-                (perf_counter() - started_at) * 1000,
+            (perf_counter() - started_at) * 1000,
         )
 
     def _agent_model_for_provider(
@@ -485,7 +487,9 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             return OpenAIChatCompletionsModel(model=model, openai_client=self._chat_completions_client)
         return model
 
-    def _agent_model_settings_for_provider(self, *, provider: str, model: str, tool_choice: str | None) -> ModelSettings:
+    def _agent_model_settings_for_provider(
+        self, *, provider: str, model: str, tool_choice: str | None
+    ) -> ModelSettings:
         if provider == "chat_completions_v1":
             return ModelSettings(tool_choice=tool_choice)
         settings = chatkit_model_settings_for_model(
@@ -578,6 +582,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             request_context = ctx.context.request_context
             response = await self._sources.list_sources(
                 clerk_user_id=request_context.clerk_user_id,
+                library_id=request_context.library_id,
                 query=query,
                 tag_ids=tag_ids or [],
                 tag_match_mode="any" if tag_match_mode == "any" else "all",
@@ -592,6 +597,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             request_context = ctx.context.request_context
             response = await self._sources.list_filesystem(
                 clerk_user_id=request_context.clerk_user_id,
+                library_id=request_context.library_id,
                 folder_id=folder_id,
             )
             return compact_chatkit_filesystem_list_payload(response.model_dump(mode="json"))
@@ -608,6 +614,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             request_context = ctx.context.request_context
             response = await self._sources.search_filesystem(
                 clerk_user_id=request_context.clerk_user_id,
+                library_id=request_context.library_id,
                 query=query,
                 tag_ids=tag_ids or [],
                 tag_match_mode="any" if tag_match_mode == "any" else "all",
@@ -701,7 +708,10 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
         async def list_tags_tool(ctx: ChatKitToolContext) -> dict[str, object]:
             """List available auto and manual tag slugs for filtering retrieval."""
             request_context = ctx.context.request_context
-            tags = await self._sources.list_tags(clerk_user_id=request_context.clerk_user_id)
+            tags = await self._sources.list_tags(
+                clerk_user_id=request_context.clerk_user_id,
+                library_id=request_context.library_id,
+            )
             return {"tags": [compact_chatkit_tag(tag.model_dump(mode="json")) for tag in tags]}
 
         @function_tool(name_override="create_tag")
@@ -826,6 +836,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 request=SearchRequest(
                     query=query,
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     virtual_paths=virtual_paths or [],
@@ -868,6 +879,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 request=BranchSearchRequest(
                     query=query,
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     virtual_paths=virtual_paths or [],
@@ -1233,6 +1245,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 payload=QaRequest(
                     prompt=question,
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_source_ids,
                     tag_ids=tag_ids or [],
                     max_results=max(1, min(max_results, 16)),
@@ -1385,6 +1398,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 clerk_user_id=request_context.clerk_user_id,
                 payload=QaRequest(
                     prompt=prompt,
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
@@ -1427,6 +1441,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 payload=FreeformRequest(
                     prompt=prompt,
                     mode="creative" if mode == "creative" else "grounded",
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
@@ -1503,6 +1518,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                 payload=ImageGenerationRequest(
                     prompt=prompt,
                     size=size,
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",
@@ -1539,6 +1555,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
                     source_text=source_text,
                     voice=voice,
                     response_format=cast(Any, response_format if response_format in {"mp3", "wav", "opus"} else "mp3"),
+                    library_id=request_context.library_id,
                     selected_source_ids=selected_scope(request_context, selected_source_ids),
                     tag_ids=tag_ids or [],
                     tag_match_mode="any" if tag_match_mode == "any" else "all",

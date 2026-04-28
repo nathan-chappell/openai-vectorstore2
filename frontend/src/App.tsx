@@ -17,6 +17,7 @@ import {
   getAuthenticatedUser,
   getSource,
   listFilesystem,
+  listLibraries,
   listTags,
   listTasks,
   resplitSource,
@@ -54,6 +55,7 @@ import type {
   FilesystemBreadcrumb,
   FilesystemEntrySummary,
   FilesystemListResponse,
+  LibrarySummary,
   SourceDetail,
   TagSummary,
   TaskSummary,
@@ -98,6 +100,8 @@ function syncBrowserAdminRoute(open: boolean): void {
 export function App({ authMode }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
+  const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
+  const [selectedLibraryId, setSelectedLibraryId] = useState<string | null>(null);
   const [knownEntries, setKnownEntries] = useState<Record<string, FilesystemEntrySummary>>({});
   const [tags, setTags] = useState<TagSummary[]>([]);
   const [tasks, setTasks] = useState<TaskSummary[]>([]);
@@ -134,6 +138,9 @@ export function App({ authMode }: AppProps) {
   const [previewSplitPercent, setPreviewSplitPercent] = useState(() => readStoredPreviewSplit());
   const canGoBackFolder = folderBackStack.length > 0;
   const canGoForwardFolder = folderForwardStack.length > 0;
+  const selectedLibrary = libraries.find((library) => library.id === selectedLibraryId) ?? null;
+  const activeLibraryId = selectedLibraryId;
+  const libraryWritable = selectedLibrary?.writable ?? true;
 
   const selectedEntryIdSet = useMemo(() => new Set(selectedEntryIds), [selectedEntryIds]);
   const folderEntries = filesystem?.entries ?? [];
@@ -226,14 +233,14 @@ export function App({ authMode }: AppProps) {
   }, [rememberEntitySearchItems]);
 
   const loadFolder = useCallback(
-    async (folderId: string | null): Promise<FilesystemListResponse> => {
-      const response = await listFilesystem({ folderId });
+    async (folderId: string | null, libraryIdOverride: string | null = activeLibraryId): Promise<FilesystemListResponse> => {
+      const response = await listFilesystem({ libraryId: libraryIdOverride, folderId });
       setFilesystem(response);
       setCurrentFolderId(response.current.parent_id === null ? null : response.current.id);
       cacheEntries([response.current, ...response.entries]);
       return response;
     },
-    [cacheEntries],
+    [activeLibraryId, cacheEntries],
   );
 
   const focusFirstExplorerRow = useCallback((): void => {
@@ -248,6 +255,35 @@ export function App({ authMode }: AppProps) {
     setSelectionAnchorEntryId(null);
     setSelectedSource(null);
   }, []);
+
+  const changeLibrary = useCallback(
+    async (libraryId: string): Promise<void> => {
+      setSelectedLibraryId(libraryId);
+      setCurrentFolderId(null);
+      setFolderBackStack([]);
+      setFolderForwardStack([]);
+      clearExplorerSelection();
+      setLibraryResults([]);
+      setLibraryResultCount(0);
+      setBusy(true);
+      try {
+        const [libraryList, tagList, response] = await Promise.all([
+          listLibraries(),
+          listTags(libraryId),
+          loadFolder(null, libraryId),
+        ]);
+        setLibraries(libraryList.libraries);
+        setTags(tagList);
+        const library = libraryList.libraries.find((item) => item.id === libraryId);
+        setStatus(`Ready in ${library?.title ?? response.current.path}.`);
+      } catch (error) {
+        setStatus(error instanceof Error ? error.message : "Could not switch libraries.");
+      } finally {
+        setBusy(false);
+      }
+    },
+    [clearExplorerSelection, loadFolder],
+  );
 
   const navigateToFolder = useCallback(
     (folderId: string | null): void => {
@@ -294,16 +330,25 @@ export function App({ authMode }: AppProps) {
       const activeSourceId = selectedSourceIdRef.current;
       const activeFolderId = currentFolderIdRef.current;
       const detailPromise = activeSourceId
-        ? getSource(activeSourceId).catch(() => null)
+        ? getSource(activeSourceId, activeLibraryId).catch(() => null)
         : Promise.resolve<SourceDetail | null>(null);
-      const [me, tagList, taskList, detail] = await Promise.all([getAuthenticatedUser(), listTags(), listTasks(), detailPromise]);
+      const [me, libraryList, tagList, taskList, detail] = await Promise.all([
+        getAuthenticatedUser(),
+        listLibraries(),
+        listTags(activeLibraryId),
+        listTasks(),
+        detailPromise,
+      ]);
+      const nextLibraryId = selectedLibraryId ?? libraryList.default_library_id;
       setUser(me);
+      setLibraries(libraryList.libraries);
+      setSelectedLibraryId(nextLibraryId);
       setTags(tagList);
       setTasks(taskList.tasks);
       if (detail) {
         setSelectedSource(detail);
       }
-      const response = await loadFolder(activeFolderId);
+      const response = await loadFolder(activeFolderId, nextLibraryId);
       const activeTask = taskList.tasks.find(isActiveTask);
       setStatus(activeTask ? `${activeTask.kind} ${activeTask.status}: ${activeTask.title}.` : `Ready at ${response.current.path}.`);
     } catch (error) {
@@ -311,7 +356,7 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }, [loadFolder]);
+  }, [activeLibraryId, loadFolder, selectedLibraryId]);
 
   useEffect(() => {
     knownEntriesRef.current = knownEntries;
@@ -334,9 +379,10 @@ export function App({ authMode }: AppProps) {
   useEffect(() => {
     setChatKitMetadataGetter(() => ({
       origin: "web",
+      library_id: activeLibraryId,
     }));
     return () => setChatKitMetadataGetter(null);
-  }, []);
+  }, [activeLibraryId]);
 
   useEffect(() => {
     void refreshAll();
@@ -361,14 +407,14 @@ export function App({ authMode }: AppProps) {
   const openSource = useCallback(async (sourceId: string): Promise<void> => {
     setStatus("Loading file preview.");
     try {
-      const detail = await getSource(sourceId);
+      const detail = await getSource(sourceId, activeLibraryId);
       setSelectedSource(detail);
       setStatus(`Previewing ${detail.virtual_path ?? detail.display_title}.`);
     } catch (error) {
       setSelectedSource(null);
       setStatus(error instanceof Error ? error.message : "Could not load file detail.");
     }
-  }, []);
+  }, [activeLibraryId]);
 
   const applyExplorerSelection = useCallback(
     (entryIds: string[], focusedEntryId: string, anchorEntryId: string | null): void => {
@@ -437,13 +483,17 @@ export function App({ authMode }: AppProps) {
   );
 
   const createFolderInCurrentFolder = useCallback(async (): Promise<void> => {
+    if (!libraryWritable) {
+      setStatus("This public library is read-only.");
+      return;
+    }
     const name = window.prompt("Folder name", "New folder")?.trim();
     if (!name) {
       return;
     }
     setBusy(true);
     try {
-      await createFolder({ parent_id: filesystem?.current.id ?? null, name });
+      await createFolder({ library_id: activeLibraryId, parent_id: filesystem?.current.id ?? null, name });
       await refreshExplorer();
       setStatus(`Created ${name}.`);
     } catch (error) {
@@ -451,9 +501,13 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }, [filesystem?.current.id, refreshExplorer]);
+  }, [activeLibraryId, filesystem?.current.id, libraryWritable, refreshExplorer]);
 
   const renameFocusedEntry = useCallback(async (): Promise<void> => {
+    if (!libraryWritable) {
+      setStatus("This public library is read-only.");
+      return;
+    }
     const entry = selectedEntryIds.length === 1 ? knownEntries[selectedEntryIds[0]] : null;
     if (!entry) {
       return;
@@ -472,9 +526,13 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }, [knownEntries, refreshExplorer, selectedEntryIds]);
+  }, [knownEntries, libraryWritable, refreshExplorer, selectedEntryIds]);
 
   const requestDeleteSelectedEntries = useCallback((): void => {
+    if (!libraryWritable) {
+      setStatus("This public library is read-only.");
+      return;
+    }
     if (!selectedEntryIds.length) {
       return;
     }
@@ -486,7 +544,7 @@ export function App({ authMode }: AppProps) {
       return;
     }
     setDeleteDialog({ entries, phase: "confirming" });
-  }, [knownEntries, selectedEntryIds]);
+  }, [knownEntries, libraryWritable, selectedEntryIds]);
 
   const confirmDeleteSelectedEntries = useCallback(async (): Promise<void> => {
     if (!deleteDialog) {
@@ -523,6 +581,10 @@ export function App({ authMode }: AppProps) {
 
   const moveEntriesToFolder = useCallback(
     async (entryIds: string[], folderId: string): Promise<void> => {
+      if (!libraryWritable) {
+        setStatus("This public library is read-only.");
+        return;
+      }
       const movingIds = entryIds.filter((entryId) => entryId !== folderId);
       if (!movingIds.length) {
         return;
@@ -541,7 +603,7 @@ export function App({ authMode }: AppProps) {
         setBusy(false);
       }
     },
-    [refreshExplorer],
+    [libraryWritable, refreshExplorer],
   );
 
   const runLibrarySearch = useCallback(
@@ -557,6 +619,7 @@ export function App({ authMode }: AppProps) {
       try {
         const response = await searchChunks({
           query,
+          libraryId: activeLibraryId,
           tagIds,
           tagMatchMode: "all",
           maxResults: 24,
@@ -596,7 +659,7 @@ export function App({ authMode }: AppProps) {
         setLibrarySearching(false);
       }
     },
-    [libraryQuery, rememberEntitySearchItems, selectedExplorerTagId],
+    [activeLibraryId, libraryQuery, rememberEntitySearchItems, selectedExplorerTagId],
   );
 
   const changeLibraryTag = useCallback(
@@ -611,10 +674,14 @@ export function App({ authMode }: AppProps) {
     if (!selectedSource) {
       return;
     }
+    if (!libraryWritable) {
+      setStatus("This public library is read-only.");
+      return;
+    }
     setBusy(true);
     try {
       const response = await resplitSource(selectedSource.id, { user_guidance: uploadGuidance });
-      const detail = await getSource(selectedSource.id);
+      const detail = await getSource(selectedSource.id, activeLibraryId);
       setSelectedSource(detail);
       setTasks((await listTasks()).tasks);
       await refreshExplorer();
@@ -624,18 +691,26 @@ export function App({ authMode }: AppProps) {
     } finally {
       setBusy(false);
     }
-  }, [refreshExplorer, selectedSource, uploadGuidance]);
+  }, [activeLibraryId, libraryWritable, refreshExplorer, selectedSource, uploadGuidance]);
 
   const saveSelectedSourceTag = useCallback(
     async (tagSlug: string | null): Promise<void> => {
       if (!selectedSource) {
         return;
       }
+      if (!libraryWritable) {
+        setStatus("This public library is read-only.");
+        return;
+      }
       setBusy(true);
       try {
         const tagIds = tagSlug ? [tagSlug] : [];
         const response = await updateSourceTags(selectedSource.id, { tag_ids: tagIds });
-        const [detail, tagList, taskList] = await Promise.all([getSource(selectedSource.id), listTags(), listTasks()]);
+        const [detail, tagList, taskList] = await Promise.all([
+          getSource(selectedSource.id, activeLibraryId),
+          listTags(activeLibraryId),
+          listTasks(),
+        ]);
         setSelectedSource(detail);
         setTags(tagList);
         setTasks(taskList.tasks);
@@ -647,7 +722,7 @@ export function App({ authMode }: AppProps) {
         setBusy(false);
       }
     },
-    [refreshExplorer, selectedSource],
+    [activeLibraryId, libraryWritable, refreshExplorer, selectedSource],
   );
 
   const revealFileInExplorer = useCallback(
@@ -659,7 +734,7 @@ export function App({ authMode }: AppProps) {
         entry = Object.values(entriesById).find((item) => item.source_id === sourceId) ?? null;
       }
       if (!entry && sourceId) {
-        const search = await searchFilesystem({ query: sourceId, pageSize: 1 });
+        const search = await searchFilesystem({ libraryId: activeLibraryId, query: sourceId, pageSize: 1 });
         searchedEntries = search.entries;
         entry = search.entries[0] ?? null;
       }
@@ -690,7 +765,7 @@ export function App({ authMode }: AppProps) {
       });
       return { ok: true, entry_id: revealedEntry.id, source_id: revealedEntry.source_id, path: revealedEntry.path };
     },
-    [cacheEntries, currentFolderId, loadFolder, openSource, scheduleClientToolUiUpdate],
+    [activeLibraryId, cacheEntries, currentFolderId, loadFolder, openSource, scheduleClientToolUiUpdate],
   );
 
   const searchChatEntities = useCallback(
@@ -876,7 +951,10 @@ export function App({ authMode }: AppProps) {
         status={status}
         tasks={tasks}
         user={user}
+        libraries={libraries}
+        selectedLibraryId={selectedLibraryId}
         adminOpen={adminOpen}
+        onLibraryChange={(libraryId) => void changeLibrary(libraryId)}
         onRefresh={() => void refreshAll()}
         onToggleAdmin={toggleAdminPanel}
       />
@@ -896,7 +974,9 @@ export function App({ authMode }: AppProps) {
           currentFolder={filesystem?.current ?? null}
           entries={visibleEntries}
           focusedEntryId={focusedEntryId}
+          libraryId={activeLibraryId}
           libraryQuery={libraryQuery}
+          libraryWritable={libraryWritable}
           libraryResultCount={libraryResultCount}
           libraryResults={libraryResults}
           librarySearching={librarySearching}

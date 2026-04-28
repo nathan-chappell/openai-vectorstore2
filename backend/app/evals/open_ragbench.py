@@ -192,15 +192,36 @@ class EvalReport(BaseModel):
 
 
 class EvalAppClient:
-    def __init__(self, *, client: httpx.AsyncClient, auth_token: str) -> None:
+    def __init__(self, *, client: httpx.AsyncClient, auth_token: str, library_id: str | None = None) -> None:
         self._client = client
         self._headers = {"Authorization": f"Bearer {auth_token}"}
+        self._library_id = library_id
+
+    async def create_library(
+        self,
+        *,
+        title: str,
+        description: str | None = None,
+        slug: str | None = None,
+    ) -> str:
+        response = await self._client.post(
+            "/api/libraries",
+            headers=self._headers,
+            json={"title": title, "description": description, "visibility": "public", "slug": slug},
+        )
+        response.raise_for_status()
+        payload = cast(dict[str, object], response.json())
+        library_id = payload.get("id")
+        if not isinstance(library_id, str) or not library_id:
+            raise RuntimeError(f"Library creation did not return an id: {payload!r}")
+        self._library_id = library_id
+        return library_id
 
     async def create_folder(self, *, name: str, parent_id: str | None = None) -> str:
         response = await self._client.post(
             "/api/filesystem/folders",
             headers=self._headers,
-            json={"name": name, "parent_id": parent_id},
+            json={"name": name, "parent_id": parent_id, "library_id": self._library_id},
         )
         response.raise_for_status()
         payload = cast(dict[str, object], response.json())
@@ -218,16 +239,19 @@ class EvalAppClient:
         virtual_name: str,
         user_guidance: str,
     ) -> tuple[str, str | None]:
+        form_data = {
+            "tag_ids": tag_id,
+            "folder_id": folder_id,
+            "virtual_name": virtual_name,
+            "user_guidance": user_guidance,
+        }
+        if self._library_id is not None:
+            form_data["library_id"] = self._library_id
         response = await self._client.post(
             "/api/sources",
             headers=self._headers,
             files={"file": (path.name, path.read_bytes(), "application/pdf")},
-            data={
-                "tag_ids": tag_id,
-                "folder_id": folder_id,
-                "virtual_name": virtual_name,
-                "user_guidance": user_guidance,
-            },
+            data=form_data,
         )
         response.raise_for_status()
         payload = cast(dict[str, object], response.json())
@@ -259,7 +283,7 @@ class EvalAppClient:
         response = await self._client.post(
             "/api/search",
             headers=self._headers,
-            json={"query": query, "tag_ids": [tag_id], "max_results": max_results},
+            json={"query": query, "library_id": self._library_id, "tag_ids": [tag_id], "max_results": max_results},
         )
         response.raise_for_status()
         payload = cast(dict[str, object], response.json())
@@ -272,7 +296,7 @@ class EvalAppClient:
         response = await self._client.post(
             "/api/actions/qa",
             headers=self._headers,
-            json={"prompt": query, "tag_ids": [tag_id], "max_results": max_results},
+            json={"prompt": query, "library_id": self._library_id, "tag_ids": [tag_id], "max_results": max_results},
         )
         response.raise_for_status()
         payload = cast(dict[str, object], response.json())
@@ -373,6 +397,104 @@ def select_subset(
         negative_doc_target=negative_doc_target,
         documents=documents,
         queries=subset_queries,
+    )
+
+
+def grow_subset(
+    *,
+    dataset: OpenRagbenchDataset,
+    manifest: SubsetManifest,
+    additional_docs: int = 20,
+    seed: int | None = None,
+) -> SubsetManifest:
+    if additional_docs <= 0:
+        return manifest
+    existing_doc_ids = {doc.doc_id for doc in manifest.documents}
+    existing_positive_count = _split_count(manifest, "positive")
+    existing_negative_count = _split_count(manifest, "negative")
+    positive_increment = round(additional_docs * existing_positive_count / max(len(manifest.documents), 1))
+    positive_increment = min(max(positive_increment, 1), additional_docs)
+    negative_increment = additional_docs - positive_increment
+    positive_doc_ids = {qrel.doc_id for qrel in dataset.qrels.values()}
+    query_counts = Counter(qrel.doc_id for qrel in dataset.qrels.values())
+    positive_buckets: dict[str, list[str]] = defaultdict(list)
+    negative_buckets: dict[str, list[str]] = defaultdict(list)
+    category_order = list(manifest.categories)
+    for doc_id, doc in dataset.corpus_docs.items():
+        if doc_id in existing_doc_ids or doc_id not in dataset.pdf_urls:
+            continue
+        assigned_category = _assigned_category(doc.categories, category_order)
+        if assigned_category is None:
+            continue
+        if doc_id in positive_doc_ids:
+            positive_buckets[assigned_category].append(doc_id)
+        else:
+            negative_buckets[assigned_category].append(doc_id)
+
+    growth_seed = seed if seed is not None else manifest.seed + len(manifest.documents)
+    selected_positive_doc_ids = _select_weighted_doc_ids(
+        buckets=positive_buckets,
+        category_order=category_order,
+        target_count=positive_increment,
+        seed=growth_seed,
+    )
+    selected_negative_doc_ids = _select_weighted_doc_ids(
+        buckets=negative_buckets,
+        category_order=category_order,
+        target_count=negative_increment,
+        seed=growth_seed + 1,
+    )
+    new_documents: list[SubsetDoc] = []
+    for split, selected_doc_ids in (("positive", selected_positive_doc_ids), ("negative", selected_negative_doc_ids)):
+        for doc_id in selected_doc_ids:
+            doc = dataset.corpus_docs[doc_id]
+            assigned_category = _assigned_category(doc.categories, category_order)
+            if assigned_category is None:
+                continue
+            new_documents.append(
+                SubsetDoc(
+                    doc_id=doc_id,
+                    title=doc.title or doc_id,
+                    abstract=doc.abstract,
+                    categories=doc.categories,
+                    assigned_category=assigned_category,
+                    split=cast(Literal["positive", "negative"], split),
+                    pdf_url=dataset.pdf_urls[doc_id],
+                    query_count=query_counts[doc_id],
+                )
+            )
+    documents = sorted(
+        [*manifest.documents, *new_documents], key=lambda item: (item.split, item.assigned_category, item.doc_id)
+    )
+    selected_positive_ids = {doc.doc_id for doc in documents if doc.split == "positive"}
+    category_by_doc_id = {doc.doc_id: doc.assigned_category for doc in documents}
+    queries: list[SubsetQuery] = []
+    for query_id, qrel in sorted(dataset.qrels.items()):
+        if qrel.doc_id not in selected_positive_ids:
+            continue
+        query = dataset.queries.get(query_id)
+        if query is None:
+            continue
+        queries.append(
+            SubsetQuery(
+                query_id=query_id,
+                query=query.query,
+                query_type=query.type,
+                query_source=query.source,
+                expected_doc_id=qrel.doc_id,
+                section_id=qrel.section_id,
+                reference_answer=dataset.answers.get(query_id),
+                category=category_by_doc_id[qrel.doc_id],
+            )
+        )
+    return manifest.model_copy(
+        update={
+            "dataset_revision": dataset.dataset_revision or manifest.dataset_revision,
+            "positive_doc_target": existing_positive_count + positive_increment,
+            "negative_doc_target": existing_negative_count + negative_increment,
+            "documents": documents,
+            "queries": queries,
+        }
     )
 
 
@@ -750,7 +872,7 @@ def render_summary_markdown(*, manifest: SubsetManifest, uploads: UploadManifest
             "",
             "| System / baseline | Dataset and scope | Reported metric | Source |",
             "|---|---|---:|---|",
-            f"| This app run | Open RAGBench arXiv PDF subset, 100 docs / {report.query_count} queries | Recall@10={_format_optional_metric(recall_at_10)}, MRR@10={_format_optional_metric(mrr_at_10)}, nDCG@10={_format_optional_metric(ndcg_at_10)} | this report |",
+            f"| This app run | Open RAGBench arXiv PDF subset, {len(manifest.documents)} docs / {report.query_count} queries | Recall@10={_format_optional_metric(recall_at_10)}, MRR@10={_format_optional_metric(mrr_at_10)}, nDCG@10={_format_optional_metric(ndcg_at_10)} | this report |",
             f"| Open RAGBench full draft dataset | arXiv PDF corpus, 1000 docs, 3045 QA pairs, 400 positive docs, 600 hard negatives | dataset reference | [Vectara Open RAG Bench]({OPEN_RAGBENCH_REPO_URL}) |",
             f"| BM25 | BEIR SciFact scientific retrieval | nDCG@10=0.665 | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
             f"| BM25 + cross-encoder reranker | BEIR SciFact scientific retrieval | nDCG@10=0.688 | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
@@ -1084,6 +1206,7 @@ async def setup_and_upload_progressively(
     categories: Sequence[str],
     positive_docs: int,
     negative_docs: int,
+    grow_by: int,
     seed: int,
     max_workers: int,
     task_timeout_seconds: float,
@@ -1095,6 +1218,19 @@ async def setup_and_upload_progressively(
     if subset_path.exists():
         manifest = read_subset_manifest(subset_path)
         logger.info("open_ragbench_subset_reused run_id=%s subset_path=%s", run_id, subset_path)
+        if grow_by > 0:
+            dataset = load_remote_dataset(max_workers=max_workers)
+            before_count = len(manifest.documents)
+            manifest = grow_subset(dataset=dataset, manifest=manifest, additional_docs=grow_by)
+            manifest = enrich_manifest_titles(manifest=manifest)
+            write_json(subset_path, manifest)
+            logger.info(
+                "open_ragbench_subset_grown run_id=%s previous_documents=%s documents=%s grow_by=%s",
+                run_id,
+                before_count,
+                len(manifest.documents),
+                grow_by,
+            )
     else:
         logger.info("open_ragbench_subset_build_started run_id=%s subset_path=%s", run_id, subset_path)
         dataset = load_remote_dataset(max_workers=max_workers)
@@ -1246,12 +1382,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             _setup_upload_from_cli(
                 base_url=args.base_url,
                 auth_token=args.auth_token,
+                library_id=args.library_id,
+                create_public_library=args.create_public_library,
+                public_library_title=args.public_library_title,
+                public_library_slug=args.public_library_slug,
                 run_id=run_id,
                 output_root=output_root,
                 tag_id=tag_id,
                 categories=args.categories,
                 positive_docs=args.positive_docs,
                 negative_docs=args.negative_docs,
+                grow_by=args.grow_by,
                 seed=args.seed,
                 max_workers=args.max_workers,
                 task_timeout_seconds=args.task_timeout,
@@ -1289,6 +1430,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _upload_from_cli(
                 base_url=args.base_url,
                 auth_token=args.auth_token,
+                library_id=args.library_id,
                 manifest=manifest,
                 pdf_dir=output_dir / "pdfs",
                 tag_id=tag_id,
@@ -1316,6 +1458,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             _run_eval_from_cli(
                 base_url=args.base_url,
                 auth_token=args.auth_token,
+                library_id=args.library_id,
                 manifest=manifest,
                 uploads=uploads,
                 max_results=args.max_results,
@@ -1745,6 +1888,7 @@ async def _upload_from_cli(
     *,
     base_url: str,
     auth_token: str,
+    library_id: str | None,
     manifest: SubsetManifest,
     pdf_dir: Path,
     tag_id: str,
@@ -1753,7 +1897,7 @@ async def _upload_from_cli(
 ) -> UploadManifest:
     async with httpx.AsyncClient(base_url=base_url, timeout=None, follow_redirects=True) as client:
         return await upload_subset_to_app(
-            api=EvalAppClient(client=client, auth_token=auth_token),
+            api=EvalAppClient(client=client, auth_token=auth_token, library_id=library_id),
             manifest=manifest,
             pdf_dir=pdf_dir,
             tag_id=tag_id,
@@ -1766,25 +1910,38 @@ async def _setup_upload_from_cli(
     *,
     base_url: str,
     auth_token: str,
+    library_id: str | None,
+    create_public_library: bool,
+    public_library_title: str,
+    public_library_slug: str,
     run_id: str,
     output_root: Path,
     tag_id: str,
     categories: Sequence[str],
     positive_docs: int,
     negative_docs: int,
+    grow_by: int,
     seed: int,
     max_workers: int,
     task_timeout_seconds: float,
 ) -> UploadManifest:
     async with httpx.AsyncClient(base_url=base_url, timeout=None, follow_redirects=True) as client:
+        api = EvalAppClient(client=client, auth_token=auth_token, library_id=library_id)
+        if create_public_library:
+            await api.create_library(
+                title=public_library_title,
+                description="Public read-only Open RAGBench arXiv PDF set for demos, testing, and retrieval evaluation.",
+                slug=public_library_slug,
+            )
         return await setup_and_upload_progressively(
-            api=EvalAppClient(client=client, auth_token=auth_token),
+            api=api,
             run_id=run_id,
             output_root=output_root,
             tag_id=tag_id,
             categories=categories,
             positive_docs=positive_docs,
             negative_docs=negative_docs,
+            grow_by=grow_by,
             seed=seed,
             max_workers=max_workers,
             task_timeout_seconds=task_timeout_seconds,
@@ -1795,6 +1952,7 @@ async def _run_eval_from_cli(
     *,
     base_url: str,
     auth_token: str,
+    library_id: str | None,
     manifest: SubsetManifest,
     uploads: UploadManifest,
     max_results: int,
@@ -1804,7 +1962,7 @@ async def _run_eval_from_cli(
     answer_max_results: int,
 ) -> EvalReport:
     async with httpx.AsyncClient(base_url=base_url, timeout=None, follow_redirects=True) as client:
-        api = EvalAppClient(client=client, auth_token=auth_token)
+        api = EvalAppClient(client=client, auth_token=auth_token, library_id=library_id)
         report = await run_retrieval_eval(
             api=api,
             manifest=manifest,
@@ -1875,6 +2033,11 @@ def _build_parser() -> argparse.ArgumentParser:
     setup_upload.add_argument("--base-url", default="http://localhost:8000")
     setup_upload.add_argument("--auth-token", default=DEFAULT_AUTH_TOKEN)
     setup_upload.add_argument("--tag-id", default=None)
+    setup_upload.add_argument("--library-id", default=None)
+    setup_upload.add_argument("--create-public-library", action="store_true")
+    setup_upload.add_argument("--public-library-title", default="Open RAGBench arXiv demo library")
+    setup_upload.add_argument("--public-library-slug", default="open-ragbench-arxiv")
+    setup_upload.add_argument("--grow-by", type=int, default=20)
     setup_upload.add_argument("--positive-docs", type=int, default=40)
     setup_upload.add_argument("--negative-docs", type=int, default=60)
     setup_upload.add_argument("--seed", type=int, default=DEFAULT_SEED)
@@ -1895,6 +2058,7 @@ def _build_parser() -> argparse.ArgumentParser:
     upload.add_argument("run_dir")
     upload.add_argument("--base-url", default="http://localhost:8000")
     upload.add_argument("--auth-token", default=DEFAULT_AUTH_TOKEN)
+    upload.add_argument("--library-id", default=None)
     upload.add_argument("--tag-id", default=None)
     upload.add_argument("--task-timeout", type=float, default=900.0)
 
@@ -1907,6 +2071,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("run_dir")
     run.add_argument("--base-url", default="http://localhost:8000")
     run.add_argument("--auth-token", default=DEFAULT_AUTH_TOKEN)
+    run.add_argument("--library-id", default=None)
     run.add_argument("--max-results", type=int, default=10)
     run.add_argument("--max-queries", type=int, default=None)
     run.add_argument("--retrieval-concurrency", type=int, default=50)

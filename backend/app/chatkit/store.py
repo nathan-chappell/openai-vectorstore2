@@ -27,6 +27,7 @@ class VectorstoreChatContext:
     role: str | None
     credit_floor_usd: float
     bearer_token: str
+    library_id: str | None
     selected_source_ids: list[str]
     thread_origin: str | None
 
@@ -102,7 +103,7 @@ class VectorstoreChatStore(Store[VectorstoreChatContext], AttachmentStore[Vector
                     query = query.where(
                         AppChatEntry.sequence < cursor.sequence
                         if order == "desc"
-                            else AppChatEntry.sequence > cursor.sequence
+                        else AppChatEntry.sequence > cursor.sequence
                     )
             query = query.where(AppChatEntry.visibility == "active")
             query = query.order_by(

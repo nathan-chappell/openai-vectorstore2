@@ -1,5 +1,5 @@
 import type { AppProps } from "../lib/appTypes";
-import type { AuthUser, TaskSummary } from "../lib/types";
+import type { AuthUser, LibrarySummary, TaskSummary } from "../lib/types";
 
 export function WorkspaceHeader({
   authMode,
@@ -7,7 +7,10 @@ export function WorkspaceHeader({
   status,
   tasks,
   user,
+  libraries,
+  selectedLibraryId,
   adminOpen,
+  onLibraryChange,
   onRefresh,
   onToggleAdmin,
 }: {
@@ -16,7 +19,10 @@ export function WorkspaceHeader({
   status: string;
   tasks: TaskSummary[];
   user: AuthUser | null;
+  libraries: LibrarySummary[];
+  selectedLibraryId: string | null;
   adminOpen: boolean;
+  onLibraryChange: (libraryId: string) => void;
   onRefresh: () => void;
   onToggleAdmin: () => void;
 }) {
@@ -36,6 +42,21 @@ export function WorkspaceHeader({
         <span>Recent Tasks</span>
         <strong>{latestTask ? `${latestTask.kind} | ${latestTask.status}` : "No tasks yet"}</strong>
       </div>
+      <label className="library-switcher">
+        <span>Library</span>
+        <select
+          value={selectedLibraryId ?? ""}
+          onChange={(event) => onLibraryChange(event.currentTarget.value)}
+          disabled={!libraries.length || busy}
+        >
+          {libraries.map((library) => (
+            <option key={library.id} value={library.id}>
+              {library.personal ? "Personal" : library.title}
+              {library.visibility === "public" ? " (public)" : ""}
+            </option>
+          ))}
+        </select>
+      </label>
       {canOpenSettings ? (
         <button
           type="button"

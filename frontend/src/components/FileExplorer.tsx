@@ -27,6 +27,7 @@ export const FileExplorer = memo(function FileExplorer({
   currentFolder,
   entries,
   focusedEntryId,
+  libraryId,
   libraryQuery,
   libraryResultCount,
   libraryResults,
@@ -39,6 +40,7 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIdSet,
   selectedExplorerTagId,
   selectedSource,
+  libraryWritable,
   selectionAnchorEntryId,
   tags,
   uploadGuidance,
@@ -73,6 +75,7 @@ export const FileExplorer = memo(function FileExplorer({
   currentFolder: FilesystemEntrySummary | null;
   entries: FilesystemEntrySummary[];
   focusedEntryId: string | null;
+  libraryId: string | null;
   libraryQuery: string;
   libraryResultCount: number;
   libraryResults: LibrarySearchResult[];
@@ -85,6 +88,7 @@ export const FileExplorer = memo(function FileExplorer({
   selectedEntryIdSet: Set<string>;
   selectedExplorerTagId: string | null;
   selectedSource: SourceDetail | null;
+  libraryWritable: boolean;
   selectionAnchorEntryId: string | null;
   tags: TagSummary[];
   uploadGuidance: string;
@@ -138,7 +142,8 @@ export const FileExplorer = memo(function FileExplorer({
           </button>
         </div>
         <SourcePreview
-          busy={busy}
+          busy={busy || !libraryWritable}
+          libraryId={libraryId}
           selectedSource={selectedSource}
           uploadGuidance={uploadGuidance}
           tags={tags}
@@ -299,7 +304,7 @@ export const FileExplorer = memo(function FileExplorer({
         </button>
       </div>
       <div className="explorer-commandbar">
-        <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy}>
+        <button type="button" className="secondary-button" onClick={onCreateFolder} disabled={busy || !libraryWritable}>
           New Folder
         </button>
         <div

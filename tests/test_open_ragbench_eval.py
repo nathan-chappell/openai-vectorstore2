@@ -33,6 +33,7 @@ from backend.app.evals.open_ragbench import (
     run_answer_eval,
     run_retrieval_eval,
     select_subset,
+    grow_subset,
     upload_subset_to_app,
 )
 
@@ -84,6 +85,30 @@ def test_open_ragbench_metrics_use_single_relevant_doc_rank() -> None:
     assert metrics[1].k == 3
     assert metrics[1].recall == pytest.approx(2 / 3)
     assert metrics[1].mrr == pytest.approx((1 + 1 / 3) / 3)
+
+
+def test_open_ragbench_growth_preserves_existing_docs_and_adds_twenty() -> None:
+    dataset = _dataset_fixture()
+    manifest = select_subset(
+        dataset=dataset,
+        run_id="growth-test",
+        categories=["cs.LG", "cs.AI", "cs.CV"],
+        positive_doc_target=3,
+        negative_doc_target=3,
+        seed=11,
+    )
+
+    grown = grow_subset(dataset=dataset, manifest=manifest, additional_docs=6, seed=22)
+
+    original_doc_ids = {doc.doc_id for doc in manifest.documents}
+    assert len(grown.documents) == len(manifest.documents) + 6
+    assert original_doc_ids <= {doc.doc_id for doc in grown.documents}
+    assert len({doc.doc_id for doc in grown.documents}) == len(grown.documents)
+    assert grown.positive_doc_target == len([doc for doc in grown.documents if doc.split == "positive"])
+    assert grown.negative_doc_target == len([doc for doc in grown.documents if doc.split == "negative"])
+    assert {query.expected_doc_id for query in grown.queries} <= {
+        doc.doc_id for doc in grown.documents if doc.split == "positive"
+    }
 
 
 def test_open_ragbench_query_review_includes_question_docs_and_answers() -> None:

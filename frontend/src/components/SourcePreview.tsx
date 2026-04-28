@@ -18,6 +18,7 @@ import {
 
 export function SourcePreview({
   busy,
+  libraryId,
   selectedSource,
   uploadGuidance,
   tags,
@@ -26,6 +27,7 @@ export function SourcePreview({
   onSaveSourceTag,
 }: {
   busy: boolean;
+  libraryId: string | null;
   selectedSource: SourceDetail | null;
   uploadGuidance: string;
   tags: TagSummary[];
@@ -50,7 +52,7 @@ export function SourcePreview({
       }
       setPreviewResource({ state: "loading" });
       try {
-        const response = await readSourceContentBlob(source.id);
+        const response = await readSourceContentBlob(source.id, libraryId);
         const mediaType = response.mediaType ?? source.media_type;
         if (isTextPreview(source, mediaType)) {
           const rawText = await response.blob.text();
@@ -90,7 +92,7 @@ export function SourcePreview({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [previewMediaType, previewSourceId, previewSourceKind]);
+  }, [libraryId, previewMediaType, previewSourceId, previewSourceKind]);
 
   useEffect(() => {
     setTagDraft(selectedSource?.tags[0]?.slug ?? "");

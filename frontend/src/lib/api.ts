@@ -29,6 +29,8 @@ import type {
   FreeCreditRequestStatus,
   FreeCreditRequestSummary,
   IngestFinalizeResponse,
+  LibraryCreateRequest,
+  LibraryListResponse,
   PaginationParams,
   PaymentAttemptListResponse,
   PaymentAttemptStatus,
@@ -73,6 +75,7 @@ let bearerTokenGetter: (() => Promise<string | null>) | null = null;
 let chatKitMetadataGetter: (() => ChatKitMetadata | null) | null = null;
 
 type SearchFilterRequestBody = {
+  library_id: string | null;
   selected_source_ids: string[];
   source_kinds: NonNullable<SearchFilterPayload["sourceKinds"]>;
   tag_ids: string[];
@@ -211,18 +214,32 @@ export async function decideAdminFreeCreditRequest(payload: AdminFreeCreditDecis
 
 export async function listSources(params: SourceListParams): Promise<SourceListResponse> {
   const searchParams = new URLSearchParams();
+  appendLibraryParam(searchParams, params.libraryId);
   appendTaggedSearchParams(searchParams, params);
   appendPaginationParams(searchParams, params);
   const suffix = searchParams.toString();
   return apiRequest<SourceListResponse>(suffix ? `/sources?${suffix}` : "/sources");
 }
 
-export async function getSource(sourceId: string): Promise<SourceDetail> {
-  return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}`);
+export async function listLibraries(): Promise<LibraryListResponse> {
+  return apiRequest<LibraryListResponse>("/libraries");
+}
+
+export async function createLibrary(payload: LibraryCreateRequest): Promise<LibraryListResponse["libraries"][number]> {
+  return apiRequest<LibraryListResponse["libraries"][number]>("/libraries", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getSource(sourceId: string, libraryId?: string | null): Promise<SourceDetail> {
+  const suffix = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : "";
+  return apiRequest<SourceDetail>(`/sources/${encodeURIComponent(sourceId)}${suffix}`);
 }
 
 export async function listFilesystem(params: FilesystemListParams = {}): Promise<FilesystemListResponse> {
   const searchParams = new URLSearchParams();
+  appendLibraryParam(searchParams, params.libraryId);
   if (params.folderId) {
     searchParams.set("folder_id", params.folderId);
   }
@@ -232,6 +249,7 @@ export async function listFilesystem(params: FilesystemListParams = {}): Promise
 
 export async function searchFilesystem(params: FilesystemSearchParams): Promise<FilesystemSearchResponse> {
   const searchParams = new URLSearchParams();
+  appendLibraryParam(searchParams, params.libraryId);
   appendTaggedSearchParams(searchParams, params);
   appendPaginationParams(searchParams, params);
   const suffix = searchParams.toString();
@@ -262,8 +280,9 @@ export async function deleteFilesystemEntries(payload: FilesystemDeleteRequest):
   });
 }
 
-export async function readSourceContentBlob(sourceId: string): Promise<{ blob: Blob; mediaType: string | null }> {
-  const response = await authenticatedFetch(`${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/content`);
+export async function readSourceContentBlob(sourceId: string, libraryId?: string | null): Promise<{ blob: Blob; mediaType: string | null }> {
+  const suffix = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : "";
+  const response = await authenticatedFetch(`${API_BASE_URL}/sources/${encodeURIComponent(sourceId)}/content${suffix}`);
   if (!response.ok) {
     throw await buildApiError(response);
   }
@@ -276,6 +295,7 @@ export async function uploadSource(
   tagIds: string[],
   folderId?: string | null,
   virtualName?: string | null,
+  libraryId?: string | null,
 ): Promise<IngestFinalizeResponse> {
   const formData = new FormData();
   formData.set("file", file, file.name);
@@ -290,6 +310,9 @@ export async function uploadSource(
   }
   if (virtualName?.trim()) {
     formData.set("virtual_name", virtualName.trim());
+  }
+  if (libraryId) {
+    formData.set("library_id", libraryId);
   }
   return apiRequest<IngestFinalizeResponse>("/sources", {
     method: "POST",
@@ -327,8 +350,9 @@ export async function deleteSource(sourceId: string): Promise<void> {
   await apiRequest<{ deleted_source_id: string }>(`/sources/${encodeURIComponent(sourceId)}`, { method: "DELETE" });
 }
 
-export async function listTags(): Promise<TagSummary[]> {
-  return apiRequest<TagSummary[]>("/tags");
+export async function listTags(libraryId?: string | null): Promise<TagSummary[]> {
+  const suffix = libraryId ? `?library_id=${encodeURIComponent(libraryId)}` : "";
+  return apiRequest<TagSummary[]>(`/tags${suffix}`);
 }
 
 export async function createTag(payload: TagCreateRequest): Promise<TagMutationResponse> {
@@ -420,6 +444,7 @@ export async function qaAction(payload: QaActionRequest): Promise<ActionResponse
     method: "POST",
     body: JSON.stringify({
       prompt: payload.prompt,
+      library_id: payload.libraryId ?? null,
       selected_source_ids: payload.selectedSourceIds ?? [],
       tag_ids: payload.tagIds ?? [],
       tag_match_mode: payload.tagMatchMode ?? "all",
@@ -432,6 +457,7 @@ export async function freeformAction(payload: FreeformActionRequest): Promise<Ac
     method: "POST",
     body: JSON.stringify({
       prompt: payload.prompt,
+      library_id: payload.libraryId ?? null,
       mode: payload.mode,
       selected_source_ids: payload.selectedSourceIds ?? [],
     }),
@@ -450,6 +476,7 @@ export async function imageAction(payload: ImageActionRequest): Promise<ActionRe
     method: "POST",
     body: JSON.stringify({
       prompt: payload.prompt,
+      library_id: payload.libraryId ?? null,
       selected_source_ids: payload.selectedSourceIds ?? [],
     }),
   });
@@ -460,6 +487,7 @@ export async function voiceAction(payload: VoiceActionRequest): Promise<ActionRe
     method: "POST",
     body: JSON.stringify({
       prompt: payload.prompt,
+      library_id: payload.libraryId ?? null,
       source_text: payload.sourceText,
       selected_source_ids: payload.selectedSourceIds ?? [],
     }),
@@ -485,6 +513,12 @@ function appendTaggedSearchParams(
   }
 }
 
+function appendLibraryParam(searchParams: URLSearchParams, libraryId?: string | null): void {
+  if (libraryId) {
+    searchParams.set("library_id", libraryId);
+  }
+}
+
 function appendPaginationParams(searchParams: URLSearchParams, params: PaginationParams): void {
   if (params.page) {
     searchParams.set("page", String(params.page));
@@ -497,6 +531,7 @@ function appendPaginationParams(searchParams: URLSearchParams, params: Paginatio
 function searchFilterRequestBody(payload: SearchFilterPayload): SearchFilterRequestBody {
   return {
     selected_source_ids: payload.selectedSourceIds ?? [],
+    library_id: payload.libraryId ?? null,
     source_kinds: payload.sourceKinds ?? [],
     tag_ids: payload.tagIds ?? [],
     tag_match_mode: payload.tagMatchMode ?? "all",
