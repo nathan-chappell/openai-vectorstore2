@@ -1,17 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import UTC, datetime
-from io import BytesIO
 import logging
-import re
 from typing import Literal, cast
-from uuid import uuid4
 
 from sqlalchemy import select
 
-from ai_portfolio_admin.contracts import PayPalReceiptReviewResult
-from ai_portfolio_admin.payments import PayPalReceiptPolicy, evaluate_paypal_receipt_review
+from ai_portfolio_admin.contracts import PaymentAttemptRecord
+from ai_portfolio_admin.payments import PayPalReceiptWorkflow
 
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
@@ -21,24 +17,6 @@ from backend.app.services.auth import AuthService
 from backend.app.services.billing import BillingService
 
 logger = logging.getLogger(__name__)
-
-_EMAIL_PATTERN = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
-_TRANSACTION_PATTERN = re.compile(
-    r"(?:transaction|txn|payment)\s*(?:id|number|#)?\s*[:#]?\s*([A-Z0-9-]{8,})",
-    re.IGNORECASE,
-)
-_USD_PATTERNS = (
-    re.compile(r"(?:US\s*)?\$\s*([0-9][0-9,]*(?:\.[0-9]{2})?)", re.IGNORECASE),
-    re.compile(r"\bUSD\s*([0-9][0-9,]*(?:\.[0-9]{2})?)", re.IGNORECASE),
-    re.compile(r"([0-9][0-9,]*(?:\.[0-9]{2})?)\s*USD\b", re.IGNORECASE),
-)
-
-
-@dataclass(frozen=True, slots=True)
-class ReceiptExtraction:
-    text: str
-    review: PayPalReceiptReviewResult
-    reason: str
 
 
 class PaymentService:
@@ -58,13 +36,8 @@ class PaymentService:
         self._billing = billing
 
     async def create_paypal_attempt(self, *, clerk_user_id: str, expected_amount_usd: float) -> PaymentAttemptSummary:
-        self._require_paypal_recipient()
-        amount = round(float(expected_amount_usd), 2)
-        if amount < self._settings.paypal_min_payment_usd or amount > self._settings.paypal_max_payment_usd:
-            raise ValueError(
-                f"Payment amount must be between ${self._settings.paypal_min_payment_usd:.2f} "
-                f"and ${self._settings.paypal_max_payment_usd:.2f}."
-            )
+        workflow = self._paypal_workflow()
+        amount = workflow.normalize_payment_amount(expected_amount_usd)
         await self._database.ensure_ready()
         async with self._database.session() as session:
             attempt = PaymentAttempt(
@@ -72,7 +45,7 @@ class PaymentService:
                 provider="paypal",
                 expected_amount_usd=amount,
                 expected_currency="USD",
-                reference_code=f"OVS2-{uuid4().hex[:10].upper()}",
+                reference_code=workflow.new_reference_code(),
                 status="pending_payment",
                 review_json={},
                 created_at=_utcnow(),
@@ -137,42 +110,30 @@ class PaymentService:
                 raise FileNotFoundError("Payment attempt was not found.")
             if attempt.status in {"confirmed_paid", "rejected_payment"}:
                 raise ValueError("This payment attempt is already closed.")
-            expected_recipient = self._require_paypal_recipient()
-            extraction = _extract_receipt(
-                payload,
+            outcome = self._paypal_workflow().review_receipt(
+                _payment_attempt_record(attempt),
+                payload=payload,
                 media_type=media_type,
-                reference_code=attempt.reference_code,
-                recipient_email=expected_recipient,
             )
-            policy = PayPalReceiptPolicy(
-                expected_amount_usd=float(attempt.expected_amount_usd),
-                expected_currency=attempt.expected_currency,
-                recipient_email=expected_recipient,
-                reference_code=attempt.reference_code,
-            )
-            decision = evaluate_paypal_receipt_review(extraction.review, policy)
-            decision_status: PaymentAttemptStatus = decision.status
-            decision_reason = decision.reason
-            if decision.provider_reference:
+            decision_status: PaymentAttemptStatus = outcome.status
+            decision_reason = outcome.decision_reason
+            review_payload = dict(outcome.review_payload)
+            if outcome.provider_reference:
                 duplicate = await session.scalar(
                     select(PaymentAttempt).where(
-                        PaymentAttempt.provider_reference == decision.provider_reference,
+                        PaymentAttempt.provider_reference == outcome.provider_reference,
                         PaymentAttempt.id != attempt.id,
                     )
                 )
                 if duplicate is not None:
                     decision_status = "manual_review_required"
                     decision_reason = "Receipt transaction ID was already used on another payment attempt."
-            attempt.provider_reference = decision.provider_reference
+                    review_payload["decision_reason"] = decision_reason
+            attempt.provider_reference = outcome.provider_reference
             attempt.receipt_filename = filename[:255]
             attempt.receipt_media_type = (media_type or "application/octet-stream")[:128]
-            attempt.receipt_text_excerpt = extraction.text[:4000] or None
-            attempt.review_payload = {
-                **extraction.review.model_dump(mode="json"),
-                "decision_reason": decision_reason,
-                "extraction_reason": extraction.reason,
-                "temporary_access_level": decision.temporary_access_level,
-            }
+            attempt.receipt_text_excerpt = outcome.receipt_text_excerpt
+            attempt.review_payload = review_payload
             attempt.status = decision_status
             attempt.decision_note = decision_reason
             attempt.updated_at = _utcnow()
@@ -333,76 +294,13 @@ class PaymentService:
             raise RuntimeError("PAYPAL_RECIPIENT_EMAIL is required for receipt-based PayPal credit.")
         return recipient
 
-
-def _extract_receipt(
-    payload: bytes,
-    *,
-    media_type: str | None,
-    reference_code: str,
-    recipient_email: str,
-) -> ReceiptExtraction:
-    text = _extract_text(payload, media_type=media_type)
-    lowered = text.casefold()
-    emails = _EMAIL_PATTERN.findall(text)
-    amount = _extract_usd_amount(text)
-    transaction_match = _TRANSACTION_PATTERN.search(text)
-    transaction_id = transaction_match.group(1) if transaction_match else None
-    matched_recipient = next((email for email in emails if email.casefold() == recipient_email.casefold()), None)
-    appears_paypal = "paypal" in lowered
-    reference_found = reference_code if reference_code in text else None
-    confidence = 0.0
-    if appears_paypal:
-        confidence += 0.35
-    if amount is not None:
-        confidence += 0.2
-    if emails:
-        confidence += 0.15
-    if reference_found is not None:
-        confidence += 0.2
-    if transaction_id:
-        confidence += 0.1
-    reason = "Readable receipt evidence parsed." if text.strip() else "Receipt text could not be read."
-    review = PayPalReceiptReviewResult(
-        amount_usd=amount,
-        currency="USD" if amount is not None or "$" in text or "usd" in lowered else None,
-        transaction_id=transaction_id,
-        payer_email=emails[0] if emails else None,
-        recipient_email=matched_recipient or (emails[-1] if emails else None),
-        reference_code=reference_found,
-        appears_paypal_receipt=appears_paypal,
-        mismatch_flags=[],
-        tampering_flags=[],
-        confidence=min(confidence, 1.0),
-    )
-    return ReceiptExtraction(text=text, review=review, reason=reason)
-
-
-def _extract_text(payload: bytes, *, media_type: str | None) -> str:
-    if (media_type or "").casefold() == "application/pdf":
-        try:
-            from pypdf import PdfReader
-
-            reader = PdfReader(BytesIO(payload))
-            return "\n".join(page.extract_text() or "" for page in reader.pages)
-        except Exception as error:  # noqa: BLE001 - a receipt fallback should degrade to manual review.
-            logger.info("paypal_receipt_pdf_text_unavailable error=%s", error.__class__.__name__)
-    for encoding in ("utf-8", "utf-16", "latin-1"):
-        try:
-            return payload.decode(encoding)
-        except UnicodeDecodeError:
-            continue
-    return ""
-
-
-def _extract_usd_amount(text: str) -> float | None:
-    matches: list[float] = []
-    for pattern in _USD_PATTERNS:
-        for match in pattern.findall(text):
-            try:
-                matches.append(float(match.replace(",", "")))
-            except ValueError:
-                continue
-    return max(matches) if matches else None
+    def _paypal_workflow(self) -> PayPalReceiptWorkflow:
+        return PayPalReceiptWorkflow(
+            recipient_email=self._require_paypal_recipient(),
+            reference_prefix="OVS2",
+            min_payment_usd=self._settings.paypal_min_payment_usd,
+            max_payment_usd=self._settings.paypal_max_payment_usd,
+        )
 
 
 def _payment_attempt_summary(attempt: PaymentAttempt) -> PaymentAttemptSummary:
@@ -424,6 +322,21 @@ def _payment_attempt_summary(attempt: PaymentAttempt) -> PaymentAttemptSummary:
         decision_note=attempt.decision_note,
         created_at=attempt.created_at,
         updated_at=attempt.updated_at,
+    )
+
+
+def _payment_attempt_record(attempt: PaymentAttempt) -> PaymentAttemptRecord:
+    return PaymentAttemptRecord(
+        id=attempt.id,
+        user_id=attempt.clerk_user_id,
+        provider="paypal",
+        expected_amount_usd=round(float(attempt.expected_amount_usd), 2),
+        expected_currency=attempt.expected_currency,
+        reference_code=attempt.reference_code,
+        status=cast(PaymentAttemptStatus, attempt.status),
+        temporary_access_expires_at=attempt.temporary_access_expires_at,
+        provider_reference=attempt.provider_reference,
+        created_at=attempt.created_at,
     )
 
 
