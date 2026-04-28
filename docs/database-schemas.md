@@ -44,9 +44,11 @@ Until the shared/public stream exists, isolate this app in its own schema:
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 ```
 
-The app creates that schema before running migrations and uses it as the
-connection search path. This keeps the current app bootable next to PlodAI while
-the shared table contract is consolidated.
+The app creates that schema before running migrations and uses
+`openai_vectorstore2,public` as the connection search path. App-owned tables
+therefore land in `openai_vectorstore2`, while public shared tables remain
+visible to adapters that need them. This keeps the current app bootable next to
+PlodAI while the shared table contract is consolidated.
 
 ## Migration Path
 

@@ -4,7 +4,7 @@ import logging
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import engine_from_config, make_url, pool
 from sqlalchemy.schema import CreateSchema
 
 from backend.app.core.config import AppSettings
@@ -27,6 +27,8 @@ def _database_url() -> str:
 
 
 def _postgres_schema() -> str | None:
+    if make_url(_database_url()).get_backend_name() != "postgresql":
+        return None
     configured_schema = config.get_main_option("postgres_schema")
     if configured_schema and configured_schema.strip():
         return configured_schema.strip()

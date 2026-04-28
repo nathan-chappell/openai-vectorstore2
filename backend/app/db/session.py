@@ -36,9 +36,10 @@ def ensure_database_directory(database_url: str) -> None:
 def postgres_connect_args(schema_name: str | None, *, async_driver: bool) -> dict[str, Any]:
     if schema_name is None:
         return {}
+    search_path = schema_name if schema_name == "public" else f"{schema_name},public"
     if async_driver:
-        return {"server_settings": {"search_path": schema_name}}
-    return {"options": f"-csearch_path={schema_name}"}
+        return {"server_settings": {"search_path": search_path}}
+    return {"options": f"-csearch_path={search_path}"}
 
 
 class AsyncSessionAdapter:
@@ -182,7 +183,10 @@ class DatabaseManager:
         config = Config(str(alembic_ini)) if alembic_ini is not None else Config()
         config.set_main_option("script_location", str(migrations_dir))
         config.set_main_option("sqlalchemy.url", self._settings.sync_database_url)
-        if self._settings.database_postgres_schema is not None:
+        if (
+            self._settings.database_postgres_schema is not None
+            and make_url(self._settings.sync_database_url).get_backend_name() == "postgresql"
+        ):
             config.set_main_option("postgres_schema", self._settings.database_postgres_schema)
         command.upgrade(config, "head")
 

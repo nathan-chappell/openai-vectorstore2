@@ -34,7 +34,7 @@ APP_BASE_URL=https://your-service.example
 CORS_ORIGINS=https://your-service.example
 DATABASE_URL=postgresql://...
 DATABASE_SCHEMA_MODE=migrations
-DATABASE_POSTGRES_SCHEMA=
+DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 VITE_CHATKIT_DOMAIN_KEY=
 ```
 
@@ -48,8 +48,9 @@ billing tables are not yet a shared contract. For example, leave PlodAI on
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 ```
 
-The app will create the schema if it is missing and run Alembic inside that
-schema. Do not point both apps at the same PostgreSQL schema.
+The app will create the schema if it is missing and run Alembic with a
+`openai_vectorstore2,public` search path. Do not point both apps at the same
+PostgreSQL schema.
 
 The intended shared-service layout is `public` for shared account, credit,
 payment, and usage tracking tables, plus one app schema per product. See

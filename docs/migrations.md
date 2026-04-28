@@ -17,7 +17,8 @@ Do not run PlodAI and OpenAI Vectorstore2 in the same PostgreSQL schema. They
 have separate Alembic histories and some same-named app tables with different
 columns. Prefer separate databases. If using one physical PostgreSQL service,
 set `DATABASE_POSTGRES_SCHEMA=openai_vectorstore2` for this app so migrations
-and app queries run in an isolated schema.
+and app queries run in an app-first search path that still includes `public`
+for shared account/billing/payment/usage tables.
 
 The target shared-service architecture is not one shared `public` schema for
 everything. It is shared account/billing/payment/usage tables in `public`, app

@@ -8,10 +8,24 @@ from sqlalchemy import create_engine, inspect
 import pytest
 
 from backend.app.core.config import AppSettings
-from backend.app.db.session import DatabaseManager
+from backend.app.db.session import DatabaseManager, postgres_connect_args
 from backend.app.models import Base
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_postgres_schema_search_path_keeps_public_visible() -> None:
+    assert postgres_connect_args("openai_vectorstore2", async_driver=True) == {
+        "server_settings": {"search_path": "openai_vectorstore2,public"}
+    }
+    assert postgres_connect_args("openai_vectorstore2", async_driver=False) == {
+        "options": "-csearch_path=openai_vectorstore2,public"
+    }
+
+
+def test_postgres_public_schema_search_path_is_not_duplicated() -> None:
+    assert postgres_connect_args("public", async_driver=True) == {"server_settings": {"search_path": "public"}}
+    assert postgres_connect_args("public", async_driver=False) == {"options": "-csearch_path=public"}
 
 
 def test_alembic_head_matches_orm_tables_and_columns(tmp_path: Path) -> None:
@@ -47,6 +61,7 @@ async def test_database_manager_can_bootstrap_with_alembic(
     monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
     monkeypatch.setenv("DATABASE_SCHEMA_MODE", "migrations")
+    monkeypatch.setenv("DATABASE_POSTGRES_SCHEMA", "openai_vectorstore2")
 
     manager = DatabaseManager(AppSettings())
     try:
