@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from importlib.metadata import PackageNotFoundError, version
 import logging
 import mimetypes
 import os
@@ -96,6 +97,13 @@ from backend.app.web_auth import (
 logger = logging.getLogger(__name__)
 
 
+def _app_version() -> str:
+    try:
+        return version("openai-vectorstore2")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     services = create_services(resolved_settings)
@@ -108,6 +116,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         app.state.services = services
         app.state.mcp_server = mcp_server
         await services.database.ensure_ready()
+        logger.info("app_started name=%s version=%s", resolved_settings.app_name, _app_version())
         async with mcp_http_app.lifespan(mcp_http_app):
             try:
                 yield

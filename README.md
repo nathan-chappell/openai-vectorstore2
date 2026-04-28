@@ -1,39 +1,102 @@
 # OpenAI Vectorstore2
 
-OpenAI Vectorstore2 is an app-first file explorer backed by OpenAI vector-store indexing and search. The backend owns ingestion, tagging, virtual paths, source-level indexing, retrieval, and generation workflows. ChatKit is the primary frontend surface, while MCP exposes the same app functionality to MCP hosts and MCP Apps UIs.
+OpenAI Vectorstore2 is an app-first research-library workspace backed by OpenAI vector-store indexing and search. Users can upload source files, organize them in a virtual file explorer, search the indexed library with app-owned metadata filters, and use ChatKit to ask grounded questions, build research collections, and save generated artifacts back into the library.
 
-## Shape
+This repository is both a portfolio project and a product demo. Its main technical goal is to show how a typed FastAPI service layer can power multiple surfaces at once: a React file workspace, ChatKit agent tools, and an authenticated MCP server. The project focuses on source-level RAG over user-managed files rather than one-off chat uploads, with persistent storage, task progress, billing/usage accounting foundations, and deployment-ready database and object-storage boundaries.
 
-- Backend: FastAPI, SQLAlchemy, pydantic-settings, OpenAI Responses/vector stores, ChatKit server, FastMCP.
-- Frontend: Vite, React, TypeScript, Clerk, ChatKit, Playwright.
-- Storage: local file storage by default, with an S3-compatible adapter for deployment.
-- Retrieval: normal ingestion publishes source-level files into OpenAI vector stores with app-owned attributes for source ID, path, type, one representative tag, and created date. Optional semantic split records can be generated explicitly for inspection.
-- Schema: Alembic migrations are the default. `create_all` is only for empty throwaway databases because it does not alter existing tables.
+> Live app: [openai-vectorstore2-production.up.railway.app](https://openai-vectorstore2-production.up.railway.app/)
+>
+> Access note: signing up creates a Clerk account, but access to the live demo is granted manually. If you would like access or a walkthrough, please reach out via [GitHub](https://github.com/nathan-chappell).
 
-## Core Workflows
+The live deployment runs on Railway with PostgreSQL, S3-compatible object storage, Clerk auth, and a Docker image published as `nathanschappell/openai-vectorstore2`. The app is structured so environment-specific public client settings, including Clerk and ChatKit domain keys, can be provided at runtime by the backend rather than only at frontend build time.
 
-- Upload PDFs, text files, and audio/video conversation recordings.
-- Store files in virtual folders and publish source-level OpenAI vector-store indexes.
-- Search with source, kind, tag, path, and creation-time filters.
-- Run QA, free-form generation, image generation, voice generation, and branch search over indexed source-file matches.
-- Use the web workspace for Explorer navigation, Library semantic/tag search, Results references, preview, and explicit ChatKit `@` file references.
-- Use ChatKit as the main agentic web UI and MCP as an adapter over the same service layer.
+## Technical overview
 
-## Local Development
+- Frontend stack: React, Vite, TypeScript, Clerk, `@openai/chatkit`, and `@openai/chatkit-react`
+- Backend stack: FastAPI, SQLAlchemy, Alembic, pydantic-settings, OpenAI Responses/vector stores, ChatKit server integration, and FastMCP
+- Storage: source files and generated artifacts use local storage by default, with an S3-compatible adapter for deployment
+- Retrieval: normal ingestion publishes source-level files into OpenAI vector stores with app-owned attributes for source ID, path, type, representative tag, and created date
+- Agent surface: ChatKit tools expose library search, grounded QA, file ingestion, research-library building, report saving, generated assets, and task progress
+- MCP surface: authenticated MCP exposes the same service layer to MCP hosts and MCP Apps UIs
+- Runtime behavior: startup runs Alembic migrations, logs the app version, retries briefly while PostgreSQL is waking up, and serves the built frontend from FastAPI
+- Billing foundation: shared credit, payment, free-credit, and cost-event tables are provided through the `ai-portfolio-admin` submodule
 
-1. Create `.env` from `.env.example`. Keep optional defaults out unless you actually need them.
-2. Install Python dependencies into `.venv`, then install the package in editable mode if needed.
-3. Run `npm install`.
-4. Run `npm run build:watch`.
-5. Start the backend with `./.venv/bin/openai-vectorstore2-http`.
-6. Open `http://localhost:8000`.
-7. Point MCP hosts at `http://localhost:8000/mcp/`.
+## Core workflows
 
-Backend logs are written to `.local/logs/openai-vectorstore2.log` by default.
+- Upload PDFs, text files, Markdown, and audio/video conversation recordings
+- Store files in virtual folders and search them by query, source kind, tag, path, source id, and created date
+- Ask grounded questions over selected or searched sources from ChatKit
+- Build small research libraries from topics or papers, dedupe discovered sources, and index the results
+- Save structured Markdown reports into the library as searchable source artifacts
+- Generate image and voice artifacts from retrieved context
+- Use the MCP endpoint at `/mcp/` from compatible MCP clients
 
-VS Code users can press F5 to start the backend debugger. The workspace task `npm: build:watch` keeps the frontend bundle fresh for the backend-served app.
+## Local setup
 
-## MCP Development
+### Prerequisites
+
+- Python `3.14`
+- Node.js and npm
+- An OpenAI API key
+- A Clerk application
+- Optional S3-compatible object storage for deployment-like testing
+
+### Environment
+
+Create `.env` from `.env.example`. Keep optional defaults out unless you actually need them.
+
+Important values for a realistic local or deployed run:
+
+```bash
+OPENAI_API_KEY=your-openai-key
+CLERK_SECRET_KEY=your-clerk-secret-key
+CLERK_PUBLISHABLE_KEY=your-clerk-publishable-key
+CHATKIT_DOMAIN_KEY=your-chatkit-domain-key
+
+APP_BASE_URL=http://localhost:8000
+DATABASE_URL=sqlite+aiosqlite:///./.local/openai-vectorstore2.db
+DATABASE_SCHEMA_MODE=migrations
+
+STATIC_DIR=frontend/dist
+VITE_API_BASE_URL=/api
+VITE_CHATKIT_DOMAIN_KEY=domain_pk_local_vectorstore2
+```
+
+For deployed PostgreSQL, keep `DATABASE_SCHEMA_MODE=migrations` and set `DATABASE_POSTGRES_SCHEMA=openai_vectorstore2`. Railway should provide `PORT`; do not bind to a fixed host/port that conflicts with Railway's edge proxy.
+
+### Install and run
+
+Run both the Python and npm toolchains from the repository root.
+
+```bash
+python3.14 -m venv .venv
+source .venv/bin/activate
+pip install -e '.[dev]'
+npm install
+npm run build
+./.venv/bin/openai-vectorstore2-http
+```
+
+Then open `http://localhost:8000`.
+
+### Frontend development mode
+
+For the backend-served app, `npm run build:watch` keeps `frontend/dist` fresh while the backend runs.
+
+```bash
+npm run build:watch
+./.venv/bin/openai-vectorstore2-http
+```
+
+For separate Vite development, run:
+
+```bash
+npm run dev
+```
+
+The Vite dev server proxies `/api` and `/mcp` to `http://localhost:8000` by default.
+
+## MCP development
 
 The production HTTP app mounts authenticated MCP at `/mcp/`. For local FastMCP tooling, use the unauthenticated dev entrypoint:
 
@@ -44,18 +107,28 @@ The production HTTP app mounts authenticated MCP at `/mcp/`. For local FastMCP t
 
 This entrypoint uses the same app services and `.env` settings as the backend, so local tool calls read and write the same development database and storage.
 
-## Verification
+## Test commands
 
-- `./.venv/bin/pytest`
-- `./.venv/bin/pyright`
-- `npm run typecheck`
-- `npm run build`
-- `npm run test:e2e -- --project=chromium-desktop`
-- `npm run test:e2e -- --project=chromium-mobile`
+```bash
+./.venv/bin/pytest
+./.venv/bin/pyright
+npm run typecheck
+npm run build
+npm run test:e2e -- --project=chromium-desktop
+npm run test:e2e -- --project=chromium-mobile
+```
 
 Playwright uses live OpenAI and S3-compatible storage from `.env`, while Clerk is disabled through test-only overrides and local-dev auth is enabled.
 
-## More Docs
+## Future work
+
+- Finish and document the private on-prem companion path in `vendor/openai-vectorstore2-on-prem`, including OpenAI-compatible local model serving, deployment notes, and the boundary between the base app and on-prem runtime
+- Continue visual and interaction design work across Explorer, Library, Results, admin billing, previews, and mobile layouts
+- Test the deployed MCP server from ChatGPT with a real user account, including tool discovery, authenticated calls, source previews, research actions, and MCP Apps UI rendering
+- Add screenshots or a short walkthrough showing Explorer, Library search, ChatKit grounded answers, saved report artifacts, and MCP usage
+- Expand browser coverage for realistic deployed flows, including Clerk auth, ChatKit citations, file reveal, research-library creation, and report persistence
+
+## More docs
 
 - [Architecture](docs/architecture.md)
 - [Auth](docs/auth.md)
@@ -65,3 +138,7 @@ Playwright uses live OpenAI and S3-compatible storage from `.env`, while Clerk i
 - [Testing](docs/testing.md)
 - [Migrations](docs/migrations.md)
 - [Operations](docs/operations.md)
+
+## Documentation note
+
+This README was written with AI assistance in Codex, then manually reviewed and revised against the repository implementation.
