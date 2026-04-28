@@ -1,0 +1,4 @@
+interface:
+  display_name: "MCP OAuth Auditor"
+  short_description: "Audit MCP OAuth and ChatGPT auth flows."
+  default_prompt: "Audit this MCP server auth flow against the MCP authorization spec and OpenAI ChatGPT Apps requirements. If I provide a deployed URL, probe discovery, PKCE, token exchange, and MCP access, then recommend fixes."

@@ -9,7 +9,7 @@ from pathlib import Path
 import re
 import sys
 from time import monotonic
-from typing import cast
+from typing import Any, cast
 
 from chatkit.types import (
     AssistantMessageContent,
@@ -1647,6 +1647,82 @@ async def test_mcp_dev_entrypoint_exports_local_tooling_server(
         get_settings.cache_clear()
 
     assert tools == mcp_tool_names()
+
+
+def test_http_app_uses_noauth_mcp_server_when_mcp_auth_mode_is_none(
+    configured_settings: AppSettings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    class FakeMcpServer:
+        def http_app(self, *, path: str, transport: str) -> Any:
+            from starlette.applications import Starlette
+
+            calls.append(f"http_app:{path}:{transport}")
+            return Starlette()
+
+    def fake_create_mcp_server(settings: AppSettings, services: AppServices) -> FakeMcpServer:
+        del settings, services
+        calls.append("bearer")
+        return FakeMcpServer()
+
+    def fake_create_dev_mcp_server(settings: AppSettings, services: AppServices) -> FakeMcpServer:
+        del settings, services
+        calls.append("none")
+        return FakeMcpServer()
+
+    monkeypatch.setattr("backend.app.main.create_mcp_server", fake_create_mcp_server)
+    monkeypatch.setattr("backend.app.main.create_dev_mcp_server", fake_create_dev_mcp_server)
+
+    create_fastapi_app(configured_settings.model_copy(update={"mcp_auth_mode": "none"}))
+
+    assert calls == ["none", "http_app:/:streamable-http"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_protected_resource_metadata_is_json_when_configured(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    settings = configured_settings.model_copy(
+        update={
+            "app_base_url": "https://vectorstore.example.com",
+            "mcp_authorization_servers": ["https://auth.example.com"],
+            "mcp_required_scopes": ["openid", "profile"],
+        }
+    )
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/.well-known/oauth-protected-resource/mcp")
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.json() == {
+        "resource": "https://vectorstore.example.com/mcp",
+        "authorization_servers": ["https://auth.example.com"],
+        "scopes_supported": ["openid", "profile"],
+        "resource_name": settings.app_name,
+    }
+
+
+@pytest.mark.asyncio
+async def test_unknown_well_known_paths_do_not_return_spa_shell(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get("/.well-known/openid-configuration")
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
 
 
 @pytest.mark.asyncio

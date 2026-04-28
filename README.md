@@ -107,6 +107,20 @@ The production HTTP app mounts authenticated MCP at `/mcp/`. For local FastMCP t
 
 This entrypoint uses the same app services and `.env` settings as the backend, so local tool calls read and write the same development database and storage.
 
+For a temporary ChatGPT developer-mode smoke test without OAuth, run the HTTP app with:
+
+```bash
+MCP_AUTH_MODE=none
+```
+
+Then expose the app over HTTPS and create the connector with the public `/mcp` URL. This maps MCP calls to the synthetic `local-dev` user and must not be used for production or shared data.
+
+Authenticated ChatGPT Apps also need OAuth protected-resource metadata and an
+authorization server that can issue MCP audience-bound tokens. Configure
+`MCP_AUTHORIZATION_SERVERS=https://auth.example.com` only after that provider is
+ready; unknown `/.well-known/*` paths intentionally return 404 instead of the
+frontend shell.
+
 ## Test commands
 
 ```bash

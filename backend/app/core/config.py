@@ -43,6 +43,7 @@ class AppSettings(BaseSettings):
         ]
     )
     allow_local_dev_auth: bool = False
+    mcp_auth_mode: Literal["bearer", "none"] = "bearer"
 
     clerk_active_metadata_key: str = "active"
     clerk_role_metadata_key: str = "role"
@@ -50,6 +51,7 @@ class AppSettings(BaseSettings):
     clerk_clock_skew_ms: int = 5_000
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
     mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    mcp_authorization_servers: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     storage_backend: Literal["local", "s3"] = "local"
     local_storage_dir: str = ".local/storage"
@@ -119,7 +121,13 @@ class AppSettings(BaseSettings):
         extra="ignore",
     )
 
-    @field_validator("cors_origins", "clerk_authorized_parties", "mcp_required_scopes", mode="before")
+    @field_validator(
+        "cors_origins",
+        "clerk_authorized_parties",
+        "mcp_required_scopes",
+        "mcp_authorization_servers",
+        mode="before",
+    )
     @classmethod
     def _parse_string_list(cls, raw_value: object) -> list[str]:
         if raw_value is None:

@@ -49,8 +49,14 @@ FastMCP uses `VectorstoreTokenVerifier`.
 
 - The verifier delegates bearer-token validation to the same app `AuthService` used by REST.
 - Required scopes default to `openid,email,profile` through `MCP_REQUIRED_SCOPES`.
+- `MCP_AUTHORIZATION_SERVERS` publishes the OAuth protected-resource metadata
+  authorization server list for ChatGPT/OpenAI MCP clients. Leave it empty until
+  an OAuth provider or auth proxy can issue MCP audience-bound tokens.
 - Local-dev MCP calls can still resolve to `local-dev` only when local-dev auth
   is explicitly enabled or auth middleware is skipped in tests/local tooling.
+- `MCP_AUTH_MODE=none` disables the HTTP MCP verifier for temporary ChatGPT
+  developer-mode smoke tests and maps calls to `local-dev`. Do not use this for
+  production or shared data.
 
 For production ChatGPT Apps, the remaining work is OAuth/provider metadata hardening: protected-resource metadata, authorization-server metadata, audience/resource checks, and final HTTPS `APP_BASE_URL` configuration.
 

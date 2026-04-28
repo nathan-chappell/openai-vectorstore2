@@ -19,7 +19,7 @@ import uvicorn
 from backend.app.admin import payment_integration_status
 from backend.app.bootstrap import create_services
 from backend.app.core.config import AppSettings, get_settings
-from backend.app.mcp.server import create_mcp_server
+from backend.app.mcp.server import create_dev_mcp_server, create_mcp_server
 from backend.app.schemas import (
     ActionResponse,
     AdminFreeCreditDecisionRequest,
@@ -107,7 +107,11 @@ def _app_version() -> str:
 def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     resolved_settings = settings or get_settings()
     services = create_services(resolved_settings)
-    mcp_server = create_mcp_server(resolved_settings, services)
+    mcp_server = (
+        create_dev_mcp_server(resolved_settings, services)
+        if resolved_settings.mcp_auth_mode == "none"
+        else create_mcp_server(resolved_settings, services)
+    )
     mcp_http_app = mcp_server.http_app(path="/", transport="streamable-http")
     static_dir = Path(resolved_settings.normalized_static_dir)
 
@@ -117,6 +121,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         app.state.mcp_server = mcp_server
         await services.database.ensure_ready()
         logger.info("app_started name=%s version=%s", resolved_settings.app_name, _app_version())
+        if resolved_settings.mcp_auth_mode == "none":
+            logger.warning("mcp_auth_disabled mode=none subject=local-dev")
         async with mcp_http_app.lifespan(mcp_http_app):
             try:
                 yield
@@ -170,6 +176,22 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
     app.mount("/mcp", mcp_http_app)
+
+    @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
+    @app.get("/.well-known/oauth-protected-resource/", include_in_schema=False)
+    @app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
+    @app.get("/.well-known/oauth-protected-resource/mcp/", include_in_schema=False)
+    async def mcp_protected_resource_metadata() -> dict[str, object]:
+        if resolved_settings.mcp_auth_mode == "none":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
+        if not resolved_settings.mcp_authorization_servers:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="MCP OAuth is not configured.")
+        return {
+            "resource": f"{resolved_settings.normalized_app_base_url}/mcp",
+            "authorization_servers": resolved_settings.mcp_authorization_servers,
+            "scopes_supported": resolved_settings.mcp_required_scopes,
+            "resource_name": resolved_settings.app_name,
+        }
 
     @app.get("/health")
     async def healthcheck() -> dict[str, str]:
@@ -1023,6 +1045,8 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
 
     @app.get("/{full_path:path}")
     async def spa_entrypoint(full_path: str) -> Response:
+        if full_path.startswith(".well-known/"):
+            raise HTTPException(status_code=404, detail="Well-known metadata not found.")
         index_path = static_dir / "index.html"
         if not index_path.exists():
             raise HTTPException(status_code=404, detail="Frontend build not found.")
