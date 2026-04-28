@@ -73,6 +73,7 @@ const CHATKIT_DOMAIN_KEY = import.meta.env.VITE_CHATKIT_DOMAIN_KEY ?? "domain_pk
 
 let bearerTokenGetter: (() => Promise<string | null>) | null = null;
 let chatKitMetadataGetter: (() => ChatKitMetadata | null) | null = null;
+let unauthorizedHandler: ((error: ApiError) => void) | null = null;
 
 type SearchFilterRequestBody = {
   library_id: string | null;
@@ -99,6 +100,10 @@ export function setBearerTokenGetter(getter: (() => Promise<string | null>) | nu
   bearerTokenGetter = getter;
 }
 
+export function setUnauthorizedHandler(handler: ((error: ApiError) => void) | null): void {
+  unauthorizedHandler = handler;
+}
+
 export function setChatKitMetadataGetter(getter: (() => ChatKitMetadata | null) | null): void {
   chatKitMetadataGetter = getter;
 }
@@ -113,7 +118,12 @@ export function getChatKitConfig(): { url: string; domainKey: string; attachment
 
 export async function authenticatedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers ?? {});
-  const token = (await bearerTokenGetter?.()) ?? "local-dev";
+  const token = await bearerTokenGetter?.();
+  if (!token) {
+    const error = new ApiError("Sign in required.", 401);
+    unauthorizedHandler?.(error);
+    throw error;
+  }
   headers.set("Authorization", `Bearer ${token}`);
   const prepared = prepareChatKitRequest(input, { ...init, headers });
   return fetch(prepared.input, prepared.init);
@@ -567,7 +577,11 @@ async function buildApiError(response: Response): Promise<ApiError> {
   } catch {
     message = response.statusText || message;
   }
-  return new ApiError(message, response.status);
+  const error = new ApiError(message, response.status);
+  if (response.status === 401) {
+    unauthorizedHandler?.(error);
+  }
+  return error;
 }
 
 function prepareChatKitRequest(input: RequestInfo | URL, init?: RequestInit): { input: RequestInfo | URL; init?: RequestInit } {

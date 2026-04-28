@@ -5,6 +5,7 @@ import type {
 
 export type AppProps = {
   authMode: "clerk" | "local-dev";
+  onSignOut?: () => void;
 };
 
 export type PreviewResource =

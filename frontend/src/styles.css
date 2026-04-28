@@ -109,9 +109,48 @@ pre {
   background: transparent;
 }
 
+.auth-shell {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 1.25rem;
+}
+
+.auth-panel {
+  width: min(100%, 24rem);
+  display: grid;
+  gap: 1rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 1.25rem;
+  background: var(--panel);
+  box-shadow: 0 12px 30px rgba(15, 23, 42, 0.08), var(--shadow);
+}
+
+.auth-panel h1,
+.auth-panel p {
+  margin: 0;
+}
+
+.auth-panel h1 {
+  font-size: 1.45rem;
+}
+
+.auth-panel p {
+  color: var(--muted);
+}
+
+.auth-panel button {
+  width: fit-content;
+}
+
+.auth-identity {
+  margin-bottom: 0.25rem;
+}
+
 .app-bar {
   display: grid;
-  grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr) minmax(9rem, 13rem) minmax(12rem, 18rem) auto auto;
+  grid-template-columns: minmax(9rem, 13rem) minmax(0, 1fr) minmax(9rem, 13rem) minmax(12rem, 18rem) auto auto auto;
   gap: 0.55rem;
   align-items: center;
   min-width: 0;

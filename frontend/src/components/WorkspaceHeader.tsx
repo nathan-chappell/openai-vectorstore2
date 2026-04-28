@@ -12,6 +12,7 @@ export function WorkspaceHeader({
   adminOpen,
   onLibraryChange,
   onRefresh,
+  onSignOut,
   onToggleAdmin,
 }: {
   authMode: AppProps["authMode"];
@@ -24,6 +25,7 @@ export function WorkspaceHeader({
   adminOpen: boolean;
   onLibraryChange: (libraryId: string) => void;
   onRefresh: () => void;
+  onSignOut?: () => void;
   onToggleAdmin: () => void;
 }) {
   const latestTask = tasks[0] ?? null;
@@ -72,6 +74,11 @@ export function WorkspaceHeader({
       <button type="button" className="icon-button" onClick={onRefresh} disabled={busy} aria-label="Refresh" title="Refresh">
         ↻
       </button>
+      {authMode === "clerk" && user ? (
+        <button type="button" className="icon-button" onClick={onSignOut} aria-label="Sign out" title="Sign out">
+          ⇥
+        </button>
+      ) : null}
     </header>
   );
 }

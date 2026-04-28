@@ -97,7 +97,7 @@ function syncBrowserAdminRoute(open: boolean): void {
   }
 }
 
-export function App({ authMode }: AppProps) {
+export function App({ authMode, onSignOut }: AppProps) {
   const [user, setUser] = useState<AuthUser | null>(null);
   const [filesystem, setFilesystem] = useState<FilesystemListResponse | null>(null);
   const [libraries, setLibraries] = useState<LibrarySummary[]>([]);
@@ -956,6 +956,7 @@ export function App({ authMode }: AppProps) {
         adminOpen={adminOpen}
         onLibraryChange={(libraryId) => void changeLibrary(libraryId)}
         onRefresh={() => void refreshAll()}
+        onSignOut={onSignOut}
         onToggleAdmin={toggleAdminPanel}
       />
 

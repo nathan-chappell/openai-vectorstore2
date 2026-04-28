@@ -1,27 +1,69 @@
-import { ClerkProvider, useAuth } from "@clerk/react";
+import { ClerkProvider, SignInButton, useAuth, useClerk } from "@clerk/react";
 import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
-import { setBearerTokenGetter } from "./lib/api";
+import { setBearerTokenGetter, setUnauthorizedHandler } from "./lib/api";
 import "./styles.css";
 
 const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
 
 function ClerkTokenBridge() {
-  const { getToken, isLoaded } = useAuth();
+  const { getToken, isLoaded, isSignedIn } = useAuth();
+  const { signOut } = useClerk();
 
   useEffect(() => {
+    setUnauthorizedHandler(() => {
+      void signOut();
+    });
+    return () => setUnauthorizedHandler(null);
+  }, [signOut]);
+
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) {
+      setBearerTokenGetter(null);
+      return () => setBearerTokenGetter(null);
+    }
     setBearerTokenGetter(async () => {
-      if (!isLoaded) {
-        return null;
-      }
-      return (await getToken()) ?? "local-dev";
+      return await getToken();
     });
     return () => setBearerTokenGetter(null);
-  }, [getToken, isLoaded]);
+  }, [getToken, isLoaded, isSignedIn]);
 
-  return <App authMode="clerk" />;
+  if (!isLoaded) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="app-identity auth-identity">
+            <strong>AI Files</strong>
+            <span>Clerk auth</span>
+          </div>
+          <h1 id="auth-title">Opening sign in</h1>
+          <p>Checking your session.</p>
+        </section>
+      </main>
+    );
+  }
+
+  if (!isSignedIn) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="app-identity auth-identity">
+            <strong>AI Files</strong>
+            <span>Clerk auth</span>
+          </div>
+          <h1 id="auth-title">Sign in to continue</h1>
+          <p>Use your account to open the workspace.</p>
+          <SignInButton mode="modal">
+            <button type="button">Sign In</button>
+          </SignInButton>
+        </section>
+      </main>
+    );
+  }
+
+  return <App authMode="clerk" onSignOut={() => void signOut()} />;
 }
 
 function LocalDevApp() {
