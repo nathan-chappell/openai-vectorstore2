@@ -41,7 +41,7 @@ class PaymentService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             attempt = PaymentAttempt(
-                clerk_user_id=clerk_user_id,
+                user_id=clerk_user_id,
                 provider="paypal",
                 expected_amount_usd=amount,
                 expected_currency="USD",
@@ -69,7 +69,7 @@ class PaymentService:
                 (
                     await session.execute(
                         select(PaymentAttempt)
-                        .where(PaymentAttempt.clerk_user_id == clerk_user_id)
+                        .where(PaymentAttempt.user_id == clerk_user_id)
                         .order_by(PaymentAttempt.created_at.desc())
                         .limit(20)
                     )
@@ -106,7 +106,7 @@ class PaymentService:
         await self._database.ensure_ready()
         async with self._database.session() as session:
             attempt = await session.get(PaymentAttempt, attempt_id)
-            if attempt is None or attempt.clerk_user_id != clerk_user_id:
+            if attempt is None or attempt.user_id != clerk_user_id:
                 raise FileNotFoundError("Payment attempt was not found.")
             if attempt.status in {"confirmed_paid", "rejected_payment"}:
                 raise ValueError("This payment attempt is already closed.")
@@ -190,7 +190,7 @@ class PaymentService:
         if status == "confirmed_paid" and attempt.credit_grant_id is None:
             await self._grant_attempt_credit(
                 attempt_id=attempt.id,
-                clerk_user_id=attempt.clerk_user_id,
+                clerk_user_id=attempt.user_id,
                 amount_usd=credit_amount_usd or float(attempt.expected_amount_usd),
                 note=f"Admin-confirmed PayPal payment: {attempt.reference_code}. {decision_note.strip()}",
                 provider_reference=attempt.provider_reference,
@@ -205,7 +205,7 @@ class PaymentService:
         if status == "rejected_payment" and attempt.credit_grant_id is not None:
             await self._revoke_attempt_credit(
                 attempt_id=attempt.id,
-                clerk_user_id=attempt.clerk_user_id,
+                clerk_user_id=attempt.user_id,
                 amount_usd=float(attempt.expected_amount_usd),
                 note=f"Revoked PayPal receipt credit: {attempt.reference_code}. {decision_note.strip()}",
                 admin_clerk_user_id=admin_clerk_user_id,
@@ -308,7 +308,7 @@ def _payment_attempt_summary(attempt: PaymentAttempt) -> PaymentAttemptSummary:
     reason = review.get("decision_reason")
     return PaymentAttemptSummary(
         id=attempt.id,
-        clerk_user_id=attempt.clerk_user_id,
+        clerk_user_id=attempt.user_id,
         provider=attempt.provider,
         expected_amount_usd=round(float(attempt.expected_amount_usd), 2),
         expected_currency=attempt.expected_currency,
@@ -328,7 +328,7 @@ def _payment_attempt_summary(attempt: PaymentAttempt) -> PaymentAttemptSummary:
 def _payment_attempt_record(attempt: PaymentAttempt) -> PaymentAttemptRecord:
     return PaymentAttemptRecord(
         id=attempt.id,
-        user_id=attempt.clerk_user_id,
+        user_id=attempt.user_id,
         provider="paypal",
         expected_amount_usd=round(float(attempt.expected_amount_usd), 2),
         expected_currency=attempt.expected_currency,

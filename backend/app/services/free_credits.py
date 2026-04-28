@@ -54,7 +54,7 @@ class FreeCreditService:
             if payload.idempotency_key:
                 existing = await session.scalar(
                     select(FreeCreditRequest).where(
-                        FreeCreditRequest.clerk_user_id == clerk_user_id,
+                        FreeCreditRequest.user_id == clerk_user_id,
                         FreeCreditRequest.idempotency_key == payload.idempotency_key,
                     )
                 )
@@ -63,7 +63,7 @@ class FreeCreditService:
 
             active_request = await session.scalar(
                 select(FreeCreditRequest).where(
-                    FreeCreditRequest.clerk_user_id == clerk_user_id,
+                    FreeCreditRequest.user_id == clerk_user_id,
                     FreeCreditRequest.status.in_(ACTIVE_FREE_CREDIT_STATUSES),
                 )
             )
@@ -90,7 +90,7 @@ class FreeCreditService:
             status: FreeCreditRequestStatus = "pending" if policy_decision.requires_admin_review else policy_decision.status
             now = _utcnow()
             request = FreeCreditRequest(
-                clerk_user_id=clerk_user_id,
+                user_id=clerk_user_id,
                 requested_amount_usd=payload.requested_amount_usd,
                 source=payload.source,
                 reason=payload.reason.strip(),
@@ -133,7 +133,7 @@ class FreeCreditService:
                 (
                     await session.execute(
                         select(FreeCreditRequest)
-                        .where(FreeCreditRequest.clerk_user_id == clerk_user_id)
+                        .where(FreeCreditRequest.user_id == clerk_user_id)
                         .order_by(FreeCreditRequest.created_at.desc())
                         .limit(limit)
                     )
@@ -183,7 +183,7 @@ class FreeCreditService:
                 raise FileNotFoundError("Free-credit request was not found.")
             request.status = status
             request.decision_note = decision_note.strip()
-            request.reviewer_clerk_user_id = admin_clerk_user_id
+            request.reviewer_user_id = admin_clerk_user_id
             request.decided_amount_usd = None
             request.decided_at = _utcnow() if status == "rejected" else None
             request.updated_at = _utcnow()
@@ -192,7 +192,7 @@ class FreeCreditService:
             logger.info(
                 "free_credit_request_decided request_id=%s clerk_user_id=%s status=%s admin=%s",
                 request.id,
-                request.clerk_user_id,
+                request.user_id,
                 request.status,
                 admin_clerk_user_id,
             )
@@ -212,7 +212,7 @@ class FreeCreditService:
             return int(
                 await session.scalar(
                     select(func.count(FreeCreditRequest.id)).where(
-                        FreeCreditRequest.clerk_user_id == clerk_user_id,
+                        FreeCreditRequest.user_id == clerk_user_id,
                         FreeCreditRequest.source == source,
                         FreeCreditRequest.status == "approved",
                     )
@@ -236,13 +236,13 @@ class FreeCreditService:
             if request.credit_grant_id is not None:
                 request.status = "approved"
                 request.decision_note = decision_note.strip()
-                request.reviewer_clerk_user_id = admin_clerk_user_id
+                request.reviewer_user_id = admin_clerk_user_id
                 request.decided_at = request.decided_at or _utcnow()
                 request.updated_at = _utcnow()
                 await session.commit()
                 await session.refresh(request)
                 return _free_credit_summary(request)
-            target_user_id = request.clerk_user_id
+            target_user_id = request.user_id
             requested_source = request.source
 
         target = await self._auth.get_user_record(target_user_id)
@@ -265,7 +265,7 @@ class FreeCreditService:
             request.status = "approved"
             request.decided_amount_usd = round(float(amount_usd), 8)
             request.decision_note = decision_note.strip()
-            request.reviewer_clerk_user_id = admin_clerk_user_id
+            request.reviewer_user_id = admin_clerk_user_id
             request.credit_grant_id = grant.id
             request.decided_at = _utcnow()
             request.updated_at = _utcnow()
@@ -274,7 +274,7 @@ class FreeCreditService:
             logger.info(
                 "free_credit_request_approved request_id=%s clerk_user_id=%s source=%s amount_usd=%.8f grant_id=%s",
                 request.id,
-                request.clerk_user_id,
+                request.user_id,
                 requested_source,
                 amount_usd,
                 grant.id,
@@ -285,7 +285,7 @@ class FreeCreditService:
 def _free_credit_summary(request: FreeCreditRequest) -> FreeCreditRequestSummary:
     return FreeCreditRequestSummary(
         id=request.id,
-        clerk_user_id=request.clerk_user_id,
+        clerk_user_id=request.user_id,
         requested_amount_usd=round(float(request.requested_amount_usd), 8)
         if request.requested_amount_usd is not None
         else None,
@@ -301,7 +301,7 @@ def _free_credit_summary(request: FreeCreditRequest) -> FreeCreditRequestSummary
         if request.decided_amount_usd is not None
         else None,
         decision_note=request.decision_note,
-        reviewer_clerk_user_id=request.reviewer_clerk_user_id,
+        reviewer_clerk_user_id=request.reviewer_user_id,
         credit_grant_id=request.credit_grant_id,
         created_at=request.created_at,
         updated_at=request.updated_at,

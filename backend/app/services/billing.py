@@ -92,13 +92,13 @@ class BillingService:
             rows = (
                 (
                     await session.execute(
-                        select(UserCreditBalance).where(UserCreditBalance.clerk_user_id.in_(clerk_user_ids))
+                        select(UserCreditBalance).where(UserCreditBalance.user_id.in_(clerk_user_ids))
                     )
                 )
                 .scalars()
                 .all()
             )
-            return {row.clerk_user_id: round(float(row.current_credit_usd), 8) for row in rows}
+            return {row.user_id: round(float(row.current_credit_usd), 8) for row in rows}
 
     async def grant_credit(
         self,
@@ -120,8 +120,8 @@ class BillingService:
         async with self._database.session() as session:
             balance = await self._get_or_create_balance(session, clerk_user_id=clerk_user_id)
             grant = CreditGrant(
-                clerk_user_id=clerk_user_id,
-                admin_clerk_user_id=admin_clerk_user_id,
+                user_id=clerk_user_id,
+                admin_user_id=admin_clerk_user_id,
                 credit_amount_usd=amount,
                 source=source,
                 note=_normalized_note(note),
@@ -168,8 +168,8 @@ class BillingService:
         async with self._database.session() as session:
             balance = await self._get_or_create_balance(session, clerk_user_id=clerk_user_id)
             grant = CreditGrant(
-                clerk_user_id=clerk_user_id,
-                admin_clerk_user_id=admin_clerk_user_id,
+                user_id=clerk_user_id,
+                admin_user_id=admin_clerk_user_id,
                 credit_amount_usd=amount,
                 source=source,
                 note=_normalized_note(note),
@@ -435,7 +435,7 @@ class BillingService:
         balance = await session.get(UserCreditBalance, clerk_user_id)
         if balance is None:
             balance = UserCreditBalance(
-                clerk_user_id=clerk_user_id,
+                user_id=clerk_user_id,
                 current_credit_usd=0.0,
                 created_at=_utcnow(),
                 updated_at=_utcnow(),
@@ -454,7 +454,7 @@ class BillingService:
         current_credit_usd = round(float(balance.current_credit_usd), 8)
         billable = (not self._settings.billing_enabled) or role == "admin" or current_credit_usd > credit_floor_usd
         return CreditBalanceSummary(
-            clerk_user_id=balance.clerk_user_id,
+            clerk_user_id=balance.user_id,
             current_credit_usd=current_credit_usd,
             credit_floor_usd=round(float(credit_floor_usd), 8),
             billable=billable,
@@ -511,8 +511,8 @@ def pricing_key_for_model(model: str | None) -> str | None:
 def _grant_summary(grant: CreditGrant) -> CreditGrantSummary:
     return CreditGrantSummary(
         id=grant.id,
-        clerk_user_id=grant.clerk_user_id,
-        admin_clerk_user_id=grant.admin_clerk_user_id,
+        clerk_user_id=grant.user_id,
+        admin_clerk_user_id=grant.admin_user_id,
         credit_amount_usd=round(float(grant.credit_amount_usd), 8),
         source=grant.source,
         note=grant.note,

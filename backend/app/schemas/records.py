@@ -253,7 +253,7 @@ class PaymentAttemptListResponse(BaseModel):
 
 
 class AdminPaymentAttemptDecisionRequest(BaseModel):
-    attempt_id: str = Field(min_length=1, max_length=32)
+    attempt_id: str = Field(min_length=1, max_length=64)
     status: Literal["confirmed_paid", "rejected_payment", "manual_review_required"]
     decision_note: str = Field(min_length=1, max_length=500)
     credit_amount_usd: float | None = Field(default=None, gt=0)
@@ -296,7 +296,7 @@ class FreeCreditRequestListResponse(BaseModel):
 
 
 class AdminFreeCreditDecisionRequest(BaseModel):
-    request_id: str = Field(min_length=1, max_length=32)
+    request_id: str = Field(min_length=1, max_length=64)
     status: Literal["approved", "rejected", "manual_review_required"]
     credit_amount_usd: float | None = Field(default=None, gt=0)
     decision_note: str = Field(min_length=1, max_length=500)
