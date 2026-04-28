@@ -1791,8 +1791,8 @@ kbd {
 
 .admin-portfolio-panel {
   display: grid;
-  gap: 1rem;
-  max-width: 1120px;
+  gap: 0.85rem;
+  max-width: 1160px;
   margin: 0 auto;
 }
 
@@ -1868,20 +1868,44 @@ kbd {
   font-size: 0.82rem;
 }
 
-.admin-portfolio-panel__header,
-.admin-portfolio-panel__toolbar,
+.admin-portfolio-panel h2,
+.admin-portfolio-panel h3,
+.admin-portfolio-panel p {
+  margin: 0;
+}
+
+.admin-portfolio-panel__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(17rem, 23rem);
+  gap: 0.85rem;
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.9rem;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+}
+
+.admin-portfolio-panel__toolbar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.45rem;
+}
+
 .admin-portfolio-panel__pager,
 .admin-portfolio-panel__review header {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
+  gap: 0.6rem;
 }
 
 .admin-portfolio-panel__header p,
 .admin-portfolio-panel__grant p,
 .admin-portfolio-panel__review p,
-.admin-portfolio-panel td span {
+.admin-portfolio-panel td span,
+.admin-portfolio-panel__empty,
+.admin-portfolio-panel__loading {
   color: var(--muted);
 }
 
@@ -1890,7 +1914,7 @@ kbd {
 .admin-portfolio-panel__grant textarea,
 .admin-portfolio-panel__review select {
   border: 1px solid var(--line);
-  background: var(--panel);
+  background: #ffffff;
   color: var(--ink);
   border-radius: 6px;
   padding: 0.55rem 0.65rem;
@@ -1898,15 +1922,42 @@ kbd {
 
 .admin-portfolio-panel button {
   border: 1px solid var(--line);
-  background: var(--blue);
-  color: #ffffff;
   border-radius: 6px;
   padding: 0.5rem 0.7rem;
+  font-size: 0.76rem;
+  font-weight: 700;
+}
+
+.admin-portfolio-panel__button--primary,
+.admin-portfolio-panel__button--positive {
+  border-color: #1d4ed8;
+  background: var(--blue);
+  color: #ffffff;
+}
+
+.admin-portfolio-panel__button--secondary,
+.admin-portfolio-panel__pager button {
+  background: #ffffff;
+  color: var(--ink);
+}
+
+.admin-portfolio-panel__button--danger {
+  border-color: #fecaca;
+  background: #fff7f7;
+  color: var(--red);
 }
 
 .admin-portfolio-panel button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+
+.admin-portfolio-panel__status,
+.admin-portfolio-panel__loading {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.65rem 0.75rem;
+  background: var(--panel);
 }
 
 .admin-portfolio-panel__table-wrap {
@@ -1917,6 +1968,7 @@ kbd {
 
 .admin-portfolio-panel table {
   width: 100%;
+  min-width: 760px;
   border-collapse: collapse;
 }
 
@@ -1929,18 +1981,77 @@ kbd {
 }
 
 .admin-portfolio-panel td {
-  min-width: 7rem;
+  min-width: 6.5rem;
 }
 
-.admin-portfolio-panel td:first-child,
-.admin-portfolio-panel td:nth-child(4) {
+.admin-portfolio-panel th {
+  color: var(--muted);
+  background: var(--panel-muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.admin-portfolio-panel__user-row--selected td {
+  background: #eff6ff;
+}
+
+.admin-portfolio-panel__user-row--inactive {
+  opacity: 0.72;
+}
+
+.admin-portfolio-panel__identity-cell,
+.admin-portfolio-panel__credit-cell {
   display: grid;
   gap: 0.2rem;
 }
 
-.admin-portfolio-panel td:last-child {
+.admin-portfolio-panel__identity-cell span,
+.admin-portfolio-panel__credit-cell span {
+  overflow-wrap: anywhere;
+}
+
+.admin-portfolio-panel__actions-cell {
   display: flex;
+  justify-content: flex-end;
   gap: 0.4rem;
+  white-space: nowrap;
+}
+
+.admin-portfolio-panel__pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.16rem 0.48rem;
+  background: var(--panel-muted);
+  color: var(--muted);
+  font-size: 0.7rem;
+  font-weight: 800;
+  line-height: 1;
+  text-transform: capitalize;
+}
+
+.admin-portfolio-panel__pill--positive {
+  border-color: #bbf7d0;
+  background: var(--green-soft);
+  color: var(--green);
+}
+
+.admin-portfolio-panel__pill--muted {
+  background: #f1f5f9;
+}
+
+.admin-portfolio-panel__pager {
+  justify-content: flex-end;
+}
+
+.admin-portfolio-panel__workbench,
+.admin-portfolio-panel__review-grid {
+  display: grid;
+  gap: 0.85rem;
 }
 
 .admin-portfolio-panel__grant,
@@ -1951,6 +2062,14 @@ kbd {
   border-radius: 8px;
   padding: 0.9rem;
   background: var(--panel);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.04);
+}
+
+.admin-portfolio-panel__grant-fields {
+  display: grid;
+  grid-template-columns: minmax(8rem, 0.3fr) minmax(0, 1fr);
+  gap: 0.65rem;
+  align-items: start;
 }
 
 .admin-portfolio-panel__grant label {
@@ -1963,11 +2082,44 @@ kbd {
   resize: vertical;
 }
 
-.admin-portfolio-panel__review article {
+.admin-portfolio-panel__review-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.admin-portfolio-panel__review select {
+  width: min(16rem, 100%);
+}
+
+.admin-portfolio-panel__review-item {
   display: grid;
-  gap: 0.4rem;
-  border-top: 1px solid var(--line);
-  padding-top: 0.75rem;
+  gap: 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.7rem;
+  background: var(--panel-muted);
+}
+
+.admin-portfolio-panel__review-item > div:first-child,
+.admin-portfolio-panel__review-actions {
+  display: flex;
+  gap: 0.45rem;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.admin-portfolio-panel__review-actions {
+  justify-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.admin-portfolio-panel__empty {
+  display: grid;
+  min-height: 4.5rem;
+  place-items: center;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--panel-muted);
+  text-align: center;
 }
 
 @media (max-width: 860px) {
@@ -2020,6 +2172,24 @@ kbd {
 
   .account-settings-grid {
     grid-template-columns: 1fr;
+  }
+
+  .admin-portfolio-panel__header,
+  .admin-portfolio-panel__grant-fields,
+  .admin-portfolio-panel__review-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-portfolio-panel__review header,
+  .admin-portfolio-panel__actions-cell,
+  .admin-portfolio-panel__pager {
+    align-items: stretch;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+  }
+
+  .admin-portfolio-panel__review select {
+    width: 100%;
   }
 
   .workspace-grid,

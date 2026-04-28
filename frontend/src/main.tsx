@@ -1,16 +1,77 @@
 import { ClerkProvider, SignInButton, useAuth, useClerk } from "@clerk/react";
-import { StrictMode, useEffect } from "react";
+import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 
 import { App } from "./App";
-import { setBearerTokenGetter, setUnauthorizedHandler } from "./lib/api";
+import { setBearerTokenGetter, setChatKitDomainKey, setUnauthorizedHandler } from "./lib/api";
 import "./styles.css";
 
-const clerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const apiBaseUrl = import.meta.env.VITE_API_BASE_URL ?? "/api";
+const buildClerkPublishableKey = import.meta.env.VITE_CLERK_PUBLISHABLE_KEY as string | undefined;
+const buildChatKitDomainKey = import.meta.env.VITE_CHATKIT_DOMAIN_KEY as string | undefined;
+
+type ClientConfig = {
+  chatkit_domain_key: string | null;
+  clerk_publishable_key: string | null;
+};
+
+function RuntimeApp() {
+  const [clerkPublishableKey, setClerkPublishableKey] = useState<string | null | undefined>(undefined);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch(`${apiBaseUrl}/client-config`)
+      .then(async (response) => {
+        if (!response.ok) {
+          throw new Error(`Client config failed with ${response.status}`);
+        }
+        return (await response.json()) as ClientConfig;
+      })
+      .then((config) => {
+        if (!cancelled) {
+          setChatKitDomainKey(config.chatkit_domain_key || buildChatKitDomainKey || null);
+          setClerkPublishableKey(config.clerk_publishable_key || buildClerkPublishableKey || null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setChatKitDomainKey(buildChatKitDomainKey || null);
+          setClerkPublishableKey(buildClerkPublishableKey || null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (clerkPublishableKey === undefined) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="app-identity auth-identity">
+            <strong>AI Files</strong>
+            <span>Opening</span>
+          </div>
+          <h1 id="auth-title">Opening workspace</h1>
+          <p>Loading app settings.</p>
+        </section>
+      </main>
+    );
+  }
+
+  return clerkPublishableKey ? (
+    <ClerkProvider publishableKey={clerkPublishableKey}>
+      <ClerkTokenBridge />
+    </ClerkProvider>
+  ) : (
+    <LocalDevApp />
+  );
+}
 
 function ClerkTokenBridge() {
   const { getToken, isLoaded, isSignedIn } = useAuth();
   const { signOut } = useClerk();
+  const [tokenReady, setTokenReady] = useState(false);
 
   useEffect(() => {
     setUnauthorizedHandler(() => {
@@ -21,14 +82,35 @@ function ClerkTokenBridge() {
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn) {
+      setTokenReady(false);
       setBearerTokenGetter(null);
-      return () => setBearerTokenGetter(null);
+      return () => {
+        setBearerTokenGetter(null);
+        setTokenReady(false);
+      };
     }
-    setBearerTokenGetter(async () => {
-      return await getToken();
+    let cancelled = false;
+    setTokenReady(false);
+    void getToken().then((token) => {
+      if (cancelled) {
+        return;
+      }
+      if (!token) {
+        setBearerTokenGetter(null);
+        void signOut();
+        return;
+      }
+      setBearerTokenGetter(async () => {
+        return await getToken();
+      });
+      setTokenReady(true);
     });
-    return () => setBearerTokenGetter(null);
-  }, [getToken, isLoaded, isSignedIn]);
+    return () => {
+      cancelled = true;
+      setBearerTokenGetter(null);
+      setTokenReady(false);
+    };
+  }, [getToken, isLoaded, isSignedIn, signOut]);
 
   if (!isLoaded) {
     return (
@@ -63,6 +145,21 @@ function ClerkTokenBridge() {
     );
   }
 
+  if (!tokenReady) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="app-identity auth-identity">
+            <strong>AI Files</strong>
+            <span>Clerk auth</span>
+          </div>
+          <h1 id="auth-title">Opening workspace</h1>
+          <p>Preparing your session.</p>
+        </section>
+      </main>
+    );
+  }
+
   return <App authMode="clerk" onSignOut={() => void signOut()} />;
 }
 
@@ -79,12 +176,6 @@ const root = createRoot(document.getElementById("root") as HTMLElement);
 
 root.render(
   <StrictMode>
-    {clerkPublishableKey ? (
-      <ClerkProvider publishableKey={clerkPublishableKey}>
-        <ClerkTokenBridge />
-      </ClerkProvider>
-    ) : (
-      <LocalDevApp />
-    )}
+    <RuntimeApp />
   </StrictMode>,
 );

@@ -69,7 +69,7 @@ import type {
 } from "./types";
 
 const API_BASE_URL = normalizeBase(import.meta.env.VITE_API_BASE_URL ?? "/api");
-const CHATKIT_DOMAIN_KEY = import.meta.env.VITE_CHATKIT_DOMAIN_KEY ?? "domain_pk_local_vectorstore2";
+let chatKitDomainKey = import.meta.env.VITE_CHATKIT_DOMAIN_KEY ?? "domain_pk_local_vectorstore2";
 
 let bearerTokenGetter: (() => Promise<string | null>) | null = null;
 let chatKitMetadataGetter: (() => ChatKitMetadata | null) | null = null;
@@ -108,10 +108,17 @@ export function setChatKitMetadataGetter(getter: (() => ChatKitMetadata | null) 
   chatKitMetadataGetter = getter;
 }
 
+export function setChatKitDomainKey(domainKey: string | null): void {
+  const normalizedKey = domainKey?.trim();
+  if (normalizedKey) {
+    chatKitDomainKey = normalizedKey;
+  }
+}
+
 export function getChatKitConfig(): { url: string; domainKey: string; attachmentUploadUrl: string } {
   return {
     url: `${API_BASE_URL}/chatkit`,
-    domainKey: CHATKIT_DOMAIN_KEY,
+    domainKey: chatKitDomainKey,
     attachmentUploadUrl: `${API_BASE_URL}/chatkit/attachments`,
   };
 }

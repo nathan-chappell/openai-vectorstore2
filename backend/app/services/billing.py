@@ -6,6 +6,7 @@ import logging
 from typing import Any, Mapping
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
@@ -441,7 +442,14 @@ class BillingService:
                 updated_at=_utcnow(),
             )
             session.add(balance)
-            await session.flush()
+            try:
+                await session.flush()
+            except IntegrityError:
+                await session.rollback()
+                balance = await session.get(UserCreditBalance, clerk_user_id)
+                if balance is None:
+                    raise
+                logger.info("credit_balance_concurrent_create_recovered clerk_user_id=%s", clerk_user_id)
         return balance
 
     def _balance_summary(

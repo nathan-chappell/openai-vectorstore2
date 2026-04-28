@@ -166,6 +166,13 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     async def healthcheck() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/client-config")
+    async def client_config_api() -> dict[str, str | None]:
+        return {
+            "chatkit_domain_key": resolved_settings.chatkit_domain_key,
+            "clerk_publishable_key": resolved_settings.clerk_publishable_key,
+        }
+
     @app.get("/api/auth/me")
     async def auth_me_api(user: AuthenticatedUser = Depends(require_authenticated_web_user)) -> AuthUser:
         billing = await services.billing.get_status(

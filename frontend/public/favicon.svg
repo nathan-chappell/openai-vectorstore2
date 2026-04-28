@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <title>AI Files mark</title>
+  <desc>Rounded square logo with a document, AI circuitry, and a pencil.</desc>
+  <defs>
+    <linearGradient id="bg" x1="9" y1="7" x2="55" y2="57" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#156F60" />
+      <stop offset="0.56" stop-color="#1D5D5A" />
+      <stop offset="1" stop-color="#C76731" />
+    </linearGradient>
+    <linearGradient id="paper" x1="19" y1="14" x2="45" y2="48" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#FFFDF8" />
+      <stop offset="1" stop-color="#F0E8DC" />
+    </linearGradient>
+  </defs>
+
+  <rect x="2" y="2" width="60" height="60" rx="18" fill="url(#bg)" />
+  <rect x="2" y="2" width="60" height="60" rx="18" stroke="#0F2F33" stroke-opacity="0.16" />
+
+  <path
+    d="M18 17C18 15.3431 19.3431 14 21 14H38.3L46 21.7V46C46 47.6569 44.6569 49 43 49H21C19.3431 49 18 47.6569 18 46V17Z"
+    transform="translate(1.2 1.4)"
+    fill="#183235"
+    opacity="0.13"
+  />
+  <path
+    d="M18 17C18 15.3431 19.3431 14 21 14H38.3L46 21.7V46C46 47.6569 44.6569 49 43 49H21C19.3431 49 18 47.6569 18 46V17Z"
+    fill="url(#paper)"
+    stroke="#183235"
+    stroke-width="2.4"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M38.3 14V20.2C38.3 21.8569 39.6431 23.2 41.3 23.2H46"
+    fill="#E9E0D4"
+    stroke="#183235"
+    stroke-width="2.4"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+
+  <path
+    d="M24 27H31V22H37.5"
+    stroke="#156F60"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M31 27V35H38"
+    stroke="#156F60"
+    stroke-width="2.6"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <circle cx="24" cy="27" r="2.45" fill="#156F60" />
+  <circle cx="31" cy="27" r="2.45" fill="#156F60" />
+  <circle cx="37.5" cy="22" r="2.45" fill="#156F60" />
+  <circle cx="38" cy="35" r="2.45" fill="#156F60" />
+
+  <g transform="rotate(-38 38 40)">
+    <rect
+      x="22"
+      y="36.5"
+      width="4.4"
+      height="8"
+      rx="1.6"
+      fill="#F2B49A"
+      stroke="#183235"
+      stroke-width="1.4"
+    />
+    <rect
+      x="25.5"
+      y="36.5"
+      width="19.5"
+      height="8"
+      rx="3.7"
+      fill="#C76731"
+      stroke="#183235"
+      stroke-width="1.4"
+    />
+    <path
+      d="M45 36.5L53 40.5L45 44.5Z"
+      fill="#F1D0A8"
+      stroke="#183235"
+      stroke-width="1.4"
+      stroke-linejoin="round"
+    />
+    <path d="M49.7 38.9L53 40.5L49.7 42.1Z" fill="#183235" />
+    <path
+      d="M29 39.3H42.6"
+      stroke="#FCEEE2"
+      stroke-width="1.5"
+      stroke-linecap="round"
+      opacity="0.9"
+    />
+  </g>
+</svg>

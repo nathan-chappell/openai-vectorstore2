@@ -6,7 +6,7 @@ import re
 from typing import Annotated, Literal, cast
 from urllib.parse import urlparse
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -17,6 +17,14 @@ class AppSettings(BaseSettings):
 
     openai_api_key: SecretStr = Field(init=False)
     clerk_secret_key: SecretStr | None = None
+    clerk_publishable_key: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("CLERK_PUBLISHABLE_KEY", "VITE_CLERK_PUBLISHABLE_KEY", "PUBLIC_CLERK_PUBLISHABLE"),
+    )
+    chatkit_domain_key: str = Field(
+        default="domain_pk_local_vectorstore2",
+        validation_alias=AliasChoices("CHATKIT_DOMAIN_KEY", "VITE_CHATKIT_DOMAIN_KEY", "PUBLIC_CHATKIT_DOMAIN"),
+    )
 
     app_base_url: AnyHttpUrl = cast(AnyHttpUrl, "http://localhost:8000")
     app_name: str = "openai-vectorstore2"
@@ -124,6 +132,8 @@ class AppSettings(BaseSettings):
 
     @field_validator(
         "clerk_secret_key",
+        "clerk_publishable_key",
+        "chatkit_domain_key",
         "s3_endpoint",
         "s3_bucket",
         "s3_access_key_id",

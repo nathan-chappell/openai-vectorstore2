@@ -6,6 +6,7 @@ const backendUrl = process.env.VITE_BACKEND_URL ?? "http://localhost:8000";
 
 export default defineConfig({
   root: "frontend",
+  envDir: "..",
   plugins: [react()],
   build: {
     outDir: "dist",

@@ -17,6 +17,7 @@ from openai.types.file_purpose import FilePurpose
 from openai.types.shared_params.comparison_filter import ComparisonFilter
 from openai.types.shared_params.compound_filter import CompoundFilter
 from sqlalchemy import func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
 from backend.app.core.config import AppSettings
@@ -359,22 +360,32 @@ class SourceService:
                 last_seen_at=now,
             )
             session.add(existing)
-        else:
-            should_update = (
-                existing.primary_email != record.primary_email
-                or existing.display_name != record.display_name
-                or existing.active != record.active
-                or existing.role != record.role
-                or existing.last_seen_at is None
-                or _as_utc(existing.last_seen_at) < now - timedelta(minutes=5)
-            )
-            if not should_update:
+            try:
+                await session.commit()
+                await session.refresh(existing)
                 return existing
-            existing.primary_email = record.primary_email
-            existing.display_name = record.display_name
-            existing.active = record.active
-            existing.role = record.role
-            existing.last_seen_at = now
+            except IntegrityError:
+                await session.rollback()
+                existing = await session.scalar(select(AppUser).where(AppUser.clerk_user_id == clerk_user_id))
+                if existing is None:
+                    raise
+                logger.info("app_user_concurrent_create_recovered clerk_user_id=%s", clerk_user_id)
+
+        should_update = (
+            existing.primary_email != record.primary_email
+            or existing.display_name != record.display_name
+            or existing.active != record.active
+            or existing.role != record.role
+            or existing.last_seen_at is None
+            or _as_utc(existing.last_seen_at) < now - timedelta(minutes=5)
+        )
+        if not should_update:
+            return existing
+        existing.primary_email = record.primary_email
+        existing.display_name = record.display_name
+        existing.active = record.active
+        existing.role = record.role
+        existing.last_seen_at = now
         await session.commit()
         await session.refresh(existing)
         return existing
