@@ -28,18 +28,16 @@ Relevant env vars:
 ```bash
 ALLOW_LOCAL_DEV_AUTH=false
 CLERK_SECRET_KEY=
-CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
 CLERK_AUTHORIZED_PARTIES=
 CLERK_ACTIVE_METADATA_KEY=active
 CLERK_ROLE_METADATA_KEY=role
 ```
 
-For production, `ALLOW_LOCAL_DEV_AUTH=false`, `CLERK_SECRET_KEY`,
-`CLERK_ISSUER_URL`, and `VITE_CLERK_PUBLISHABLE_KEY` should all be set
-deliberately. `CLERK_AUTHORIZED_PARTIES` should be set to the deployed frontend
-origin when Clerk audience/authorized-party checks are available for the token
-type in use.
+For production, `ALLOW_LOCAL_DEV_AUTH=false`, `CLERK_SECRET_KEY`, and
+`VITE_CLERK_PUBLISHABLE_KEY` should all be set deliberately.
+`CLERK_AUTHORIZED_PARTIES` should be set to the deployed frontend origin when
+Clerk audience/authorized-party checks are available for the token type in use.
 
 ## Admin Boundary
 

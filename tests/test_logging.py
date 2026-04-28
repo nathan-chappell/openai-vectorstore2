@@ -115,7 +115,6 @@ async def test_http_requests_are_logged_to_file(
     log_path = tmp_path / "http.log"
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
     monkeypatch.setenv("ALLOW_LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'app.db'}")
     monkeypatch.setenv("LOCAL_STORAGE_DIR", str(tmp_path / "storage"))

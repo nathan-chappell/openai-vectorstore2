@@ -8,8 +8,8 @@ docker build \
   --build-arg PUBLIC_CLERK_PUBLISHABLE="$VITE_CLERK_PUBLISHABLE_KEY" \
   --build-arg PUBLIC_API_BASE=/api \
   --build-arg PUBLIC_CHATKIT_DOMAIN="$VITE_CHATKIT_DOMAIN_KEY" \
-  -t nathanschappell/openai-vectorstore2:1.0.0 .
-docker push nathanschappell/openai-vectorstore2:1.0.0
+  -t nathanschappell/openai-vectorstore2:1.1.0 .
+docker push nathanschappell/openai-vectorstore2:1.1.0
 ```
 
 ## Railway
@@ -29,7 +29,6 @@ Set these for a real deployment:
 
 ```bash
 OPENAI_API_KEY=
-APP_SIGNING_SECRET=
 APP_BASE_URL=https://your-service.example
 CORS_ORIGINS=https://your-service.example
 DATABASE_URL=postgresql://...
@@ -37,7 +36,6 @@ DATABASE_SCHEMA_MODE=migrations
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 ALLOW_LOCAL_DEV_AUTH=false
 CLERK_SECRET_KEY=
-CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
 VITE_CHATKIT_DOMAIN_KEY=
 ```
@@ -76,10 +74,9 @@ CHAT_COMPLETIONS_BASE_URL=
 CHAT_COMPLETIONS_API_KEY=
 CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS=
 CHAT_COMPLETIONS_WEB_SEARCH_URL=
-CHAT_COMPLETIONS_ON_PREM_PRICE_PER_MILLION_TOKENS=1.0
 ```
 
-Leave `CHAT_COMPLETIONS_BASE_URL` and `CHAT_COMPLETIONS_API_KEY` empty to use the normal OpenAI client defaults and `OPENAI_API_KEY`. Set `CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS` for private or OSS models whose context size is not in the app's known model table. On-prem billing uses the placeholder per-million-token rate until real infrastructure costs are modeled.
+Leave `CHAT_COMPLETIONS_BASE_URL` and `CHAT_COMPLETIONS_API_KEY` empty to use the normal OpenAI client defaults and `OPENAI_API_KEY`. Set `CHAT_COMPLETIONS_CONTEXT_WINDOW_TOKENS` for private or OSS models whose context size is not in the app's known model table.
 
 For the simple PayPal receipt flow, set a personal or business PayPal recipient email. `PAYPAL_PAYMENT_URL` is optional; when present the account panel links users to it.
 
@@ -96,15 +93,14 @@ Set Clerk values when browser auth is enabled:
 
 ```bash
 CLERK_SECRET_KEY=
-CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
 CLERK_AUTHORIZED_PARTIES=
 ```
 
-For deployed browser auth, treat `CLERK_SECRET_KEY`, `CLERK_ISSUER_URL`,
-`VITE_CLERK_PUBLISHABLE_KEY`, and a deployment-specific `CORS_ORIGINS` value as
-required. Set `CLERK_AUTHORIZED_PARTIES` when your Clerk token flow supplies a
-stable frontend origin/audience to check.
+For deployed browser auth, treat `CLERK_SECRET_KEY`, `VITE_CLERK_PUBLISHABLE_KEY`,
+and a deployment-specific `CORS_ORIGINS` value as required. Set
+`CLERK_AUTHORIZED_PARTIES` when your Clerk token flow supplies a stable frontend
+origin/audience to check.
 
 ## Storage
 

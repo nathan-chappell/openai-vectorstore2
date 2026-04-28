@@ -9,7 +9,6 @@ These values are required or effectively required for a deployed instance:
 
 ```bash
 OPENAI_API_KEY=
-APP_SIGNING_SECRET=
 APP_BASE_URL=https://your-service.example
 CORS_ORIGINS=https://your-service.example
 DATABASE_URL=postgresql://...
@@ -17,7 +16,6 @@ DATABASE_SCHEMA_MODE=migrations
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
 ALLOW_LOCAL_DEV_AUTH=false
 CLERK_SECRET_KEY=
-CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
 VITE_CHATKIT_DOMAIN_KEY=
 ```

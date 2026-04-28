@@ -69,7 +69,6 @@ async def test_database_manager_can_bootstrap_with_alembic(
 ) -> None:
     database_path = tmp_path / "app.db"
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
     monkeypatch.setenv("DATABASE_SCHEMA_MODE", "migrations")
     monkeypatch.setenv("DATABASE_POSTGRES_SCHEMA", "openai_vectorstore2")

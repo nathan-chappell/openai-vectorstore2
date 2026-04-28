@@ -29,7 +29,9 @@ from backend.app.evals.open_ragbench import (
     UploadManifest,
     UploadRecord,
     aggregate_results,
+    build_eval_report,
     render_demo_queries_markdown,
+    render_summary_markdown,
     run_answer_eval,
     run_retrieval_eval,
     select_subset,
@@ -156,6 +158,7 @@ def test_open_ragbench_query_review_includes_question_docs_and_answers() -> None
         query_type="extractive",
         query_source="text",
         expected_rank=2,
+        latency_ms=123.4,
         hits=[
             SearchHitRecord(
                 source_id="source-2", doc_id="2401.00002v1", source_title="Retrieved Paper", score=0.8, rank=1
@@ -180,6 +183,7 @@ def test_open_ragbench_query_review_includes_question_docs_and_answers() -> None
             reference_coverage=1.0,
             covered_reference_terms=["proves", "expected", "result"],
             verdict="pass",
+            latency_ms=456.7,
         ),
     )
 
@@ -192,6 +196,69 @@ def test_open_ragbench_query_review_includes_question_docs_and_answers() -> None
     assert "Retrieved paper abstract." in markdown
     assert "It proves the expected result." in markdown
     assert "The expected paper proves the expected result." in markdown
+    assert "Search latency: `123.4 ms`" in markdown
+    assert "QA latency: `456.7 ms`" in markdown
+
+
+def test_open_ragbench_summary_includes_latency_and_answer_details_in_order() -> None:
+    manifest = _summary_manifest_fixture()
+    result = QueryEvalResult(
+        query_id="q-summary",
+        query="What does the summary paper prove?",
+        expected_doc_id="2401.00001v1",
+        category="cs.LG",
+        query_type="extractive",
+        query_source="text",
+        expected_rank=1,
+        latency_ms=125.0,
+        hits=[
+            SearchHitRecord(
+                source_id="source-1", doc_id="2401.00001v1", source_title="Summary Paper", score=0.9, rank=1
+            )
+        ],
+    )
+    answer = AnswerEvalResult(
+        query_id="q-summary",
+        query=result.query,
+        expected_doc_id=result.expected_doc_id,
+        reference_answer="It proves the summary result.",
+        generated_answer="The system says the summary result is proven.",
+        expected_doc_rank=1,
+        retrieved_expected_doc=True,
+        used_hits=result.hits,
+        reference_coverage=0.75,
+        covered_reference_terms=["summary", "result"],
+        verdict="pass",
+        latency_ms=875.0,
+    )
+    report = build_eval_report(
+        run_id="summary-test",
+        dataset_id=manifest.dataset_id,
+        dataset_revision=manifest.dataset_revision,
+        tag_id="open-ragbench-eval-summary-test",
+        max_results=10,
+        results=[result],
+        answer_evaluations=[answer],
+        retrieval_duration_ms=250.0,
+        answer_eval_duration_ms=900.0,
+    )
+
+    markdown = render_summary_markdown(manifest=manifest, uploads=_uploads_fixture(), report=report)
+
+    assert "## Latency" in markdown
+    assert "Retrieval search requests" in markdown
+    assert "125.0 ms" in markdown
+    assert "## Baseline Context" in markdown
+    assert "## Five-Question Answer Evaluation" in markdown
+    assert (
+        "Detailed document traces and retrieved/used sources: [query review](demo_queries.md#five-answer-checks)."
+        in markdown
+    )
+    assert "What does the summary paper prove?" in markdown
+    assert "It proves the summary result." in markdown
+    assert "The system says the summary result is proven." in markdown
+    assert markdown.index("## Baseline Context") < markdown.index("## Five-Question Answer Evaluation")
+    assert markdown.index("## Five-Question Answer Evaluation") < markdown.index("## Metric Definitions")
 
 
 @pytest.mark.asyncio
@@ -362,6 +429,35 @@ def _subset_query(*, query_id: str, query: str, expected_doc_id: str, reference_
 
 def _uploads_fixture() -> UploadManifest:
     return UploadManifest(run_id="review-test", tag_id="open-ragbench-eval-review-test")
+
+
+def _summary_manifest_fixture() -> SubsetManifest:
+    return SubsetManifest(
+        run_id="summary-test",
+        categories=["cs.LG"],
+        positive_doc_target=1,
+        negative_doc_target=0,
+        documents=[
+            SubsetDoc(
+                doc_id="2401.00001v1",
+                title="Summary Paper",
+                abstract="Summary paper abstract.",
+                categories=["cs.LG"],
+                assigned_category="cs.LG",
+                split="positive",
+                pdf_url="https://example.test/summary.pdf",
+                query_count=1,
+            )
+        ],
+        queries=[
+            _subset_query(
+                query_id="q-summary",
+                query="What does the summary paper prove?",
+                expected_doc_id="2401.00001v1",
+                reference_answer="It proves the summary result.",
+            )
+        ],
+    )
 
 
 def _report_fixture(*, run_id: str, result: QueryEvalResult, answer: AnswerEvalResult) -> EvalReport:

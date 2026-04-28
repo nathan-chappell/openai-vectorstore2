@@ -14,7 +14,6 @@ from backend.app.services.auth import AuthService, ClerkUserPayload
 @pytest.mark.asyncio
 async def test_local_dev_bearer_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
     monkeypatch.delenv("ALLOW_LOCAL_DEV_AUTH", raising=False)
     settings = AppSettings()
 

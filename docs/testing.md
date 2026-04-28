@@ -25,7 +25,7 @@ npm run test:e2e -- --project=chromium-mobile
 Playwright starts both the FastAPI backend and Vite frontend.
 
 - It reads `.env` when present.
-- It requires live `OPENAI_API_KEY`, `APP_SIGNING_SECRET`, and S3-compatible storage values.
+- It requires live `OPENAI_API_KEY` and S3-compatible storage values.
 - It disables Clerk for browser tests with test-only env overrides and uses local-dev bearer auth.
 - The desktop project runs the live ChatKit flow: upload through the explorer, refer to the file explicitly from ChatKit, ask grounded QA, verify the task input includes the source ID, and delete the source.
 - The mobile project runs the shell/layout checks and skips the live ChatKit upload flow.

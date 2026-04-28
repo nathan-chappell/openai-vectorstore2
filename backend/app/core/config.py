@@ -16,9 +16,7 @@ class AppSettings(BaseSettings):
     """Runtime settings for the app, ChatKit, MCP, storage, and OpenAI integrations."""
 
     openai_api_key: SecretStr = Field(init=False)
-    app_signing_secret: SecretStr = Field(init=False)
     clerk_secret_key: SecretStr | None = None
-    clerk_issuer_url: AnyHttpUrl | None = None
 
     app_base_url: AnyHttpUrl = cast(AnyHttpUrl, "http://localhost:8000")
     app_name: str = "openai-vectorstore2"
@@ -51,7 +49,6 @@ class AppSettings(BaseSettings):
     s3_secret_access_key: SecretStr | None = None
     s3_region: str = "auto"
     s3_url_style: Literal["path", "virtual"] = "path"
-    storage_upload_url_ttl_seconds: int = 900
     storage_download_url_ttl_seconds: int = 900
 
     openai_agent_model: str = "gpt-5.5"
@@ -74,7 +71,6 @@ class AppSettings(BaseSettings):
     chat_completions_output_token_reserve: int = 4_096
     chat_completions_compaction_remaining_ratio: float = 0.25
     chat_completions_compaction_compress_ratio: float = 0.50
-    chat_completions_on_prem_price_per_million_tokens: float = 1.0
     chat_completions_web_search_url: AnyHttpUrl | None = None
 
     billing_enabled: bool = True
@@ -95,17 +91,12 @@ class AppSettings(BaseSettings):
     admin_shared_module: str = "backend.app.admin.shared_adapter"
 
     semantic_split_pdf_batch_pages: int = 25
-    semantic_split_text_batch_lines: int = 2_000
-    semantic_chunk_max_search_results: int = 12
-    research_import_max_depth: int = 2
     research_import_max_candidates_per_source: int = 8
-    research_import_max_pending_candidates: int = 40
     research_import_fetch_timeout_seconds: float = 15.0
     research_import_max_fetch_bytes: int = 12_000_000
     research_import_max_text_chars: int = 120_000
     research_import_user_agent: str = "openai-vectorstore2-research-importer/0.1"
     task_runner_max_concurrency: int = 1
-    mcp_client_session_timeout_seconds: float = 60.0
 
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
     log_file_path: str | None = ".local/logs/openai-vectorstore2.log"
@@ -131,7 +122,6 @@ class AppSettings(BaseSettings):
 
     @field_validator(
         "clerk_secret_key",
-        "clerk_issuer_url",
         "s3_endpoint",
         "s3_bucket",
         "s3_access_key_id",
@@ -222,13 +212,6 @@ class AppSettings(BaseSettings):
         if database_url.startswith("sqlite+aiosqlite://"):
             return database_url.replace("sqlite+aiosqlite://", "sqlite://", 1)
         return database_url
-
-    @property
-    def effective_clerk_domain(self) -> str | None:
-        if self.clerk_issuer_url is None:
-            return None
-        parsed = urlparse(str(self.clerk_issuer_url))
-        return parsed.netloc or None
 
 
 @lru_cache(maxsize=1)

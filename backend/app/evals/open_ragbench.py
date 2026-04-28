@@ -6,7 +6,7 @@ from collections import Counter, defaultdict
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 import logging
-from math import log2
+from math import ceil, log2
 from pathlib import Path
 import random
 import re
@@ -19,7 +19,7 @@ import httpx
 from pydantic import BaseModel, Field
 
 DATASET_ID = "vectara/open_ragbench"
-EVAL_VERSION = "2026-04-28.3"
+EVAL_VERSION = "2026-04-28.4"
 DATASET_BASE_URL = "https://huggingface.co/datasets/vectara/open_ragbench/resolve/main/pdf/arxiv"
 CORPUS_TREE_URL = "https://huggingface.co/api/datasets/vectara/open_ragbench/tree/main/pdf/arxiv/corpus?recursive=false"
 DEFAULT_CATEGORIES: tuple[str, ...] = (
@@ -41,6 +41,7 @@ DEFAULT_AUTH_TOKEN = "local-dev"
 DEFAULT_TIMEOUT_SECONDS = 60.0
 OPEN_RAGBENCH_REPO_URL = "https://github.com/vectara/open-rag-bench"
 BEIR_PAPER_URL = "https://datasets-benchmarks-proceedings.neurips.cc/paper_files/paper/2021/file/65b9eea6e1cc6bb9f0cd2a47751a186f-Paper-round2.pdf"
+RAGBENCH_PAPER_URL = "https://arxiv.org/abs/2407.11005"
 
 logger = logging.getLogger(__name__)
 
@@ -151,6 +152,7 @@ class QueryEvalResult(BaseModel):
     query_source: str
     expected_rank: int | None
     hits: list[SearchHitRecord]
+    latency_ms: float = 0.0
 
 
 class AnswerEvalResult(BaseModel):
@@ -165,6 +167,7 @@ class AnswerEvalResult(BaseModel):
     reference_coverage: float
     covered_reference_terms: list[str] = Field(default_factory=list)
     verdict: Literal["pass", "review", "fail"]
+    latency_ms: float = 0.0
 
 
 class MetricAtK(BaseModel):
@@ -172,6 +175,15 @@ class MetricAtK(BaseModel):
     recall: float
     mrr: float
     ndcg: float
+
+
+class LatencySummary(BaseModel):
+    count: int
+    total_ms: float
+    mean_ms: float
+    p50_ms: float
+    p95_ms: float
+    max_ms: float
 
 
 class EvalReport(BaseModel):
@@ -189,6 +201,10 @@ class EvalReport(BaseModel):
     by_query_source: dict[str, list[MetricAtK]]
     results: list[QueryEvalResult]
     answer_evaluations: list[AnswerEvalResult] = Field(default_factory=list)
+    retrieval_duration_ms: float | None = None
+    retrieval_latency: LatencySummary | None = None
+    answer_eval_duration_ms: float | None = None
+    answer_latency: LatencySummary | None = None
 
 
 class EvalAppClient:
@@ -511,8 +527,11 @@ def build_eval_report(
     max_results: int,
     results: list[QueryEvalResult],
     answer_evaluations: list[AnswerEvalResult] | None = None,
+    retrieval_duration_ms: float | None = None,
+    answer_eval_duration_ms: float | None = None,
     ks: Sequence[int] = (1, 3, 5, 10),
 ) -> EvalReport:
+    answer_items = answer_evaluations or []
     return EvalReport(
         run_id=run_id,
         dataset_id=dataset_id,
@@ -525,7 +544,11 @@ def build_eval_report(
         by_query_type=_grouped_metrics(results, key="query_type", ks=ks),
         by_query_source=_grouped_metrics(results, key="query_source", ks=ks),
         results=results,
-        answer_evaluations=answer_evaluations or [],
+        answer_evaluations=answer_items,
+        retrieval_duration_ms=retrieval_duration_ms,
+        retrieval_latency=_latency_summary([result.latency_ms for result in results]),
+        answer_eval_duration_ms=answer_eval_duration_ms,
+        answer_latency=_latency_summary([item.latency_ms for item in answer_items]),
     )
 
 
@@ -645,10 +668,13 @@ async def run_retrieval_eval(
         uploads.tag_id,
     )
     semaphore = asyncio.Semaphore(max(1, concurrency))
+    eval_started_at = monotonic()
 
     async def score_query(query_index: int, query: SubsetQuery) -> tuple[int, QueryEvalResult]:
         async with semaphore:
+            query_started_at = monotonic()
             hits_payload = await api.search(query=query.query, tag_id=uploads.tag_id, max_results=max_results)
+            latency_ms = (monotonic() - query_started_at) * 1000
         hits: list[SearchHitRecord] = []
         expected_rank: int | None = None
         for rank, hit in enumerate(hits_payload, start=1):
@@ -680,6 +706,7 @@ async def run_retrieval_eval(
                 query_source=query.query_source,
                 expected_rank=expected_rank,
                 hits=hits,
+                latency_ms=latency_ms,
             ),
         )
 
@@ -703,20 +730,26 @@ async def run_retrieval_eval(
             )
     results = [result for result in results_by_index if result is not None]
     misses = len([result for result in results if result.expected_rank is None])
-    logger.info(
-        "open_ragbench_retrieval_eval_completed run_id=%s queries=%s misses=%s",
-        manifest.run_id,
-        len(results),
-        misses,
-    )
-    return build_eval_report(
+    retrieval_duration_ms = (monotonic() - eval_started_at) * 1000
+    report = build_eval_report(
         run_id=manifest.run_id,
         dataset_id=manifest.dataset_id,
         dataset_revision=manifest.dataset_revision,
         tag_id=uploads.tag_id,
         max_results=max_results,
         results=results,
+        retrieval_duration_ms=retrieval_duration_ms,
     )
+    logger.info(
+        "open_ragbench_retrieval_eval_completed run_id=%s queries=%s misses=%s duration_ms=%.1f mean_latency_ms=%s p95_latency_ms=%s",
+        manifest.run_id,
+        len(results),
+        misses,
+        retrieval_duration_ms,
+        _format_optional_latency(report.retrieval_latency.mean_ms if report.retrieval_latency is not None else None),
+        _format_optional_latency(report.retrieval_latency.p95_ms if report.retrieval_latency is not None else None),
+    )
+    return report
 
 
 async def run_answer_eval(
@@ -744,7 +777,9 @@ async def run_answer_eval(
     evaluations: list[AnswerEvalResult] = []
     for result in selected_results:
         query = query_by_id[result.query_id]
+        answer_started_at = monotonic()
         answer, hits = await api.qa(query=result.query, tag_id=uploads.tag_id, max_results=max_results)
+        latency_ms = (monotonic() - answer_started_at) * 1000
         used_hits: list[SearchHitRecord] = []
         hit_doc_ids: list[str | None] = []
         for index, hit in enumerate(hits, start=1):
@@ -786,15 +821,17 @@ async def run_answer_eval(
                 reference_coverage=coverage,
                 covered_reference_terms=covered_terms,
                 verdict=verdict,
+                latency_ms=latency_ms,
             )
         )
         logger.info(
-            "open_ragbench_answer_eval_query run_id=%s query_id=%s verdict=%s expected_doc_retrieved=%s coverage=%.3f",
+            "open_ragbench_answer_eval_query run_id=%s query_id=%s verdict=%s expected_doc_retrieved=%s coverage=%.3f latency_ms=%.1f",
             manifest.run_id,
             result.query_id,
             verdict,
             retrieved_expected_doc,
             coverage,
+            latency_ms,
         )
     logger.info("open_ragbench_answer_eval_completed run_id=%s samples=%s", manifest.run_id, len(evaluations))
     return evaluations
@@ -806,6 +843,8 @@ def render_summary_markdown(*, manifest: SubsetManifest, uploads: UploadManifest
     mrr_at_10 = _metric_value(report.metrics, k=10, metric="mrr")
     ndcg_at_10 = _metric_value(report.metrics, k=10, metric="ndcg")
     recall_at_1 = _metric_value(report.metrics, k=1, metric="recall")
+    retrieval_latency = report.retrieval_latency
+    answer_latency = report.answer_latency
     answer_passes = len([item for item in report.answer_evaluations if item.verdict == "pass"])
     answer_count = len(report.answer_evaluations)
     misses = [result for result in report.results if result.expected_rank is None]
@@ -831,6 +870,7 @@ def render_summary_markdown(*, manifest: SubsetManifest, uploads: UploadManifest
         f"The five-question answer check produced {answer_passes}/{answer_count} pass verdicts."
         if answer_count
         else "No answer-generation sample was scored.",
+        f"Retrieval scoring took {_format_seconds(report.retrieval_duration_ms)} wall-clock with p95 search latency {_format_optional_latency(retrieval_latency.p95_ms if retrieval_latency is not None else None)} ms.",
         f"There were {len(misses)} retrieval misses at top {report.max_results}.",
         "",
         "Detailed artifacts: [full retrieval results](results.json), [query review](demo_queries.md), [detailed metric tables](detailed_metrics.md).",
@@ -843,6 +883,21 @@ def render_summary_markdown(*, manifest: SubsetManifest, uploads: UploadManifest
         f"| Recall@10 | {_format_optional_metric(recall_at_10)} |",
         f"| MRR@10 | {_format_optional_metric(mrr_at_10)} |",
         f"| nDCG@10 | {_format_optional_metric(ndcg_at_10)} |",
+        "",
+        "## Latency",
+        "",
+        "| Stage | Wall Clock | Count | Mean | P50 | P95 | Max |",
+        "|---|---:|---:|---:|---:|---:|---:|",
+        _latency_table_row(
+            "Retrieval search requests",
+            duration_ms=report.retrieval_duration_ms,
+            summary=retrieval_latency,
+        ),
+        _latency_table_row(
+            "Answer-generation checks",
+            duration_ms=report.answer_eval_duration_ms,
+            summary=answer_latency,
+        ),
     ]
     if weakest_categories:
         lines.extend(
@@ -858,39 +913,62 @@ def render_summary_markdown(*, manifest: SubsetManifest, uploads: UploadManifest
     lines.extend(
         [
             "",
+            "## Baseline Context",
+            "",
+            "This table is deliberately conservative. The only row directly produced by this harness is this app run. The other rows are scale and sanity-check references from adjacent benchmarks, not leaderboard claims against the same corpus, chunking, relevance labels, or serving path.",
+            "",
+            "| Reference | What It Measures | Reported Signal | Why It Is Not Directly Comparable | Source |",
+            "|---|---|---|---|---|",
+            f"| This app run | Document-level retrieval on a topic-filtered Open RAGBench PDF subset, {len(manifest.documents)} docs / {report.query_count} queries | Recall@10={_format_optional_metric(recall_at_10)}, MRR@10={_format_optional_metric(mrr_at_10)}, nDCG@10={_format_optional_metric(ndcg_at_10)} | Direct result, but on a deliberately small curated subset | this report |",
+            f"| Open RAGBench draft corpus | Multimodal arXiv PDF RAG dataset | 1000 PDFs, 3045 QA pairs, 400 positive docs, 600 hard negatives | Dataset scale reference, not a published retrieval-system score | [Vectara Open RAG Bench]({OPEN_RAGBENCH_REPO_URL}) |",
+            f"| BEIR SciFact BM25 | Scientific abstract retrieval | nDCG@10=0.665 | Different corpus, abstract-level documents, and BEIR relevance labels | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
+            f"| BEIR SciFact BM25 + cross-encoder | Scientific abstract retrieval with reranking | nDCG@10=0.688 | Different corpus and reranker setup; useful as a mature retrieval baseline sanity check | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
+            f"| RAGBench / TRACe | End-to-end RAG answer evaluation across industry domains | 100k examples and explainable RAG labels | Evaluates generated-answer behavior rather than document-level top-k retrieval | [RAGBench paper]({RAGBENCH_PAPER_URL}) |",
+        ]
+    )
+    if report.answer_evaluations:
+        lines.extend(["", "## Five-Question Answer Evaluation", ""])
+        lines.append(
+            "Detailed document traces and retrieved/used sources: [query review](demo_queries.md#five-answer-checks)."
+        )
+        for item in report.answer_evaluations:
+            lines.extend(
+                [
+                    "",
+                    f"### `{item.query_id}`",
+                    "",
+                    f"- Verdict: `{item.verdict}`",
+                    f"- Expected doc retrieved: `{str(item.retrieved_expected_doc).lower()}`",
+                    f"- Reference coverage: `{item.reference_coverage:.3f}`",
+                    f"- QA latency: `{_format_optional_latency(item.latency_ms)} ms`",
+                    "",
+                    "**Question**",
+                    "",
+                    item.query,
+                    "",
+                    "**Expected Answer**",
+                    "",
+                    item.reference_answer or "(none)",
+                    "",
+                    "**System Answer**",
+                    "",
+                    item.generated_answer,
+                ]
+            )
+    lines.extend(
+        [
+            "",
             "## Metric Definitions",
             "",
             "- Recall@k: fraction of scored queries where the expected Open RAGBench document appears anywhere in the top k search results.",
             "- MRR@k: mean reciprocal rank of the expected document when it appears in the top k; a rank-1 hit contributes 1.0, rank 3 contributes 0.333, and a miss contributes 0.",
             "- nDCG@k: rank-discounted gain for the expected document in the top k. This run has one relevant document per query, so nDCG is 1.0 at rank 1, 1/log2(rank+1) at lower ranks, and 0 for a miss.",
+            "- Search latency: elapsed time for an individual `/api/search` request after it starts under the eval runner's concurrency gate; retrieval wall clock is the elapsed time for the full batch.",
+            "- QA latency: elapsed time for an individual `/api/actions/qa` request, including answer generation and any retrieval performed by that API path.",
             "- Reference coverage: lightweight answer-eval heuristic measuring how many non-stopword terms from the Open RAGBench reference answer appear in the generated answer.",
             "- Verdict: pass when the expected document is retrieved and reference coverage is at least 0.25, review when only one of those checks passes, and fail otherwise.",
-            "",
-            "## External Reference Points",
-            "",
-            "These are context markers, not strict leaderboard comparisons: this run scores document-level retrieval over a topic-filtered 100-PDF subset, while published systems often score passage/chunk retrieval or answer generation on different corpora.",
-            "",
-            "| System / baseline | Dataset and scope | Reported metric | Source |",
-            "|---|---|---:|---|",
-            f"| This app run | Open RAGBench arXiv PDF subset, {len(manifest.documents)} docs / {report.query_count} queries | Recall@10={_format_optional_metric(recall_at_10)}, MRR@10={_format_optional_metric(mrr_at_10)}, nDCG@10={_format_optional_metric(ndcg_at_10)} | this report |",
-            f"| Open RAGBench full draft dataset | arXiv PDF corpus, 1000 docs, 3045 QA pairs, 400 positive docs, 600 hard negatives | dataset reference | [Vectara Open RAG Bench]({OPEN_RAGBENCH_REPO_URL}) |",
-            f"| BM25 | BEIR SciFact scientific retrieval | nDCG@10=0.665 | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
-            f"| BM25 + cross-encoder reranker | BEIR SciFact scientific retrieval | nDCG@10=0.688 | [BEIR paper, Table 2]({BEIR_PAPER_URL}) |",
-            f"| BM25 + cross-encoder reranker | BEIR 18-dataset zero-shot suite | +11% average nDCG@10 vs BM25; better than BM25 on 16/18 datasets | [BEIR paper, Table 2 and analysis]({BEIR_PAPER_URL}) |",
         ]
     )
-    if report.answer_evaluations:
-        lines.extend(["", "## Five-Question Answer Evaluation", ""])
-        lines.extend(
-            [
-                "| Query | Verdict | Expected Doc Retrieved | Reference Coverage |",
-                "|---|---|---:|---:|",
-            ]
-        )
-        for item in report.answer_evaluations:
-            lines.append(
-                f"| `{item.query_id}` | `{item.verdict}` | {str(item.retrieved_expected_doc).lower()} | {item.reference_coverage:.3f} |"
-            )
     return "\n".join(lines).strip() + "\n"
 
 
@@ -904,6 +982,23 @@ def render_detailed_metrics_markdown(*, report: EvalReport) -> str:
         "|---:|---:|---:|---:|",
     ]
     lines.extend(f"| {item.k} | {item.recall:.3f} | {item.mrr:.3f} | {item.ndcg:.3f} |" for item in report.metrics)
+    lines.extend(["", "## Latency", ""])
+    lines.extend(
+        [
+            "| Stage | Wall Clock | Count | Mean | P50 | P95 | Max |",
+            "|---|---:|---:|---:|---:|---:|---:|",
+            _latency_table_row(
+                "Retrieval search requests",
+                duration_ms=report.retrieval_duration_ms,
+                summary=report.retrieval_latency,
+            ),
+            _latency_table_row(
+                "Answer-generation checks",
+                duration_ms=report.answer_eval_duration_ms,
+                summary=report.answer_latency,
+            ),
+        ]
+    )
     lines.extend(["", "## Category Breakdown", ""])
     lines.extend(_metric_group_table(report.by_category))
     lines.extend(["", "## Query Type Breakdown", ""])
@@ -1623,6 +1718,28 @@ def _metric_at_k(results: Sequence[QueryEvalResult], *, k: int) -> MetricAtK:
     )
 
 
+def _latency_summary(latencies_ms: Sequence[float]) -> LatencySummary | None:
+    values = sorted(value for value in latencies_ms if value >= 0)
+    if not values:
+        return None
+    total = sum(values)
+    return LatencySummary(
+        count=len(values),
+        total_ms=total,
+        mean_ms=total / len(values),
+        p50_ms=_nearest_rank_percentile(values, percentile=0.50),
+        p95_ms=_nearest_rank_percentile(values, percentile=0.95),
+        max_ms=values[-1],
+    )
+
+
+def _nearest_rank_percentile(sorted_values: Sequence[float], *, percentile: float) -> float:
+    if not sorted_values:
+        return 0.0
+    index = max(0, min(len(sorted_values) - 1, ceil(percentile * len(sorted_values)) - 1))
+    return sorted_values[index]
+
+
 def _grouped_metrics(
     results: Sequence[QueryEvalResult],
     *,
@@ -1648,6 +1765,18 @@ def _counter_text(counter: Counter[str]) -> str:
     if not counter:
         return "none"
     return ", ".join(f"{key}={value}" for key, value in sorted(counter.items()))
+
+
+def _latency_table_row(label: str, *, duration_ms: float | None, summary: LatencySummary | None) -> str:
+    if summary is None:
+        return f"| {label} | {_format_seconds(duration_ms)} | 0 | n/a | n/a | n/a | n/a |"
+    return (
+        f"| {label} | {_format_seconds(duration_ms)} | {summary.count} | "
+        f"{_format_optional_latency(summary.mean_ms)} ms | "
+        f"{_format_optional_latency(summary.p50_ms)} ms | "
+        f"{_format_optional_latency(summary.p95_ms)} ms | "
+        f"{_format_optional_latency(summary.max_ms)} ms |"
+    )
 
 
 def _metric_group_table(groups: Mapping[str, Sequence[MetricAtK]]) -> list[str]:
@@ -1684,6 +1813,14 @@ def _format_optional_metric(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.3f}"
 
 
+def _format_optional_latency(value: float | None) -> str:
+    return "n/a" if value is None else f"{value:.1f}"
+
+
+def _format_seconds(value_ms: float | None) -> str:
+    return "n/a" if value_ms is None else f"{value_ms / 1000:.1f}s"
+
+
 def _render_demo_result(
     result: QueryEvalResult,
     *,
@@ -1710,6 +1847,7 @@ def _render_demo_result(
         f"- Rank: `{rank}`",
         f"- Category: `{result.category}`",
         f"- Type/source: `{result.query_type}` / `{result.query_source}`",
+        f"- Search latency: `{_format_optional_latency(result.latency_ms)} ms`",
         "",
         "**Query**",
         "",
@@ -1747,6 +1885,7 @@ def _render_demo_result(
                 answer_eval.generated_answer,
                 "",
                 f"Verdict: `{answer_eval.verdict}`; expected doc used: `{str(answer_eval.retrieved_expected_doc).lower()}`; reference coverage: `{answer_eval.reference_coverage:.3f}`.",
+                f"QA latency: `{_format_optional_latency(answer_eval.latency_ms)} ms`.",
             ]
         )
     else:
@@ -1806,6 +1945,7 @@ def _render_answer_eval_result(result: AnswerEvalResult) -> str:
             f"- Expected doc retrieved: `{str(result.retrieved_expected_doc).lower()}`",
             f"- Expected doc rank from retrieval run: `{result.expected_doc_rank if result.expected_doc_rank is not None else 'miss'}`",
             f"- Reference coverage: `{result.reference_coverage:.3f}`",
+            f"- QA latency: `{_format_optional_latency(result.latency_ms)} ms`",
             f"- Covered reference terms: `{', '.join(result.covered_reference_terms) or 'none'}`",
             "",
             "**Question**",
@@ -1971,6 +2111,7 @@ async def _run_eval_from_cli(
             max_queries=max_queries,
             concurrency=retrieval_concurrency,
         )
+        answer_started_at = monotonic()
         answer_evaluations = await run_answer_eval(
             api=api,
             manifest=manifest,
@@ -1979,7 +2120,14 @@ async def _run_eval_from_cli(
             sample_size=answer_sample_size,
             max_results=answer_max_results,
         )
-        return report.model_copy(update={"answer_evaluations": answer_evaluations})
+        answer_eval_duration_ms = (monotonic() - answer_started_at) * 1000
+        return report.model_copy(
+            update={
+                "answer_evaluations": answer_evaluations,
+                "answer_eval_duration_ms": answer_eval_duration_ms,
+                "answer_latency": _latency_summary([item.latency_ms for item in answer_evaluations]),
+            }
+        )
 
 
 def _enforce_threshold(*, report: EvalReport, min_recall_at_10: float | None) -> None:

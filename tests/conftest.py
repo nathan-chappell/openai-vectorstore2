@@ -227,7 +227,6 @@ class FakeOpenAIGateway:
 @pytest.fixture
 def configured_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[AppSettings]:
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
-    monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
     monkeypatch.setenv("ALLOW_LOCAL_DEV_AUTH", "true")
     monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'app.db'}")
     monkeypatch.setenv("LOCAL_STORAGE_DIR", str(tmp_path / "storage"))

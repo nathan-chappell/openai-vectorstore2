@@ -42,6 +42,7 @@ def test_selected_scope_ignores_openai_file_ids_without_browser_selection_fallba
         role="admin",
         credit_floor_usd=-1.0,
         bearer_token="local-dev",
+        library_id=None,
         selected_source_ids=["source_a", "source_b"],
         thread_origin="web",
     )
@@ -57,6 +58,7 @@ def test_selected_scope_preserves_explicit_app_source_ids() -> None:
         role="admin",
         credit_floor_usd=-1.0,
         bearer_token="local-dev",
+        library_id=None,
         selected_source_ids=["source_a"],
         thread_origin="web",
     )
