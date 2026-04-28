@@ -17,11 +17,13 @@ docker push nathanschappell/openai-vectorstore2:1.1.1
 Use the published Docker image or let Railway build the Dockerfile.
 
 - Health check: `/health`
-- Internal port: `8000`
+- Internal port: use Railway's injected `PORT`; local/default Docker fallback is `8000`.
 - Start command with migrations: `sh -lc 'alembic upgrade head && openai-vectorstore2-http'`
 - Plain start command after a confirmed migration: `openai-vectorstore2-http`
 
 Run Alembic before serving each deploy when `DATABASE_SCHEMA_MODE=migrations`. The app can also verify an empty database during startup, but migrations are the production path because `create_all` does not alter existing tables.
+Railway's public domain target port must match the port the app listens on. Do
+not set a conflicting `HOST`; the app binds to `0.0.0.0`.
 
 ## Required Env
 

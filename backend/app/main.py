@@ -4,6 +4,7 @@ from collections.abc import AsyncGenerator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import logging
 import mimetypes
+import os
 from pathlib import Path
 from time import perf_counter
 from typing import Literal
@@ -1026,4 +1027,5 @@ def _static_file_response(path: Path) -> Response:
 
 
 def main() -> None:
-    uvicorn.run(create_fastapi_app(), host="0.0.0.0", port=8000)
+    port = int(os.environ.get("PORT", "8000"))
+    uvicorn.run(create_fastapi_app(), host="0.0.0.0", port=port)
