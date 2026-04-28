@@ -57,6 +57,10 @@ FastMCP uses `VectorstoreTokenVerifier`.
 - `MCP_AUTH_MODE=none` disables the HTTP MCP verifier for temporary ChatGPT
   developer-mode smoke tests and maps calls to `local-dev`. Do not use this for
   production or shared data.
+- OAuth metadata endpoints expose public CORS headers for browser-based MCP
+  clients. If ChatGPT calls `/mcp/` from the browser, production
+  `CORS_ORIGINS` must also include `https://chatgpt.com` and
+  `https://chat.openai.com`.
 
 For production ChatGPT Apps, the remaining work is OAuth/provider metadata hardening: protected-resource metadata, authorization-server metadata, audience/resource checks, and final HTTPS `APP_BASE_URL` configuration.
 

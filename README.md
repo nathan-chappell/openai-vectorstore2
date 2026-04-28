@@ -121,6 +121,13 @@ authorization server that can issue MCP audience-bound tokens. Configure
 ready; unknown `/.well-known/*` paths intentionally return 404 instead of the
 frontend shell.
 
+When testing from ChatGPT's browser client, include ChatGPT origins in
+`CORS_ORIGINS` so authenticated `/mcp/` preflight requests can reach the server:
+
+```bash
+CORS_ORIGINS=https://your-service.example,https://chatgpt.com,https://chat.openai.com
+```
+
 ## Test commands
 
 ```bash

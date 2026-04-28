@@ -1710,6 +1710,92 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
 
 
 @pytest.mark.asyncio
+async def test_mcp_oauth_metadata_options_uses_public_cors(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    settings = configured_settings.model_copy(
+        update={
+            "app_base_url": "https://vectorstore.example.com",
+            "mcp_authorization_servers": ["https://auth.example.com"],
+        }
+    )
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.options(
+                "/.well-known/oauth-protected-resource/mcp/",
+                headers={
+                    "origin": "https://chatgpt.com",
+                    "access-control-request-method": "GET",
+                },
+            )
+
+    assert response.status_code == 204
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert response.headers["access-control-allow-methods"] == "GET, OPTIONS"
+
+
+@pytest.mark.asyncio
+async def test_mcp_authorization_server_metadata_proxies_configured_issuer(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+    requested_urls: list[str] = []
+
+    class FakeAuthorizationMetadataClient:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            assert timeout == 10.0
+            assert follow_redirects is True
+
+        async def __aenter__(self) -> "FakeAuthorizationMetadataClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            del exc_type, exc, traceback
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            assert headers == {"accept": "application/json"}
+            requested_urls.append(url)
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/oauth/authorize",
+                    "token_endpoint": "https://auth.example.com/oauth/token",
+                    "registration_endpoint": "https://auth.example.com/oauth/register",
+                    "code_challenge_methods_supported": ["S256"],
+                },
+            )
+
+    monkeypatch.setattr("backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
+    settings = configured_settings.model_copy(
+        update={
+            "app_base_url": "https://vectorstore.example.com",
+            "mcp_authorization_servers": ["https://auth.example.com"],
+        }
+    )
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.get(
+                "/.well-known/oauth-authorization-server",
+                headers={"origin": "https://chatgpt.com"},
+            )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-credentials" not in response.headers
+    assert requested_urls == ["https://auth.example.com/.well-known/oauth-authorization-server"]
+    assert response.json()["registration_endpoint"] == "https://auth.example.com/oauth/register"
+
+
+@pytest.mark.asyncio
 async def test_unknown_well_known_paths_do_not_return_spa_shell(
     configured_settings: AppSettings,
     fake_openai: None,

@@ -14,6 +14,7 @@ from chatkit.server import StreamingResult
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
+from httpx import AsyncClient as HttpAsyncClient
 import uvicorn
 
 from backend.app.admin import payment_integration_status
@@ -96,6 +97,13 @@ from backend.app.web_auth import (
 
 logger = logging.getLogger(__name__)
 
+OAUTH_METADATA_CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, OPTIONS",
+    "Access-Control-Allow-Headers": "*",
+    "Access-Control-Max-Age": "86400",
+}
+
 
 def _app_version() -> str:
     try:
@@ -144,6 +152,10 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         started_at = perf_counter()
         method = request.method
         path = request.url.path
+        if method == "OPTIONS" and path.startswith("/.well-known/oauth-"):
+            response = Response(status_code=status.HTTP_204_NO_CONTENT, headers=OAUTH_METADATA_CORS_HEADERS)
+            logger.info("%s %s (%.1fms)", method, path, (perf_counter() - started_at) * 1000)
+            return response
         try:
             response = await call_next(request)
         except Exception:
@@ -165,6 +177,12 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             log_method("%s %s (%.1fms)", method, path, duration_ms)
         else:
             log_method("%s %s -> %s (%.1fms)", method, path, response.status_code, duration_ms)
+        if path.startswith("/.well-known/oauth-"):
+            for header in ["Access-Control-Allow-Credentials", "Access-Control-Expose-Headers"]:
+                if header in response.headers:
+                    del response.headers[header]
+            for header, value in OAUTH_METADATA_CORS_HEADERS.items():
+                response.headers[header] = value
         return response
 
     @app.api_route("/mcp", methods=["GET", "POST", "DELETE", "HEAD", "OPTIONS"], include_in_schema=False)
@@ -192,6 +210,35 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             "scopes_supported": resolved_settings.mcp_required_scopes,
             "resource_name": resolved_settings.app_name,
         }
+
+    @app.get("/.well-known/oauth-authorization-server", include_in_schema=False)
+    @app.get("/.well-known/oauth-authorization-server/", include_in_schema=False)
+    @app.get("/.well-known/oauth-authorization-server/mcp", include_in_schema=False)
+    @app.get("/.well-known/oauth-authorization-server/mcp/", include_in_schema=False)
+    async def mcp_authorization_server_metadata() -> dict[str, object]:
+        if resolved_settings.mcp_auth_mode == "none":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
+        if not resolved_settings.mcp_authorization_servers:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="MCP OAuth is not configured.")
+
+        issuer = resolved_settings.mcp_authorization_servers[0].rstrip("/")
+        metadata_urls = [
+            f"{issuer}/.well-known/oauth-authorization-server",
+            f"{issuer}/.well-known/openid-configuration",
+        ]
+        async with HttpAsyncClient(timeout=10.0, follow_redirects=True) as client:
+            for metadata_url in metadata_urls:
+                response = await client.get(metadata_url, headers={"accept": "application/json"})
+                if response.status_code != status.HTTP_200_OK:
+                    continue
+                try:
+                    metadata = response.json()
+                except ValueError:
+                    continue
+                if isinstance(metadata, dict):
+                    return {str(key): value for key, value in metadata.items()}
+
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OAuth authorization server metadata unavailable.")
 
     @app.get("/health")
     async def healthcheck() -> dict[str, str]:
