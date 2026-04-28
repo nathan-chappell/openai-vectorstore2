@@ -4,11 +4,37 @@ import json
 from typing import cast
 
 import httpx
-from pydantic import SecretStr
+from pydantic import SecretStr, ValidationError
 import pytest
 
 from backend.app.core.config import AppSettings
 from backend.app.services.auth import AuthService, ClerkUserPayload
+
+
+@pytest.mark.asyncio
+async def test_local_dev_bearer_is_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("APP_SIGNING_SECRET", "test-secret")
+    monkeypatch.delenv("ALLOW_LOCAL_DEV_AUTH", raising=False)
+    settings = AppSettings()
+
+    assert settings.allow_local_dev_auth is False
+
+    user = await AuthService(settings).authenticate_bearer("local-dev")
+
+    assert user is None
+
+
+@pytest.mark.asyncio
+async def test_local_dev_bearer_requires_explicit_opt_in(configured_settings: AppSettings) -> None:
+    settings = configured_settings.model_copy(update={"allow_local_dev_auth": True})
+    auth = AuthService(settings)
+
+    user = await auth.authenticate_bearer("local-dev")
+
+    assert user is not None
+    assert user.clerk_user_id == "local-dev"
+    assert user.role == "admin"
 
 
 def test_auth_service_reads_clerk_public_metadata(configured_settings: AppSettings) -> None:
@@ -27,6 +53,17 @@ def test_auth_service_reads_clerk_public_metadata(configured_settings: AppSettin
     assert record.active is True
     assert record.role == "admin"
     assert record.credit_floor_usd == -5.25
+
+
+def test_local_dev_auth_cannot_be_enabled_for_non_local_base_url(configured_settings: AppSettings) -> None:
+    with pytest.raises(ValidationError, match="ALLOW_LOCAL_DEV_AUTH"):
+        AppSettings.model_validate(
+            {
+                **configured_settings.model_dump(),
+                "allow_local_dev_auth": True,
+                "app_base_url": "https://vectorstore.example.com",
+            }
+        )
 
 
 @pytest.mark.asyncio

@@ -6,7 +6,7 @@ import re
 from typing import Annotated, Literal, cast
 from urllib.parse import urlparse
 
-from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
+from pydantic import AnyHttpUrl, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -34,7 +34,7 @@ class AppSettings(BaseSettings):
             "http://127.0.0.1:8000",
         ]
     )
-    allow_local_dev_auth: bool = True
+    allow_local_dev_auth: bool = False
 
     clerk_active_metadata_key: str = "active"
     clerk_role_metadata_key: str = "role"
@@ -164,6 +164,15 @@ class AppSettings(BaseSettings):
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized_value):
             raise ValueError("DATABASE_POSTGRES_SCHEMA must be a simple PostgreSQL identifier.")
         return normalized_value
+
+    @model_validator(mode="after")
+    def _validate_local_dev_auth_scope(self) -> AppSettings:
+        if not self.allow_local_dev_auth:
+            return self
+        parsed = urlparse(str(self.app_base_url))
+        if parsed.hostname not in {"localhost", "127.0.0.1", "::1"}:
+            raise ValueError("ALLOW_LOCAL_DEV_AUTH can only be enabled with a localhost APP_BASE_URL.")
+        return self
 
     @property
     def normalized_app_base_url(self) -> str:

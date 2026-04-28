@@ -35,8 +35,18 @@ CORS_ORIGINS=https://your-service.example
 DATABASE_URL=postgresql://...
 DATABASE_SCHEMA_MODE=migrations
 DATABASE_POSTGRES_SCHEMA=openai_vectorstore2
+ALLOW_LOCAL_DEV_AUTH=false
+CLERK_SECRET_KEY=
+CLERK_ISSUER_URL=
+VITE_CLERK_PUBLISHABLE_KEY=
 VITE_CHATKIT_DOMAIN_KEY=
 ```
+
+`ALLOW_LOCAL_DEV_AUTH` defaults to `false` and should stay false in production.
+When true, the backend accepts `Authorization: Bearer local-dev` as an active
+admin user.
+
+See `docs/security.md` for the production security checklist.
 
 Use a separate database for each portfolio app when possible. If PlodAI and
 OpenAI Vectorstore2 must share the same PostgreSQL database service today, keep
@@ -90,6 +100,11 @@ CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
 CLERK_AUTHORIZED_PARTIES=
 ```
+
+For deployed browser auth, treat `CLERK_SECRET_KEY`, `CLERK_ISSUER_URL`,
+`VITE_CLERK_PUBLISHABLE_KEY`, and a deployment-specific `CORS_ORIGINS` value as
+required. Set `CLERK_AUTHORIZED_PARTIES` when your Clerk token flow supplies a
+stable frontend origin/audience to check.
 
 ## Storage
 

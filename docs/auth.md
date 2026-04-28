@@ -4,11 +4,13 @@ The app supports two web auth modes and one MCP verifier path.
 
 ## Local Dev
 
-Local dev auth is enabled when `ALLOW_LOCAL_DEV_AUTH=true`.
+Local dev auth is disabled by default. Enable it only for local development or
+test runs with `ALLOW_LOCAL_DEV_AUTH=true`.
 
 - The frontend uses local mode when `VITE_CLERK_PUBLISHABLE_KEY` is empty.
 - The bearer token is `local-dev`.
 - The backend maps that token to a synthetic active user with `clerk_user_id="local-dev"`.
+- The synthetic user is an admin. Never enable this in production.
 
 This is the mode used by Playwright. Browser tests explicitly clear Clerk env vars and set local-dev auth.
 
@@ -24,6 +26,7 @@ When `VITE_CLERK_PUBLISHABLE_KEY` is set, the frontend wraps the app with `Clerk
 Relevant env vars:
 
 ```bash
+ALLOW_LOCAL_DEV_AUTH=false
 CLERK_SECRET_KEY=
 CLERK_ISSUER_URL=
 VITE_CLERK_PUBLISHABLE_KEY=
@@ -31,6 +34,12 @@ CLERK_AUTHORIZED_PARTIES=
 CLERK_ACTIVE_METADATA_KEY=active
 CLERK_ROLE_METADATA_KEY=role
 ```
+
+For production, `ALLOW_LOCAL_DEV_AUTH=false`, `CLERK_SECRET_KEY`,
+`CLERK_ISSUER_URL`, and `VITE_CLERK_PUBLISHABLE_KEY` should all be set
+deliberately. `CLERK_AUTHORIZED_PARTIES` should be set to the deployed frontend
+origin when Clerk audience/authorized-party checks are available for the token
+type in use.
 
 ## Admin Boundary
 
@@ -42,7 +51,8 @@ FastMCP uses `VectorstoreTokenVerifier`.
 
 - The verifier delegates bearer-token validation to the same app `AuthService` used by REST.
 - Required scopes default to `openid,email,profile` through `MCP_REQUIRED_SCOPES`.
-- Local-dev MCP calls can still resolve to `local-dev` when auth middleware is skipped in tests or local tooling.
+- Local-dev MCP calls can still resolve to `local-dev` only when local-dev auth
+  is explicitly enabled or auth middleware is skipped in tests/local tooling.
 
 For production ChatGPT Apps, the remaining work is OAuth/provider metadata hardening: protected-resource metadata, authorization-server metadata, audience/resource checks, and final HTTPS `APP_BASE_URL` configuration.
 

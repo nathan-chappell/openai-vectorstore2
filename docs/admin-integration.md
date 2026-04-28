@@ -12,7 +12,7 @@ ADMIN_INTEGRATION_PROVIDER=default
 
 This mode uses the in-repo auth and billing services:
 
-- local-dev auth works when `ALLOW_LOCAL_DEV_AUTH=true`;
+- local-dev auth works only when `ALLOW_LOCAL_DEV_AUTH=true`;
 - Clerk auth works through the documented Clerk env vars;
 - admin endpoints can activate users and grant manual credit;
 - usage debits and billing status are stored in this app's database;

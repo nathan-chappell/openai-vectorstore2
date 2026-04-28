@@ -61,6 +61,7 @@ Playwright uses live OpenAI and S3-compatible storage from `.env`, while Clerk i
 - [Auth](docs/auth.md)
 - [Admin Integration](docs/admin-integration.md)
 - [Deployment](docs/deployment.md)
+- [Security](docs/security.md)
 - [Testing](docs/testing.md)
 - [Migrations](docs/migrations.md)
 - [Operations](docs/operations.md)
