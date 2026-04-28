@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from alembic import command
@@ -86,3 +87,69 @@ async def test_database_manager_can_bootstrap_with_alembic(
         assert set(Base.metadata.tables).issubset(set(inspector.get_table_names()))
     finally:
         engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_database_manager_retries_database_starting_up(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    database_path = tmp_path / "cold-start.db"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+    monkeypatch.setenv("DATABASE_SCHEMA_MODE", "migrations")
+    monkeypatch.setenv("DATABASE_STARTUP_RETRY_ATTEMPTS", "3")
+    monkeypatch.setenv("DATABASE_STARTUP_RETRY_DELAY_SECONDS", "0")
+
+    manager = DatabaseManager(AppSettings())
+    attempts = 0
+
+    def flaky_schema_check() -> None:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("the database system is starting up")
+
+    monkeypatch.setattr(manager, "_ensure_postgres_schema", flaky_schema_check)
+    monkeypatch.setattr(manager, "_upgrade_to_head", lambda: None)
+
+    try:
+        with caplog.at_level(logging.WARNING, logger="backend.app.db.session"):
+            await manager.ensure_ready()
+    finally:
+        await manager.close()
+
+    assert attempts == 2
+    assert "database_starting_up_retry" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_database_manager_does_not_retry_unrelated_database_errors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_path = tmp_path / "bad-credentials.db"
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-test")
+    monkeypatch.setenv("DATABASE_URL", f"sqlite+aiosqlite:///{database_path}")
+    monkeypatch.setenv("DATABASE_SCHEMA_MODE", "migrations")
+    monkeypatch.setenv("DATABASE_STARTUP_RETRY_ATTEMPTS", "3")
+    monkeypatch.setenv("DATABASE_STARTUP_RETRY_DELAY_SECONDS", "0")
+
+    manager = DatabaseManager(AppSettings())
+    attempts = 0
+
+    def failed_schema_check() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise RuntimeError("password authentication failed")
+
+    monkeypatch.setattr(manager, "_ensure_postgres_schema", failed_schema_check)
+
+    try:
+        with pytest.raises(RuntimeError, match="password authentication failed"):
+            await manager.ensure_ready()
+    finally:
+        await manager.close()
+
+    assert attempts == 1

@@ -8,8 +8,8 @@ docker build \
   --build-arg PUBLIC_CLERK_PUBLISHABLE="$VITE_CLERK_PUBLISHABLE_KEY" \
   --build-arg PUBLIC_API_BASE=/api \
   --build-arg PUBLIC_CHATKIT_DOMAIN="$VITE_CHATKIT_DOMAIN_KEY" \
-  -t nathanschappell/openai-vectorstore2:1.1.0 .
-docker push nathanschappell/openai-vectorstore2:1.1.0
+  -t nathanschappell/openai-vectorstore2:1.1.1 .
+docker push nathanschappell/openai-vectorstore2:1.1.1
 ```
 
 ## Railway

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from importlib import resources
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,8 @@ from sqlalchemy.schema import CreateSchema
 
 from backend.app.core.config import PROJECT_ROOT, AppSettings
 from backend.app.models import Base
+
+logger = logging.getLogger(__name__)
 
 _INITIALIZED_DATABASES: set[str] = set()
 _INITIALIZATION_LOCKS: dict[str, asyncio.Lock] = {}
@@ -134,22 +137,39 @@ class DatabaseManager:
             if database_key in _INITIALIZED_DATABASES:
                 return
             ensure_database_directory(database_url)
-            await asyncio.to_thread(self._ensure_postgres_schema)
-            if self._settings.database_schema_mode == "migrations":
-                await asyncio.to_thread(self._upgrade_to_head)
-            elif self._use_sync_sqlite:
-                if self._sync_engine is None:
-                    raise RuntimeError("Synchronous SQLite engine is not configured.")
-                with self._sync_engine.begin() as connection:
-                    Base.metadata.create_all(connection)
-                    self._validate_schema_matches_metadata(connection)
-            else:
-                if self._async_engine is None:
-                    raise RuntimeError("Async engine is not configured.")
-                async with self._async_engine.begin() as connection:
-                    await connection.run_sync(Base.metadata.create_all)
-                    await connection.run_sync(self._validate_schema_matches_metadata)
-            _INITIALIZED_DATABASES.add(database_key)
+            attempts = max(1, self._settings.database_startup_retry_attempts)
+            retry_delay_seconds = max(0.0, self._settings.database_startup_retry_delay_seconds)
+            for attempt in range(1, attempts + 1):
+                try:
+                    await asyncio.to_thread(self._ensure_postgres_schema)
+                    if self._settings.database_schema_mode == "migrations":
+                        await asyncio.to_thread(self._upgrade_to_head)
+                    elif self._use_sync_sqlite:
+                        if self._sync_engine is None:
+                            raise RuntimeError("Synchronous SQLite engine is not configured.")
+                        with self._sync_engine.begin() as connection:
+                            Base.metadata.create_all(connection)
+                            self._validate_schema_matches_metadata(connection)
+                    else:
+                        if self._async_engine is None:
+                            raise RuntimeError("Async engine is not configured.")
+                        async with self._async_engine.begin() as connection:
+                            await connection.run_sync(Base.metadata.create_all)
+                            await connection.run_sync(self._validate_schema_matches_metadata)
+                except Exception as exc:
+                    if attempt >= attempts or not _is_database_starting_up_error(exc):
+                        raise
+                    logger.warning(
+                        "database_starting_up_retry database=%s attempt=%s attempts=%s delay_seconds=%.1f",
+                        _database_log_label(database_url),
+                        attempt,
+                        attempts,
+                        retry_delay_seconds,
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    continue
+                _INITIALIZED_DATABASES.add(database_key)
+                return
 
     def _ensure_postgres_schema(self) -> None:
         schema_name = self._settings.database_postgres_schema
@@ -229,3 +249,30 @@ class DatabaseManager:
             self._sync_engine.dispose()
         if self._async_engine is not None:
             await self._async_engine.dispose()
+
+
+def _is_database_starting_up_error(exc: BaseException) -> bool:
+    seen: set[int] = set()
+    pending: list[BaseException] = [exc]
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        message = str(current).lower()
+        if "database is starting up" in message or "database system is starting up" in message:
+            return True
+        cause = current.__cause__
+        if cause is not None:
+            pending.append(cause)
+        context = current.__context__
+        if context is not None:
+            pending.append(context)
+        original = getattr(current, "orig", None)
+        if isinstance(original, BaseException):
+            pending.append(original)
+    return False
+
+
+def _database_log_label(database_url: str) -> str:
+    return make_url(database_url).render_as_string(hide_password=True)

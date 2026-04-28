@@ -23,6 +23,8 @@ class AppSettings(BaseSettings):
     database_url: str = "sqlite+aiosqlite:///./.local/openai-vectorstore2.db"
     database_schema_mode: Literal["create_all", "migrations"] = "migrations"
     database_postgres_schema: str | None = None
+    database_startup_retry_attempts: int = 6
+    database_startup_retry_delay_seconds: float = 2.0
     static_dir: str = "frontend/dist"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
