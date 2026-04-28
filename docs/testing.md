@@ -55,6 +55,17 @@ The dev entrypoint is `backend/app/mcp/dev_server.py:mcp`. It intentionally skip
 
 Use this before deployment to verify tool discovery, Apps UI rendering, research actions, semantic/tag search, source detail views, and raw-file/content retrieval against a realistic local library.
 
+## Open RAGBench Retrieval Eval
+
+The Open RAGBench PDF eval builds a deterministic 100-document local corpus from `vectara/open_ragbench`, uploads original arXiv PDFs to a running app, and scores document-level retrieval through `/api/search`.
+
+```bash
+./.venv/bin/openai-vectorstore2-open-ragbench-eval setup-upload
+./.venv/bin/openai-vectorstore2-open-ragbench-eval run .local/evals/open_ragbench/<run-id>
+```
+
+Artifacts are written under `.local/evals/open_ragbench/`, while the latest lightweight report artifacts are mirrored to `evals/open_ragbench/latest/` for review in Git. Reruns are progressive: `setup-upload` reuses `subset.json` when present, downloads each missing PDF into the local run directory, uploads it immediately, and reuses completed records from `uploads.json` instead of reingesting the same document. Delete or edit a failed record to retry just that document. The `run` command writes `summary.md`, `demo_queries.md`, `detailed_metrics.md`, and `results.json`, including five sampled QA answer evaluations by default. Retrieval queries run with bounded parallelism and default to 50 concurrent API calls.
+
 `tests/test_migrations.py` checks:
 
 - Alembic head can upgrade a temporary database.

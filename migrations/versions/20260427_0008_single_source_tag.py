@@ -21,15 +21,17 @@ depends_on: str | Sequence[str] | None = None
 
 def upgrade() -> None:
     op.add_column("source_file", sa.Column("tag_slug", sa.String(length=96), nullable=True))
+    bind = op.get_bind()
+    tag_name_order = "lower(tag.name)" if bind.dialect.name == "postgresql" else "tag.name COLLATE NOCASE"
     op.execute(
-        """
+        f"""
         UPDATE source_file
         SET tag_slug = (
             SELECT tag.slug
             FROM source_tag_link
             JOIN tag ON tag.id = source_tag_link.tag_id
             WHERE source_tag_link.source_file_id = source_file.id
-            ORDER BY tag.name COLLATE NOCASE ASC, tag.slug ASC
+            ORDER BY {tag_name_order} ASC, tag.slug ASC
             LIMIT 1
         )
         WHERE EXISTS (

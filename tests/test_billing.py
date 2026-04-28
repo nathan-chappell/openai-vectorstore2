@@ -4,7 +4,7 @@ import pytest
 
 from backend.app.core.config import AppSettings
 from backend.app.db.session import DatabaseManager
-from backend.app.services.billing import BillingService, CreditRequiredError
+from backend.app.services.billing import BillingService, CreditRequiredError, pricing_key_for_model
 
 
 @pytest.mark.asyncio
@@ -85,3 +85,29 @@ async def test_billing_service_blocks_non_admins_at_credit_floor(
         )
     finally:
         await database.close()
+
+
+def test_billing_model_pricing_uses_longest_known_family_prefix() -> None:
+    assert pricing_key_for_model("gpt-5.5-2026-04-23") == "gpt-5.5"
+    assert pricing_key_for_model("gpt-5.4-mini-2026-04-23") == "gpt-5.4-mini"
+    assert pricing_key_for_model("unknown-model-2026-04-23") is None
+
+
+def test_billing_service_calculates_gpt_55_dated_model_pricing(
+    configured_settings: AppSettings,
+) -> None:
+    database = DatabaseManager(configured_settings)
+    billing = BillingService(settings=configured_settings, database=database)
+    usage = {
+        "requests": 1,
+        "input_tokens": 1_000,
+        "input_tokens_details": {"cached_tokens": 100},
+        "output_tokens": 2_000,
+        "total_tokens": 3_000,
+    }
+
+    cost = billing.calculate_usage_cost(model="gpt-5.5-2026-04-23", usage=usage)
+
+    assert cost.openai_cost_usd == 0.06455
+    assert cost.platform_cost_usd == 0.083915
+    assert cost.note == "Priced as gpt-5.5."

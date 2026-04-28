@@ -35,12 +35,18 @@ def _postgres_schema() -> str | None:
     return AppSettings().database_postgres_schema
 
 
+def _version_table_schema(postgres_schema: str | None) -> str | None:
+    return postgres_schema
+
+
 def run_migrations_offline() -> None:
+    postgres_schema = _postgres_schema()
     context.configure(
         url=_database_url(),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=_version_table_schema(postgres_schema),
     )
 
     with context.begin_transaction():
@@ -70,7 +76,11 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            version_table_schema=_version_table_schema(postgres_schema),
+        )
         with context.begin_transaction():
             context.run_migrations()
 

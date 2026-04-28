@@ -28,6 +28,17 @@ def test_postgres_public_schema_search_path_is_not_duplicated() -> None:
     assert postgres_connect_args("public", async_driver=False) == {"options": "-csearch_path=public"}
 
 
+def test_alembic_postgres_version_table_uses_configured_schema() -> None:
+    migration_env = (PROJECT_ROOT / "migrations" / "env.py").read_text(encoding="utf-8")
+    assert "version_table_schema=_version_table_schema(postgres_schema)" in migration_env
+
+
+def test_alembic_ini_uses_env_resolving_placeholder() -> None:
+    config = Config(str(PROJECT_ROOT / "alembic.ini"))
+
+    assert config.get_main_option("sqlalchemy.url") == "driver://user:pass@localhost/dbname"
+
+
 def test_alembic_head_matches_orm_tables_and_columns(tmp_path: Path) -> None:
     database_path = tmp_path / "migration-check.db"
     config = Config(str(PROJECT_ROOT / "alembic.ini"))

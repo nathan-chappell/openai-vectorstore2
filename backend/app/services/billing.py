@@ -14,7 +14,7 @@ from backend.app.schemas import CostEventSummary, CreditBalanceSummary, CreditGr
 
 logger = logging.getLogger(__name__)
 
-PRICING_VERSION = "openai_api_pricing_2026-04-27"
+PRICING_VERSION = "openai_api_pricing_2026-04-28"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,7 +272,8 @@ class BillingService:
         input_tokens = _int_from_mapping(raw_usage, "input_tokens")
         cached_input_tokens = _int_from_nested_mapping(raw_usage, "input_tokens_details", "cached_tokens")
         output_tokens = _int_from_mapping(raw_usage, "output_tokens")
-        pricing = MODEL_PRICING_USD_PER_MILLION.get((model or "").strip())
+        pricing_key = pricing_key_for_model(model)
+        pricing = MODEL_PRICING_USD_PER_MILLION.get(pricing_key) if pricing_key is not None else None
         if pricing is None:
             note = f"No configured pricing for model {model!r}."
             if self._settings.billing_unknown_model_policy == "block":
@@ -310,6 +311,7 @@ class BillingService:
             openai_cost_usd=round(openai_cost_usd, 8),
             platform_multiplier=self._settings.billing_platform_markup_multiplier,
             platform_cost_usd=round(platform_cost_usd, 8),
+            note=f"Priced as {pricing_key}." if pricing_key != (model or "").strip() else None,
         )
 
     async def record_usage_cost(
@@ -494,6 +496,16 @@ def usage_to_mapping(usage: object) -> OpenAIUsagePayload:
     if isinstance(reasoning_tokens, (int, float)) and not isinstance(reasoning_tokens, bool):
         output["output_tokens_details"] = {"reasoning_tokens": int(reasoning_tokens)}
     return output
+
+
+def pricing_key_for_model(model: str | None) -> str | None:
+    normalized = (model or "").strip()
+    if normalized in MODEL_PRICING_USD_PER_MILLION:
+        return normalized
+    for pricing_key in sorted(MODEL_PRICING_USD_PER_MILLION, key=len, reverse=True):
+        if normalized.startswith(f"{pricing_key}-"):
+            return pricing_key
+    return None
 
 
 def _grant_summary(grant: CreditGrant) -> CreditGrantSummary:
