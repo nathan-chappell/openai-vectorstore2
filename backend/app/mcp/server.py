@@ -1823,19 +1823,13 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 with Table():
                     with TableHeader():
                         with TableRow():
+                            TableHead("", css_class="w-12")
                             TableHead("Score", css_class="w-20")
                             TableHead("File")
                             TableHead("Match")
-                            TableHead("", css_class="w-12")
                     with TableBody():
                         with ForEach(STATE.search.results) as item:
                             with TableRow():
-                                with TableCell():
-                                    Badge(item.relevance_score, variant="outline")
-                                with TableCell():
-                                    Text(item.title, bold=True, css_class="max-w-72 truncate")
-                                with TableCell():
-                                    Muted(item.preview, css_class="max-w-xl truncate")
                                 with TableCell():
                                     Button(
                                         "X",
@@ -1860,6 +1854,12 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                             on_error=ShowToast(f"{ERROR}", variant="error"),
                                         ),
                                     )
+                                with TableCell():
+                                    Badge(item.relevance_score, variant="outline")
+                                with TableCell():
+                                    Text(item.title, bold=True, css_class="max-w-72 truncate")
+                                with TableCell():
+                                    Muted(item.preview, css_class="max-w-xl truncate")
             with If("{{ selectedSourceIds.length > 0 }}"):
                 Separator()
                 with Row(gap=2, align="center"):
