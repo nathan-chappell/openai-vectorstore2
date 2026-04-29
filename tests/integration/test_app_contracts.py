@@ -1944,7 +1944,9 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
         result = await server.call_tool("open_file_search_ui", {}, run_middleware=False)
         serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
         assert "File Search" in serialized
-        assert "run_file_search_for_ui" in serialized
+        assert '"tool": "open_file_search_ui"' in serialized
+        assert '"action": "search"' in serialized
+        assert "run_file_search_for_ui" not in serialized
         assert '"selectedFiles": []' in serialized
     finally:
         await services.close()
