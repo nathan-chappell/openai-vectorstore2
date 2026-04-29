@@ -156,27 +156,29 @@ It demonstrates a hosted ChatGPT conversation opening a FastMCP Prefab UI,
 searching the indexed vector library, materializing selected files with user
 permission, and producing a grounded report from those files.
 
-1. The user asks ChatGPT to open the Vector Library Search MCP app. ChatGPT calls
-   `open_file_search_ui` and mounts the hosted app surface inside the
-   conversation.
+1. The user opens the Vector Library Search MCP app from ChatGPT, searches the
+   indexed library, and gets a compact table of source-level semantic matches
+   with relevance scores.
 
-   ![ChatGPT opening the Vector Library Search MCP UI](docs/mcp-user-story-images/chatgpt-opening-ui.png)
+   ![Vector Library Search showing semantic file matches inside ChatGPT](docs/mcp-user-story-images/file-search-results.png)
 
-2. The File Search UI loads from the live MCP server and is ready to search the
-   indexed library without leaving ChatGPT.
-
-   ![The File Search UI loaded inside ChatGPT](docs/mcp-user-story-images/chatgpt-ui-open.png)
-
-3. The user searches the library, keeps the relevant files, and grants
+2. The user keeps the relevant files and grants
    ChatGPT's file-materialization permission. The selected MCP file resources
-   become available to the conversation, and ChatGPT uses the materialized files
-   plus library tools to draft a concise research note.
+   become available to the conversation, so the assistant can inspect the saved
+   report and its references together.
 
    ![ChatGPT materializes referenced MCP files before continuing the report workflow](docs/mcp-user-story-images/give-me-report-and-files.png)
 
-Current POC caveat: ChatGPT may display materialized file labels based on MCP
-resource URIs. The app now emits resource URIs ending in the original filename
-instead of a generic `original` suffix so the host has a useful label to show.
+3. ChatGPT calls back into the MCP server, reads the actual selected file
+   resources, and produces a grounded summary instead of relying on filenames or
+   guesses.
+
+   ![ChatGPT summarizes materialized MCP files from their actual contents](docs/mcp-user-story-images/analysis-from-looking-at-tool.png)
+
+Screenshot caveat: the materialization screenshot was captured before the
+`1.2.1` file-label fix, so ChatGPT still shows the generic `original` label.
+The current server emits MCP resource URIs ending in the original filename, plus
+filename metadata, so the host has a useful label to show.
 
 ## Test commands
 
