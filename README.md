@@ -172,7 +172,7 @@ permission, and producing a grounded report from those files.
    become available to the conversation, and ChatGPT uses the materialized files
    plus library tools to draft a concise research note.
 
-   ![A grounded research report generated from materialized MCP files](docs/mcp-user-story-images/chatgpt-research-report.png)
+   ![ChatGPT materializes referenced MCP files before continuing the report workflow](docs/mcp-user-story-images/give-me-report-and-files.png)
 
 Current POC caveat: ChatGPT may display materialized file labels based on MCP
 resource URIs. The app now emits resource URIs ending in the original filename
