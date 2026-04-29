@@ -1579,7 +1579,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             }
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=normalized_query, max_results=32),
+            request=SearchRequest(query=normalized_query, max_results=24),
             origin_surface="mcp_app",
         )
         added = _file_search_items_from_hits(response.hits, exclude_source_ids=set(), limit=5)
@@ -1650,14 +1650,14 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         branch_query = "\n\n".join([normalized_query, reference_context]).strip()
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=branch_query, max_results=32),
+            request=SearchRequest(query=branch_query, max_results=24),
             origin_surface="mcp_app",
         )
         added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
         if not added:
             response = await services.sources.search(
                 clerk_user_id=current_mcp_clerk_user_id(),
-                request=SearchRequest(query=normalized_query, max_results=32),
+                request=SearchRequest(query=normalized_query, max_results=24),
                 origin_surface="mcp_app",
             )
             added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)

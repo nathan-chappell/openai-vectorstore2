@@ -1958,6 +1958,39 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
 
 
 @pytest.mark.asyncio
+async def test_mcp_sources_ui_search_respects_search_request_limit(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+    captured_max_results: list[int] = []
+
+    async def fake_search(*, clerk_user_id: str, request: Any, origin_surface: str) -> SimpleNamespace:
+        assert clerk_user_id == "local-dev"
+        assert origin_surface == "mcp_app"
+        captured_max_results.append(request.max_results)
+        return SimpleNamespace(query=request.query, hits=[])
+
+    services = create_services(configured_settings)
+    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr(services.sources, "search", fake_search)
+    server = create_mcp_server(configured_settings, services)
+    try:
+        result = await server.call_tool(
+            "open_file_search_ui",
+            {"action": "search", "query": "fine tuning"},
+            run_middleware=False,
+        )
+    finally:
+        await services.close()
+
+    assert result.structured_content is not None
+    assert captured_max_results == [24]
+    assert result.structured_content["message"] == "Found 0 files."
+
+
+@pytest.mark.asyncio
 async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
     configured_settings: AppSettings,
     fake_openai: None,
