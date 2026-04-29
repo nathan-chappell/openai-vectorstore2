@@ -50,7 +50,10 @@ class AppSettings(BaseSettings):
     clerk_credit_floor_metadata_key: str = "credit_floor_usd"
     clerk_clock_skew_ms: int = 5_000
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["email", "profile"])
+    mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    mcp_oauth_client_scopes: Annotated[list[str], NoDecode] = Field(
+        default_factory=lambda: ["openid", "email", "profile", "offline_access"]
+    )
     mcp_authorization_servers: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     storage_backend: Literal["local", "s3"] = "local"
@@ -125,6 +128,7 @@ class AppSettings(BaseSettings):
         "cors_origins",
         "clerk_authorized_parties",
         "mcp_required_scopes",
+        "mcp_oauth_client_scopes",
         "mcp_authorization_servers",
         mode="before",
     )

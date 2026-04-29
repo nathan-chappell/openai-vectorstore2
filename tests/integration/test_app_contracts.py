@@ -1690,7 +1690,8 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
         update={
             "app_base_url": "https://vectorstore.example.com",
             "mcp_authorization_servers": ["https://auth.example.com"],
-            "mcp_required_scopes": ["email", "profile"],
+            "mcp_required_scopes": ["openid", "email", "profile"],
+            "mcp_oauth_client_scopes": ["openid", "email", "profile", "offline_access"],
         }
     )
     app = create_fastapi_app(settings)
@@ -1704,7 +1705,7 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
     metadata = response.json()
     assert metadata == {
         "resource": "https://vectorstore.example.com",
-        "authorization_servers": ["https://auth.example.com"],
+        "authorization_servers": ["https://vectorstore.example.com"],
         "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
         "token_introspection_endpoint": "https://auth.example.com/oauth/token",
         "token_introspection_endpoint_auth_methods_supported": [
@@ -1721,7 +1722,7 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
             }
         ],
         "service_documentation": "https://clerk.com/docs",
-        "scopes_supported": ["email", "profile"],
+        "scopes_supported": ["openid", "email", "profile"],
         "resource_name": settings.app_name,
     }
 
@@ -1786,6 +1787,7 @@ async def test_mcp_authorization_server_metadata_proxies_configured_issuer(
                     "token_endpoint": "https://auth.example.com/oauth/token",
                     "registration_endpoint": "https://auth.example.com/oauth/register",
                     "code_challenge_methods_supported": ["S256"],
+                    "scopes_supported": ["email", "profile"],
                 },
             )
 
@@ -1809,7 +1811,135 @@ async def test_mcp_authorization_server_metadata_proxies_configured_issuer(
     assert response.headers["access-control-allow-origin"] == "*"
     assert "access-control-allow-credentials" not in response.headers
     assert requested_urls == ["https://auth.example.com/.well-known/oauth-authorization-server"]
-    assert response.json()["registration_endpoint"] == "https://auth.example.com/oauth/register"
+    metadata = response.json()
+    assert metadata["registration_endpoint"] == "https://vectorstore.example.com/oauth/register"
+    assert metadata["scopes_supported"] == ["email", "profile", "openid", "offline_access"]
+
+
+@pytest.mark.asyncio
+async def test_mcp_openid_metadata_aliases_proxy_configured_issuer(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+    requested_urls: list[str] = []
+
+    class FakeAuthorizationMetadataClient:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            assert timeout == 10.0
+            assert follow_redirects is True
+
+        async def __aenter__(self) -> "FakeAuthorizationMetadataClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            del exc_type, exc, traceback
+
+        async def get(self, url: str, *, headers: dict[str, str]) -> httpx.Response:
+            assert headers == {"accept": "application/json"}
+            requested_urls.append(url)
+            return httpx.Response(
+                status_code=200,
+                json={
+                    "issuer": "https://auth.example.com",
+                    "authorization_endpoint": "https://auth.example.com/oauth/authorize",
+                    "token_endpoint": "https://auth.example.com/oauth/token",
+                    "registration_endpoint": "https://auth.example.com/oauth/register",
+                    "code_challenge_methods_supported": ["S256"],
+                    "scopes_supported": ["openid", "email", "profile"],
+                },
+            )
+
+    monkeypatch.setattr("backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
+    settings = configured_settings.model_copy(
+        update={
+            "app_base_url": "https://vectorstore.example.com",
+            "mcp_authorization_servers": ["https://auth.example.com"],
+        }
+    )
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            root_response = await client.get("/.well-known/openid-configuration")
+            mcp_response = await client.get("/mcp/.well-known/openid-configuration")
+
+    assert root_response.status_code == 200
+    assert mcp_response.status_code == 200
+    assert root_response.json()["registration_endpoint"] == "https://vectorstore.example.com/oauth/register"
+    assert mcp_response.json()["registration_endpoint"] == "https://vectorstore.example.com/oauth/register"
+    assert requested_urls == [
+        "https://auth.example.com/.well-known/oauth-authorization-server",
+        "https://auth.example.com/.well-known/oauth-authorization-server",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_mcp_dynamic_client_registration_proxy_adds_chatgpt_oauth_scopes(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+    forwarded_payloads: list[dict[str, Any]] = []
+
+    class FakeRegistrationClient:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            assert timeout == 10.0
+            assert follow_redirects is False
+
+        async def __aenter__(self) -> "FakeRegistrationClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+            del exc_type, exc, traceback
+
+        async def post(self, url: str, *, json: object, headers: dict[str, str]) -> httpx.Response:
+            assert url == "https://auth.example.com/oauth/register"
+            assert headers == {"accept": "application/json"}
+            assert isinstance(json, dict)
+            forwarded_payloads.append(dict(json))
+            return httpx.Response(
+                status_code=201,
+                json={
+                    "client_id": "client_123",
+                    "scope": json["scope"],
+                },
+                headers={"content-type": "application/json"},
+            )
+
+    monkeypatch.setattr("backend.app.main.HttpAsyncClient", FakeRegistrationClient)
+    settings = configured_settings.model_copy(
+        update={
+            "app_base_url": "https://vectorstore.example.com",
+            "mcp_authorization_servers": ["https://auth.example.com"],
+            "mcp_required_scopes": ["openid", "email", "profile"],
+            "mcp_oauth_client_scopes": ["openid", "email", "profile", "offline_access"],
+        }
+    )
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/oauth/register",
+                json={
+                    "client_name": "ChatGPT",
+                    "redirect_uris": ["https://chatgpt.com/aip/oauth/callback"],
+                    "scope": "email",
+                },
+            )
+
+    assert response.status_code == 201
+    assert forwarded_payloads == [
+        {
+            "client_name": "ChatGPT",
+            "redirect_uris": ["https://chatgpt.com/aip/oauth/callback"],
+            "scope": "email openid profile offline_access",
+        }
+    ]
+    assert response.json() == {"client_id": "client_123", "scope": "email openid profile offline_access"}
 
 
 @pytest.mark.asyncio
@@ -1822,7 +1952,7 @@ async def test_unknown_well_known_paths_do_not_return_spa_shell(
     async with app.router.lifespan_context(app):
         transport = httpx.ASGITransport(app=app)
         async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
-            response = await client.get("/.well-known/openid-configuration")
+            response = await client.get("/.well-known/not-a-real-metadata-document")
 
     assert response.status_code == 404
     assert response.headers["content-type"].startswith("application/json")

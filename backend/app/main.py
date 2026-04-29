@@ -105,6 +105,15 @@ OAUTH_METADATA_CORS_HEADERS = {
 }
 
 
+def _is_oauth_metadata_path(path: str) -> bool:
+    return (
+        path.startswith("/.well-known/oauth-")
+        or path.startswith("/.well-known/openid-configuration")
+        or path.startswith("/mcp/.well-known/oauth-")
+        or path.startswith("/mcp/.well-known/openid-configuration")
+    )
+
+
 def _app_version() -> str:
     try:
         return version("openai-vectorstore2")
@@ -152,7 +161,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         started_at = perf_counter()
         method = request.method
         path = request.url.path
-        if method == "OPTIONS" and path.startswith("/.well-known/oauth-"):
+        if method == "OPTIONS" and _is_oauth_metadata_path(path):
             response = Response(status_code=status.HTTP_204_NO_CONTENT, headers=OAUTH_METADATA_CORS_HEADERS)
             logger.info("%s %s (%.1fms)", method, path, (perf_counter() - started_at) * 1000)
             return response
@@ -177,7 +186,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             log_method("%s %s (%.1fms)", method, path, duration_ms)
         else:
             log_method("%s %s -> %s (%.1fms)", method, path, response.status_code, duration_ms)
-        if path.startswith("/.well-known/oauth-"):
+        if _is_oauth_metadata_path(path):
             for header in ["Access-Control-Allow-Credentials", "Access-Control-Expose-Headers"]:
                 if header in response.headers:
                     del response.headers[header]
@@ -193,12 +202,12 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             target = f"{target}?{query_string}"
         return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
-    app.mount("/mcp", mcp_http_app)
-
     @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource/", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource/mcp/", include_in_schema=False)
+    @app.get("/mcp/.well-known/oauth-protected-resource", include_in_schema=False)
+    @app.get("/mcp/.well-known/oauth-protected-resource/", include_in_schema=False)
     async def mcp_protected_resource_metadata() -> dict[str, object]:
         if resolved_settings.mcp_auth_mode == "none":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
@@ -207,7 +216,7 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         authorization_server = resolved_settings.mcp_authorization_servers[0].rstrip("/")
         return {
             "resource": resolved_settings.normalized_app_base_url,
-            "authorization_servers": resolved_settings.mcp_authorization_servers,
+            "authorization_servers": [resolved_settings.normalized_app_base_url],
             "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
             "token_introspection_endpoint": f"{authorization_server}/oauth/token",
             "token_introspection_endpoint_auth_methods_supported": [
@@ -232,6 +241,14 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     @app.get("/.well-known/oauth-authorization-server/", include_in_schema=False)
     @app.get("/.well-known/oauth-authorization-server/mcp", include_in_schema=False)
     @app.get("/.well-known/oauth-authorization-server/mcp/", include_in_schema=False)
+    @app.get("/.well-known/openid-configuration", include_in_schema=False)
+    @app.get("/.well-known/openid-configuration/", include_in_schema=False)
+    @app.get("/.well-known/openid-configuration/mcp", include_in_schema=False)
+    @app.get("/.well-known/openid-configuration/mcp/", include_in_schema=False)
+    @app.get("/mcp/.well-known/oauth-authorization-server", include_in_schema=False)
+    @app.get("/mcp/.well-known/oauth-authorization-server/", include_in_schema=False)
+    @app.get("/mcp/.well-known/openid-configuration", include_in_schema=False)
+    @app.get("/mcp/.well-known/openid-configuration/", include_in_schema=False)
     async def mcp_authorization_server_metadata() -> dict[str, object]:
         if resolved_settings.mcp_auth_mode == "none":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
@@ -253,9 +270,65 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 except ValueError:
                     continue
                 if isinstance(metadata, dict):
-                    return {str(key): value for key, value in metadata.items()}
+                    proxied_metadata = {str(key): value for key, value in metadata.items()}
+                    upstream_scopes = proxied_metadata.get("scopes_supported", [])
+                    if not isinstance(upstream_scopes, list):
+                        upstream_scopes = []
+                    proxied_metadata["registration_endpoint"] = f"{resolved_settings.normalized_app_base_url}/oauth/register"
+                    proxied_metadata["scopes_supported"] = list(
+                        dict.fromkeys(
+                            [
+                                *(scope for scope in upstream_scopes if isinstance(scope, str)),
+                                *resolved_settings.mcp_oauth_client_scopes,
+                            ]
+                        )
+                    )
+                    return proxied_metadata
 
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OAuth authorization server metadata unavailable.")
+
+    @app.post("/oauth/register", include_in_schema=False)
+    async def mcp_dynamic_client_registration_proxy(request: Request) -> Response:
+        if resolved_settings.mcp_auth_mode == "none":
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
+        if not resolved_settings.mcp_authorization_servers:
+            raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="MCP OAuth is not configured.")
+
+        try:
+            registration_payload = await request.json()
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration request must be JSON.") from exc
+        if not isinstance(registration_payload, dict):
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Registration request must be a JSON object.")
+
+        requested_scopes = registration_payload.get("scope")
+        scope_values = requested_scopes.split() if isinstance(requested_scopes, str) else []
+        registration_payload["scope"] = " ".join(
+            dict.fromkeys([*scope_values, *resolved_settings.mcp_oauth_client_scopes])
+        )
+
+        authorization_server = resolved_settings.mcp_authorization_servers[0].rstrip("/")
+        started_at = perf_counter()
+        async with HttpAsyncClient(timeout=10.0, follow_redirects=False) as client:
+            response = await client.post(
+                f"{authorization_server}/oauth/register",
+                json=registration_payload,
+                headers={"accept": "application/json"},
+            )
+        logger.info(
+            "mcp_dcr_proxy upstream=%s status=%s scopes=%s duration_ms=%.1f",
+            authorization_server,
+            response.status_code,
+            registration_payload["scope"],
+            (perf_counter() - started_at) * 1000,
+        )
+        return Response(
+            content=response.content,
+            status_code=response.status_code,
+            media_type=response.headers.get("content-type", "application/json"),
+        )
+
+    app.mount("/mcp", mcp_http_app)
 
     @app.get("/health")
     async def healthcheck() -> dict[str, str]:

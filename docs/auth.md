@@ -48,10 +48,21 @@ The default public implementation uses the in-repo auth and billing services. A 
 FastMCP uses `VectorstoreTokenVerifier`.
 
 - The verifier delegates bearer-token validation to the same app `AuthService` used by REST.
-- Required scopes default to `email,profile` through `MCP_REQUIRED_SCOPES`, matching Clerk's MCP helper examples.
-- `MCP_AUTHORIZATION_SERVERS` publishes the OAuth protected-resource metadata
-  authorization server list for ChatGPT/OpenAI MCP clients. Leave it empty until
-  an OAuth provider or auth proxy can issue MCP audience-bound tokens.
+- Required MCP resource scopes default to `openid,email,profile` through
+  `MCP_REQUIRED_SCOPES`.
+- OAuth client/request scopes default to `openid,email,profile,offline_access`
+  through `MCP_OAUTH_CLIENT_SCOPES`. `offline_access` belongs in authorization
+  server discovery and dynamic client registration so ChatGPT can obtain refresh
+  tokens; it is not a resource requirement for individual MCP calls.
+- `MCP_AUTHORIZATION_SERVERS` points at the upstream OAuth provider, currently
+  Clerk for production. The app publishes itself in protected-resource metadata
+  and proxies authorization-server discovery so ChatGPT can use the app-hosted
+  dynamic client registration endpoint.
+- `/oauth/register` forwards dynamic client registration to the upstream
+  provider and forces `MCP_OAUTH_CLIENT_SCOPES` into the registered client. This
+  compensates for Clerk DCR clients created without `openid` when the
+  registration request omits `scope`, while still using Clerk to authenticate
+  the user and issue tokens.
 - Local-dev MCP calls can still resolve to `local-dev` only when local-dev auth
   is explicitly enabled or auth middleware is skipped in tests/local tooling.
 - `MCP_AUTH_MODE=none` disables the HTTP MCP verifier for temporary ChatGPT
@@ -62,7 +73,9 @@ FastMCP uses `VectorstoreTokenVerifier`.
   `CORS_ORIGINS` must also include `https://chatgpt.com` and
   `https://chat.openai.com`.
 
-For production ChatGPT Apps, the remaining work is OAuth/provider metadata hardening: protected-resource metadata, authorization-server metadata, audience/resource checks, and final HTTPS `APP_BASE_URL` configuration.
+For production ChatGPT Apps, recreate the app/connector after metadata or Clerk
+OAuth settings change so ChatGPT refetches discovery metadata and creates a
+fresh OAuth client.
 
 ## MCP Stdio
 
