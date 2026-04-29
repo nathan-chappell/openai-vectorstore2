@@ -239,6 +239,15 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             target = f"{target}?{query_string}"
         return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
+    @app.post("/", include_in_schema=False)
+    async def mcp_root_post_redirect(request: Request) -> RedirectResponse:
+        query_string = request.url.query
+        target = "/mcp/"
+        if query_string:
+            target = f"{target}?{query_string}"
+        logger.warning("mcp_endpoint_misconfigured path=/ target=%s reason=received_post_at_web_root", target)
+        return RedirectResponse(url=target, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
+
     @app.get("/.well-known/oauth-protected-resource", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource/", include_in_schema=False)
     @app.get("/.well-known/oauth-protected-resource/mcp", include_in_schema=False)

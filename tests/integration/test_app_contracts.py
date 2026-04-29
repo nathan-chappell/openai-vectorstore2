@@ -1725,6 +1725,27 @@ async def test_http_mcp_uses_stateless_fallback_for_missing_session_tool_calls(
 
 
 @pytest.mark.asyncio
+async def test_http_root_post_redirects_to_mcp_endpoint(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    app = create_fastapi_app(configured_settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/?client=chatgpt",
+                headers={"accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+                follow_redirects=False,
+            )
+
+    assert response.status_code == 307
+    assert response.headers["location"] == "/mcp/?client=chatgpt"
+
+
+@pytest.mark.asyncio
 async def test_mcp_protected_resource_metadata_is_json_when_configured(
     configured_settings: AppSettings,
     fake_openai: None,
