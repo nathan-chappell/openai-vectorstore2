@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import asyncio
-from base64 import b64encode
 from datetime import UTC, datetime
 from importlib import import_module
 import json
 from pathlib import Path
 import re
+from types import SimpleNamespace
 import sys
 from time import monotonic
 from typing import Any, cast
@@ -31,7 +31,7 @@ from backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, re
 from backend.app.core.config import AppSettings, get_settings
 from backend.app.mcp.server import create_mcp_server
 from backend.app.models import AppChatAttachment, AppChatEntry
-from backend.app.schemas import TaskDetail
+from backend.app.schemas import QaRequest, TaskDetail
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1610,21 +1610,23 @@ async def test_mcp_server_exposes_app_first_tools(
         await services.close()
 
     assert set(tools) == mcp_tool_names()
-    assert tools["delete_source"].annotations is not None
-    assert tools["delete_source"].annotations.destructiveHint is True
-    assert tools["resplit_source"].annotations is not None
-    assert tools["resplit_source"].annotations.destructiveHint is True
-    assert set(tools["ingest_file_source"].parameters["required"]) == {"filename", "payload_base64"}
-    assert set(tools["preview_file_split"].parameters["required"]) == {"filename", "payload_base64"}
-    assert tools["search_chunks"].parameters["required"] == ["query"]
-    assert tools["sources"].meta is not None
-    assert tools["sources"].meta["ui"]["resourceUri"].startswith("ui://")
-    assert tools["source_search"].meta is not None
-    assert tools["source_search"].meta["ui"]["resourceUri"].startswith("ui://")
-    assert tools["research_libraries"].meta is not None
-    assert tools["research_libraries"].meta["ui"]["resourceUri"].startswith("ui://")
-    assert tools["activity"].meta is not None
-    assert tools["activity"].meta["ui"]["resourceUri"].startswith("ui://")
+    assert set(tools) == {
+        "open_file_search_ui",
+        "library_search",
+        "research_library",
+        "answer_from_library",
+        "manage_library",
+    }
+    assert tools["open_file_search_ui"].meta is not None
+    assert tools["open_file_search_ui"].meta["ui"]["resourceUri"].startswith("ui://prefab/tool/")
+    assert tools["open_file_search_ui"].meta["ui"]["resourceUri"].endswith("/renderer.html")
+    assert tools["open_file_search_ui"].meta["ui"]["visibility"] == ["model"]
+    assert tools["open_file_search_ui"].meta["fastmcp"]["app"] == "Indexed Files"
+    assert tools["open_file_search_ui"].title == "Open File Search UI"
+    assert "sources" not in tools
+    assert "source_search" not in tools
+    assert "retrieve_files" not in tools
+    assert "ingest_file_source" not in tools
 
 
 @pytest.mark.asyncio
@@ -1656,10 +1658,17 @@ def test_http_app_uses_noauth_mcp_server_when_mcp_auth_mode_is_none(
     calls: list[str] = []
 
     class FakeMcpServer:
-        def http_app(self, *, path: str, transport: str) -> Any:
+        def http_app(
+            self,
+            *,
+            path: str,
+            transport: str,
+            json_response: bool | None = None,
+            stateless_http: bool | None = None,
+        ) -> Any:
             from starlette.applications import Starlette
 
-            calls.append(f"http_app:{path}:{transport}")
+            calls.append(f"http_app:{path}:{transport}:{json_response}:{stateless_http}")
             return Starlette()
 
     def fake_create_mcp_server(settings: AppSettings, services: AppServices) -> FakeMcpServer:
@@ -1677,7 +1686,38 @@ def test_http_app_uses_noauth_mcp_server_when_mcp_auth_mode_is_none(
 
     create_fastapi_app(configured_settings.model_copy(update={"mcp_auth_mode": "none"}))
 
-    assert calls == ["none", "http_app:/:streamable-http"]
+    assert calls == [
+        "none",
+        "http_app:/:streamable-http:None:None",
+        "http_app:/:streamable-http:True:True",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_http_mcp_uses_stateless_fallback_for_missing_session_tool_calls(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    settings = configured_settings.model_copy(update={"mcp_auth_mode": "none"})
+    app = create_fastapi_app(settings)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+            response = await client.post(
+                "/mcp/",
+                headers={"accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "tools/call",
+                    "params": {"name": "open_file_search_ui", "arguments": {}},
+                },
+            )
+
+    assert response.status_code == 200
+    assert "Missing session ID" not in response.text
+    assert "File Search" in response.text
 
 
 @pytest.mark.asyncio
@@ -1703,8 +1743,8 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
     assert response.headers["content-type"].startswith("application/json")
     metadata = response.json()
     assert metadata == {
-        "resource": "https://vectorstore.example.com",
-        "authorization_servers": ["https://auth.example.com"],
+        "resource": "https://vectorstore.example.com/mcp",
+        "authorization_servers": ["https://vectorstore.example.com"],
         "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
         "token_introspection_endpoint": "https://auth.example.com/oauth/token",
         "token_introspection_endpoint_auth_methods_supported": [
@@ -1813,7 +1853,7 @@ async def test_mcp_authorization_server_metadata_proxies_configured_issuer(
     metadata = response.json()
     assert metadata["issuer"] == "https://auth.example.com"
     assert metadata["registration_endpoint"] == "https://auth.example.com/oauth/register"
-    assert metadata["scopes_supported"] == ["email", "profile"]
+    assert metadata["scopes_supported"] == settings.mcp_required_scopes
 
 
 @pytest.mark.asyncio
@@ -1869,6 +1909,8 @@ async def test_mcp_openid_metadata_aliases_proxy_configured_issuer(
     assert mcp_response.status_code == 200
     assert root_response.json()["registration_endpoint"] == "https://auth.example.com/oauth/register"
     assert mcp_response.json()["registration_endpoint"] == "https://auth.example.com/oauth/register"
+    assert root_response.json()["scopes_supported"] == settings.mcp_required_scopes
+    assert mcp_response.json()["scopes_supported"] == settings.mcp_required_scopes
     assert requested_urls == [
         "https://auth.example.com/.well-known/oauth-authorization-server",
         "https://auth.example.com/.well-known/oauth-authorization-server",
@@ -1899,31 +1941,52 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
     services = create_services(configured_settings)
     server = create_mcp_server(configured_settings, services)
     try:
-        result = await server.call_tool("sources", {}, run_middleware=False)
+        result = await server.call_tool("open_file_search_ui", {}, run_middleware=False)
         serialized = json.dumps(result.structured_content, sort_keys=True, default=str)
-        assert "Indexed Files" in serialized
-        assert "Query files, filenames, kinds, status" in serialized
-        assert "selectedTagIds" in serialized
-
-        search_result = await server.call_tool("source_search", {}, run_middleware=False)
-        serialized = json.dumps(search_result.structured_content, sort_keys=True, default=str)
-        assert "Library Search" in serialized
-        assert "Search indexed files with the selected tag scope" in serialized
-        assert "selectedTagIds" in serialized
-
-        research_result = await server.call_tool("research_libraries", {}, run_middleware=False)
-        serialized = json.dumps(research_result.structured_content, sort_keys=True, default=str)
-        assert "Research Library Builder" in serialized
-        assert "Build library" in serialized
-        assert "Candidates" in serialized
-        assert "researchCandidates" in serialized
-
-        activity_result = await server.call_tool("activity", {}, run_middleware=False)
-        serialized = json.dumps(activity_result.structured_content, sort_keys=True, default=str)
-        assert "Recent Tasks" in serialized
-        assert "tasks" in serialized
+        assert "File Search" in serialized
+        assert "run_file_search_for_ui" in serialized
+        assert '"selectedFiles": []' in serialized
     finally:
         await services.close()
+
+
+@pytest.mark.asyncio
+async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+    async def fake_run(starting_agent: Any, input: Any, **kwargs: Any) -> Any:
+        context = kwargs["context"]
+        context.operations.append({"operation": "fake_library_search", "summary": {"ok": True}})
+        assert starting_agent.name == "library_search_intake"
+        assert "hand" in str(input)
+        return SimpleNamespace(
+            final_output="Fake library-search facade result.",
+            last_agent=SimpleNamespace(name="library_search_subagent"),
+            last_response_id="resp_fake_facade",
+        )
+
+    monkeypatch.setattr("backend.app.mcp.agent_facade.Runner.run", fake_run)
+    services = create_services(configured_settings)
+    server = create_mcp_server(configured_settings, services)
+    try:
+        result = await server.call_tool(
+            "library_search",
+            {"instruction": "Find semantic retrieval notes.", "query": "semantic retrieval"},
+            run_middleware=False,
+        )
+    finally:
+        await services.close()
+
+    assert result.structured_content is not None
+    assert result.structured_content["facade"] == "library_search"
+    assert result.structured_content["last_agent"] == "library_search_subagent"
+    assert result.structured_content["operations"] == [
+        {"operation": "fake_library_search", "summary": {"ok": True}}
+    ]
+    assert getattr(result.content[0], "text", None) == "Fake library-search facade result."
 
 
 @pytest.mark.asyncio
@@ -1933,16 +1996,13 @@ async def test_mcp_split_preview_is_inspect_only(
 ) -> None:
     del fake_openai
     services = create_services(configured_settings)
-    server = create_mcp_server(configured_settings, services)
     try:
-        result = await server.call_tool(
-            "preview_file_split",
-            {
-                "filename": "mcp-preview.txt",
-                "payload_base64": b64encode(b"MCP preview should not publish a source.").decode("ascii"),
-                "media_type": "text/plain",
-            },
-            run_middleware=False,
+        result = await services.sources.preview_semantic_split(
+            clerk_user_id="local-dev",
+            filename="mcp-preview.txt",
+            declared_media_type="text/plain",
+            payload=b"MCP preview should not publish a source.",
+            user_guidance=None,
         )
         tasks = await services.actions.list_tasks(clerk_user_id="local-dev")
         sources = await services.sources.list_sources(
@@ -1956,9 +2016,7 @@ async def test_mcp_split_preview_is_inspect_only(
     finally:
         await services.close()
 
-    payload = result.structured_content
-    assert payload is not None
-    assert payload["split"]["chunks"]
+    assert result.split.chunks
     assert tasks.tasks == []
     assert sources.total_count == 0
 
@@ -1970,36 +2028,88 @@ async def test_mcp_file_ingest_tool_runs_against_app_core(
 ) -> None:
     del fake_openai
     services = create_services(configured_settings)
-    server = create_mcp_server(configured_settings, services)
     try:
-        result = await server.call_tool(
-            "ingest_file_source",
-            {
-                "filename": "mcp-note.txt",
-                "payload_base64": b64encode(b"MCP file ingest should reach the app core.").decode("ascii"),
-                "media_type": "text/plain",
-            },
-            run_middleware=False,
+        payload = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="mcp-note.txt",
+            declared_media_type="text/plain",
+            payload=b"MCP file ingest should reach the app core.",
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="mcp",
         )
-        payload = result.structured_content
-        assert payload is not None
+        assert payload.task is not None
         completed_task = await _wait_for_service_task(
             services,
-            task_id=payload["task"]["id"],
+            task_id=payload.task.id,
             expected_status="completed",
         )
         source_detail = await services.sources.get_source(
             clerk_user_id="local-dev",
-            source_id=payload["source"]["id"],
+            source_id=payload.source.id,
         )
     finally:
         await services.close()
 
-    assert payload["source"]["status"] == "processing"
+    assert payload.source.status == "processing"
     assert source_detail.status == "ready"
-    assert payload["source"]["source_kind"] == "text"
-    assert payload["task"]["kind"] == "ingest"
+    assert payload.source.source_kind == "text"
+    assert payload.task.kind == "ingest"
     assert completed_task.origin_surface == "mcp"
+
+
+@pytest.mark.asyncio
+async def test_mcp_retrieve_files_returns_embedded_file_resources(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    file_payload = b"MCP retrieve_files should return the stored source content."
+    try:
+        ingest = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="retrievable-note.txt",
+            declared_media_type="text/plain",
+            payload=file_payload,
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="mcp",
+        )
+        assert ingest.task is not None
+        await _wait_for_service_task(
+            services,
+            task_id=ingest.task.id,
+            expected_status="completed",
+        )
+        source_id = ingest.source.id
+
+        detail = await services.sources.get_source(clerk_user_id="local-dev", source_id=source_id)
+        from backend.app.mcp.server import _retrieve_files_result  # pyright: ignore[reportPrivateUsage]
+
+        retrieved = await _retrieve_files_result(
+            services=services,
+            clerk_user_id="local-dev",
+            source_ids=[source_id],
+            include_extracted_text=True,
+            max_bytes_per_file=2_000_000,
+            max_extracted_chars_per_file=120_000,
+        )
+    finally:
+        await services.close()
+
+    assert detail.content_retrieval_tool == "retrieve_files"
+    assert detail.content_retrieval_source_ids == [source_id]
+    assert detail.download_url is not None
+    assert detail.download_url.startswith(("http://", "https://"))
+    assert retrieved.structured_content is not None
+    [file_metadata] = retrieved.structured_content["files"]
+    assert file_metadata["source_id"] == source_id
+    assert file_metadata["content_kind"] == "text"
+    assert file_metadata["original_truncated"] is False
+    assert len(retrieved.content) >= 2
+    original_resource = next(item for item in retrieved.content if getattr(item, "type", None) == "resource")
+    assert getattr(cast(Any, original_resource).resource, "text") == file_payload.decode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -2072,42 +2182,36 @@ async def test_mcp_answer_research_library_uses_scoped_sources(
 ) -> None:
     del fake_openai
     services = create_services(configured_settings)
-    server = create_mcp_server(configured_settings, services)
     try:
-        ingest = await server.call_tool(
-            "ingest_file_source",
-            {
-                "filename": "research-answer-note.txt",
-                "payload_base64": b64encode(b"Research answer source mentions Cobalt Maple evidence.").decode("ascii"),
-                "media_type": "text/plain",
-            },
-            run_middleware=False,
+        ingest = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="research-answer-note.txt",
+            declared_media_type="text/plain",
+            payload=b"Research answer source mentions Cobalt Maple evidence.",
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="mcp",
         )
-        ingest_payload = ingest.structured_content
-        assert ingest_payload is not None
+        assert ingest.task is not None
         await _wait_for_service_task(
             services,
-            task_id=ingest_payload["task"]["id"],
+            task_id=ingest.task.id,
             expected_status="completed",
         )
 
-        answer = await server.call_tool(
-            "answer_research_library",
-            {
-                "question": "What evidence is available?",
-                "source_ids": [ingest_payload["source"]["id"]],
-            },
-            run_middleware=False,
+        answer = await services.actions.qa(
+            clerk_user_id="local-dev",
+            payload=QaRequest(prompt="What evidence is available?", selected_source_ids=[ingest.source.id]),
+            origin_surface="mcp",
         )
     finally:
         await services.close()
 
-    payload = answer.structured_content
-    assert payload is not None
-    assert payload["kind"] == "qa"
-    assert "Fake grounded answer" in payload["answer"]
-    assert payload["hits"]
-    assert {hit["source_file_id"] for hit in payload["hits"]} == {ingest_payload["source"]["id"]}
+    assert answer.kind == "qa"
+    assert answer.answer is not None
+    assert "Fake grounded answer" in answer.answer
+    assert answer.hits
+    assert {hit.source_file_id for hit in answer.hits} == {ingest.source.id}
 
 
 @pytest.mark.asyncio

@@ -115,6 +115,17 @@ MCP_AUTH_MODE=none
 
 Then expose the app over HTTPS and create the connector with the public `/mcp` URL. This maps MCP calls to the synthetic `local-dev` user and must not be used for production or shared data.
 
+Suggested ChatGPT app listing:
+
+- Name: Vector Library Search
+- Description: Search your indexed research library semantically, five files at a time. Select or dismiss relevant files, then retrieve selected file contents through MCP resources or temporary download links, research topics, answer from documents, and generate grounded artifacts.
+
+The ChatGPT Apps UI entry point is the FastMCP Prefab tool
+`open_file_search_ui`. ChatGPT sees at most five MCP tools:
+`open_file_search_ui`, `library_search`, `research_library`,
+`answer_from_library`, and `manage_library`. The non-UI tools are Agents SDK
+facades that hand off to specialist subagents wrapping the app-core services.
+
 Authenticated ChatGPT Apps also need OAuth protected-resource metadata and an
 authorization server that can issue MCP audience-bound tokens. Configure
 `MCP_AUTHORIZATION_SERVERS=https://auth.example.com` only after that provider is

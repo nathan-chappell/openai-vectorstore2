@@ -48,7 +48,10 @@ Structured report documents live in `backend/app/schemas/reports.py` and render 
 `backend/app/mcp/server.py` exposes the same app-core capabilities through FastMCP.
 
 - Data tools return structured JSON for hosts.
-- MCP Apps render tools are split by capability: `sources` for file browsing/detail, `source_search` for retrieval, `research_libraries` for research build/candidate review, and `activity` for recent task state.
+- MCP Apps exposes one render tool, `open_file_search_ui`, for semantic file discovery.
+- ChatGPT sees four non-UI Agents SDK facade tools: `library_search`, `research_library`, `answer_from_library`, and `manage_library`.
+- Facade tools hand off to specialist subagents that wrap the app-core service operations; app-only Prefab helper tools remain hidden from the model tool list.
+- ChatGPT should use `library_search` with selected source IDs and `include_file_contents=true` to load selected source payloads through MCP embedded resources instead of fetching app storage URLs directly.
 - HTTP MCP is mounted at `/mcp`; stdio is available through `openai-vectorstore2-stdio`.
 - Local FastMCP Apps and Inspector workflows use `backend/app/mcp/dev_server.py:mcp`, which builds the same services with the dev MCP server factory and no production token verifier.
 

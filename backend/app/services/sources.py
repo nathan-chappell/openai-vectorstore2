@@ -3136,10 +3136,21 @@ class SourceService:
 
     def _source_detail(self, source: SourceFile) -> LibrarySourceDetail:
         summary = self._source_summary(source)
+        download_url = self._storage.build_download_url(
+            key=source.storage_key,
+            filename=source.original_filename,
+            media_type=source.media_type,
+            inline=True,
+        )
+        if download_url is not None and download_url.startswith("/"):
+            download_url = f"{self._settings.normalized_app_base_url}{download_url}"
         return LibrarySourceDetail(
             **summary.model_dump(mode="python"),
             storage_provider=source.storage_provider,
             storage_key=source.storage_key,
+            download_url=download_url,
+            download_url_expires_in_seconds=self._settings.storage_download_url_ttl_seconds,
+            content_retrieval_source_ids=[source.id],
             ingest_strategy=source.ingest_strategy,
             metadata=source.source_metadata,
             chunks=[self._chunk_summary(chunk) for chunk in sorted(source.chunks, key=lambda item: item.sequence)],

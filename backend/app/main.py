@@ -15,6 +15,7 @@ from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request,
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 from httpx import AsyncClient as HttpAsyncClient
+from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
 
 from backend.app.admin import payment_integration_status
@@ -105,6 +106,34 @@ OAUTH_METADATA_CORS_HEADERS = {
 }
 
 
+class HybridMcpHttpApp:
+    """Route normal MCP traffic statefully, with a stateless fallback for host retries."""
+
+    def __init__(self, *, stateful_app: ASGIApp, stateless_app: ASGIApp) -> None:
+        self._stateful_app = stateful_app
+        self._stateless_app = stateless_app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if (
+            scope.get("type") == "http"
+            and scope.get("method") == "POST"
+            and not _scope_has_header(scope, "mcp-session-id")
+        ):
+            logger.info("mcp_stateless_fallback reason=missing_session_id")
+            await self._stateless_app(scope, receive, send)
+            return
+
+        await self._stateful_app(scope, receive, send)
+
+
+def _scope_has_header(scope: Scope, header_name: str) -> bool:
+    expected = header_name.lower().encode("ascii")
+    headers = scope.get("headers", [])
+    if not isinstance(headers, list):
+        return False
+    return any(isinstance(name, bytes) and name.lower() == expected for name, _value in headers)
+
+
 def _is_oauth_metadata_path(path: str) -> bool:
     return (
         path.startswith("/.well-known/oauth-")
@@ -129,7 +158,14 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         if resolved_settings.mcp_auth_mode == "none"
         else create_mcp_server(resolved_settings, services)
     )
-    mcp_http_app = mcp_server.http_app(path="/", transport="streamable-http")
+    mcp_stateful_http_app = mcp_server.http_app(path="/", transport="streamable-http")
+    mcp_stateless_http_app = mcp_server.http_app(
+        path="/",
+        transport="streamable-http",
+        json_response=True,
+        stateless_http=True,
+    )
+    mcp_http_app = HybridMcpHttpApp(stateful_app=mcp_stateful_http_app, stateless_app=mcp_stateless_http_app)
     static_dir = Path(resolved_settings.normalized_static_dir)
 
     @asynccontextmanager
@@ -140,11 +176,12 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         logger.info("app_started name=%s version=%s", resolved_settings.app_name, _app_version())
         if resolved_settings.mcp_auth_mode == "none":
             logger.warning("mcp_auth_disabled mode=none subject=local-dev")
-        async with mcp_http_app.lifespan(mcp_http_app):
-            try:
-                yield
-            finally:
-                await services.close()
+        async with mcp_stateful_http_app.lifespan(mcp_stateful_http_app):
+            async with mcp_stateless_http_app.lifespan(mcp_stateless_http_app):
+                try:
+                    yield
+                finally:
+                    await services.close()
 
     app = FastAPI(title=resolved_settings.app_name, lifespan=lifespan)
     app.add_middleware(
@@ -214,9 +251,10 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
         if not resolved_settings.mcp_authorization_servers:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="MCP OAuth is not configured.")
         authorization_server = resolved_settings.mcp_authorization_servers[0].rstrip("/")
+        mcp_resource_url = f"{resolved_settings.normalized_app_base_url}/mcp"
         return {
-            "resource": resolved_settings.normalized_app_base_url,
-            "authorization_servers": resolved_settings.mcp_authorization_servers,
+            "resource": mcp_resource_url,
+            "authorization_servers": [resolved_settings.normalized_app_base_url],
             "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
             "token_introspection_endpoint": f"{authorization_server}/oauth/token",
             "token_introspection_endpoint_auth_methods_supported": [
@@ -270,7 +308,9 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 except ValueError:
                     continue
                 if isinstance(metadata, dict):
-                    return {str(key): value for key, value in metadata.items()}
+                    filtered_metadata = {str(key): value for key, value in metadata.items()}
+                    filtered_metadata["scopes_supported"] = resolved_settings.mcp_required_scopes
+                    return filtered_metadata
 
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="OAuth authorization server metadata unavailable.")
 

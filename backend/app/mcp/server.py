@@ -1,20 +1,21 @@
 from __future__ import annotations
 
-from base64 import b64decode
+from base64 import b64decode, b64encode
 import binascii
 from collections.abc import Awaitable
 from contextlib import asynccontextmanager
 import json
 import logging
 from time import perf_counter
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from fastmcp import FastMCP, FastMCPApp
 from fastmcp.server.context import Context
-from mcp.types import ToolAnnotations
+from fastmcp.tools import ToolResult
+from mcp.types import BlobResourceContents, EmbeddedResource, TextContent, TextResourceContents, ToolAnnotations
 from prefab_ui import PrefabApp
-from prefab_ui.actions import SetState, ShowToast
-from prefab_ui.actions.mcp import CallTool
+from prefab_ui.actions import AppendState, SetState, ShowToast
+from prefab_ui.actions.mcp import CallTool, SendMessage, UpdateContext
 from prefab_ui.components import (
     ERROR,
     EVENT,
@@ -43,11 +44,19 @@ from pydantic import BaseModel, Field
 
 from backend.app.bootstrap import AppServices
 from backend.app.core.config import AppSettings
+from backend.app.mcp.agent_facade import (
+    McpFacadeInput,
+    run_answer_from_library_agent,
+    run_library_search_agent,
+    run_manage_library_agent,
+    run_research_library_agent,
+)
 from backend.app.mcp.auth import VectorstoreTokenVerifier, current_mcp_clerk_user_id
 from backend.app.schemas import (
     ActionResponse,
     BranchSearchRequest,
     BranchSearchResponse,
+    ChunkHit,
     FileListResponse,
     FilesystemDeleteResponse,
     FilesystemEntrySummary,
@@ -83,9 +92,11 @@ from backend.app.schemas import (
 )
 from backend.app.services.reports import save_report_markdown_source
 
+AppendState: Any = AppendState
 Badge: Any = Badge
 Button: Any = Button
 CallTool: Any = CallTool
+SendMessage: Any = SendMessage
 Card: Any = Card
 CardContent: Any = CardContent
 CardDescription: Any = CardDescription
@@ -104,8 +115,24 @@ SetState: Any = SetState
 ShowToast: Any = ShowToast
 Small: Any = Small
 Text: Any = Text
+UpdateContext: Any = UpdateContext
 
 logger = logging.getLogger(__name__)
+
+TEXT_RESOURCE_MEDIA_TYPES = {
+    "application/javascript",
+    "application/json",
+    "application/ld+json",
+    "application/sql",
+    "application/toml",
+    "application/x-ndjson",
+    "application/x-yaml",
+    "application/xml",
+    "application/yaml",
+    "image/svg+xml",
+}
+DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE = 2_000_000
+DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE = 120_000
 
 
 def create_mcp_server(settings: AppSettings, services: AppServices) -> FastMCP:
@@ -164,20 +191,178 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
     server = FastMCP(
         name=settings.app_name,
         instructions=(
-            "You are the MCP adapter for an app-first file explorer backed by OpenAI vector-store search. "
-            "The app owns ingestion, indexing, storage, retrieval, and generation. Use sources for a visual library UI; "
-            "use list_sources, list_filesystem, search_filesystem, list_tags, create_tag, update_tag, delete_tag, "
-            "start_research_import, build_research_library, list_research_candidates, update_research_candidate_status, ingest_research_candidates, "
-            "search_chunks, branch_search, qa, answer_research_library, freeform, generate_image, generate_voice, update_source_tags, "
-            "list_tasks, and get_task to operate on the current user's library. "
-            "Only delete a source after explicit user confirmation."
+            "You are the MCP adapter for Vector Library Search. "
+            "Use open_file_search_ui to open the interactive file search UI. "
+            "Use library_search, research_library, answer_from_library, and manage_library for all non-UI work."
         ),
         auth=auth,
         lifespan=server_lifespan,
     )
-    _register_tools(server=server, services=services)
-    _register_sources_app(server=server, services=services)
+    _register_agent_facade_tools(server=server, services=services)
+    _register_sources_app(server=server, services=services, settings=settings)
     return server
+
+
+def _register_agent_facade_tools(*, server: FastMCP, services: AppServices) -> None:
+    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+    mutating = ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False)
+    destructive = ToolAnnotations(readOnlyHint=False, destructiveHint=True, idempotentHint=False, openWorldHint=False)
+
+    @server.tool(
+        name="library_search",
+        description=(
+            "Subagent facade for library search, browsing, source inspection, vector search, branch search, and file "
+            "content retrieval. Set include_file_contents=true when selected source payloads are needed."
+        ),
+        annotations=read_only,
+    )
+    async def library_search_tool(
+        instruction: Annotated[str, Field(min_length=1, max_length=16_000)],
+        query: Annotated[str | None, Field(max_length=4096)] = None,
+        source_ids: list[str] | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        tag_ids: list[str] | None = None,
+        max_results: Annotated[int, Field(ge=1, le=24)] = 8,
+        include_file_contents: bool = False,
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = McpFacadeInput(
+            instruction=instruction,
+            query=query,
+            source_ids=source_ids or [],
+            selected_source_ids=source_ids or [],
+            folder_id=folder_id,
+            tag_ids=tag_ids or [],
+            max_results=max_results,
+            include_file_contents=include_file_contents,
+        )
+        return await _run_logged_tool(
+            tool_name="library_search",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=run_library_search_agent(services=services, clerk_user_id=clerk_user_id, payload=payload),
+        )
+
+    @server.tool(
+        name="research_library",
+        description=(
+            "Subagent facade for research imports, research library builds, candidate review, candidate ingestion, "
+            "and answers from research-library task sources."
+        ),
+        annotations=mutating,
+    )
+    async def research_library_tool(
+        instruction: Annotated[str, Field(min_length=1, max_length=16_000)],
+        query: Annotated[str | None, Field(max_length=4096)] = None,
+        task_id: Annotated[str | None, Field(min_length=1)] = None,
+        candidate_ids: list[str] | None = None,
+        source_ids: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        folder_name: Annotated[str | None, Field(max_length=255)] = None,
+        max_sources: Annotated[int, Field(ge=1, le=50)] = 12,
+        confirm: bool = False,
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = McpFacadeInput(
+            instruction=instruction,
+            query=query,
+            prompt=query,
+            task_id=task_id,
+            candidate_ids=candidate_ids or [],
+            source_ids=source_ids or [],
+            selected_source_ids=source_ids or [],
+            tag_ids=tag_ids or [],
+            folder_id=folder_id,
+            folder_name=folder_name,
+            max_sources=max_sources,
+            confirm=confirm,
+        )
+        return await _run_logged_tool(
+            tool_name="research_library",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=run_research_library_agent(services=services, clerk_user_id=clerk_user_id, payload=payload),
+        )
+
+    @server.tool(
+        name="answer_from_library",
+        description=(
+            "Subagent facade for grounded QA, freeform writing, saving Markdown reports, and generating image/audio "
+            "assets from library context."
+        ),
+        annotations=mutating,
+    )
+    async def answer_from_library_tool(
+        instruction: Annotated[str, Field(min_length=1, max_length=16_000)],
+        prompt: Annotated[str | None, Field(max_length=16_000)] = None,
+        selected_source_ids: list[str] | None = None,
+        tag_ids: list[str] | None = None,
+        mode: Literal["grounded", "creative"] = "grounded",
+        max_results: Annotated[int, Field(ge=1, le=16)] = 8,
+        document: dict[str, Any] | None = None,
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = McpFacadeInput(
+            instruction=instruction,
+            prompt=prompt,
+            query=prompt,
+            selected_source_ids=selected_source_ids or [],
+            source_ids=selected_source_ids or [],
+            tag_ids=tag_ids or [],
+            mode=mode,
+            max_results=max_results,
+            document=document,
+        )
+        return await _run_logged_tool(
+            tool_name="answer_from_library",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json"),
+            operation=run_answer_from_library_agent(services=services, clerk_user_id=clerk_user_id, payload=payload),
+        )
+
+    @server.tool(
+        name="manage_library",
+        description=(
+            "Subagent facade for guarded library mutations: ingest files/text, folders, tags, split/reindex, deletion, "
+            "and task inspection. Destructive operations require confirm=true."
+        ),
+        annotations=destructive,
+    )
+    async def manage_library_tool(
+        instruction: Annotated[str, Field(min_length=1, max_length=16_000)],
+        source_ids: list[str] | None = None,
+        folder_id: Annotated[str | None, Field(min_length=1)] = None,
+        folder_name: Annotated[str | None, Field(max_length=255)] = None,
+        tag_ids: list[str] | None = None,
+        task_id: Annotated[str | None, Field(min_length=1)] = None,
+        filename: Annotated[str | None, Field(max_length=255)] = None,
+        text: str | None = None,
+        payload_base64: str | None = None,
+        media_type: Annotated[str | None, Field(max_length=128)] = None,
+        confirm: bool = False,
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        payload = McpFacadeInput(
+            instruction=instruction,
+            source_ids=source_ids or [],
+            selected_source_ids=source_ids or [],
+            folder_id=folder_id,
+            folder_name=folder_name,
+            tag_ids=tag_ids or [],
+            task_id=task_id,
+            filename=filename,
+            text=text,
+            payload_base64=payload_base64,
+            media_type=media_type,
+            confirm=confirm,
+        )
+        return await _run_logged_tool(
+            tool_name="manage_library",
+            clerk_user_id=clerk_user_id,
+            arguments=payload.model_dump(mode="json", exclude={"payload_base64"}),
+            operation=run_manage_library_agent(services=services, clerk_user_id=clerk_user_id, payload=payload),
+        )
 
 
 def _register_tools(*, server: FastMCP, services: AppServices) -> None:
@@ -409,7 +594,11 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
 
     @server.tool(
         name="get_source_detail",
-        description="Load source metadata and optional semantic split records.",
+        description=(
+            "Load source metadata and optional semantic split records. The response includes a temporary download_url "
+            "and a content_retrieval_tool hint; call retrieve_files, download_source, get_file, or read_file_bytes "
+            "with the source_id when the original file bytes are needed."
+        ),
         annotations=read_only,
     )
     async def get_source_detail_tool(source_id: Annotated[str, Field(min_length=1)]) -> LibrarySourceDetail:
@@ -420,6 +609,180 @@ def _register_tools(*, server: FastMCP, services: AppServices) -> None:
             arguments={"source_id": source_id},
             operation=services.sources.get_source(clerk_user_id=clerk_user_id, source_id=source_id),
         )
+
+    @server.tool(
+        name="retrieve_files",
+        description=(
+            "Retrieve original file payloads by source ID through MCP embedded resources. "
+            "Text-like files are returned as text resources; binary files such as PDFs are returned as base64 blobs "
+            "with extracted semantic text when available. Use this instead of fetching app file URLs."
+        ),
+        annotations=read_only,
+    )
+    async def retrieve_files_tool(
+        source_ids: Annotated[list[str], Field(min_length=1, max_length=5)],
+        include_extracted_text: bool = True,
+        max_bytes_per_file: Annotated[int, Field(ge=1, le=5_000_000)] = DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE,
+        max_extracted_chars_per_file: Annotated[int, Field(ge=1, le=300_000)] = (
+            DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE
+        ),
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="retrieve_files",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "source_ids": source_ids,
+                "include_extracted_text": include_extracted_text,
+                "max_bytes_per_file": max_bytes_per_file,
+                "max_extracted_chars_per_file": max_extracted_chars_per_file,
+            },
+            operation=_retrieve_files_result(
+                services=services,
+                clerk_user_id=clerk_user_id,
+                source_ids=source_ids,
+                include_extracted_text=include_extracted_text,
+                max_bytes_per_file=max_bytes_per_file,
+                max_extracted_chars_per_file=max_extracted_chars_per_file,
+            ),
+        )
+
+    @server.tool(
+        name="download_source",
+        description=(
+            "Retrieve one stored source file by source_id through MCP embedded resources. "
+            "Use this when get_source_detail exposes a storage_key, OpenAI file ID, or source_id and the original "
+            "PDF/file payload is needed."
+        ),
+        annotations=read_only,
+    )
+    async def download_source_tool(
+        source_id: Annotated[str, Field(min_length=1)],
+        include_extracted_text: bool = True,
+        max_bytes_per_file: Annotated[int, Field(ge=1, le=5_000_000)] = DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE,
+        max_extracted_chars_per_file: Annotated[int, Field(ge=1, le=300_000)] = (
+            DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE
+        ),
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="download_source",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "source_id": source_id,
+                "include_extracted_text": include_extracted_text,
+                "max_bytes_per_file": max_bytes_per_file,
+                "max_extracted_chars_per_file": max_extracted_chars_per_file,
+            },
+            operation=_retrieve_files_result(
+                services=services,
+                clerk_user_id=clerk_user_id,
+                source_ids=[source_id],
+                include_extracted_text=include_extracted_text,
+                max_bytes_per_file=max_bytes_per_file,
+                max_extracted_chars_per_file=max_extracted_chars_per_file,
+            ),
+        )
+
+    @server.tool(
+        name="get_file",
+        description=(
+            "Read one original library file by source_id and return its contents as MCP embedded resources. "
+            "Binary files such as PDFs are returned as base64 blobs."
+        ),
+        annotations=read_only,
+    )
+    async def get_file_tool(
+        source_id: Annotated[str, Field(min_length=1)],
+        include_extracted_text: bool = True,
+        max_bytes_per_file: Annotated[int, Field(ge=1, le=5_000_000)] = DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE,
+        max_extracted_chars_per_file: Annotated[int, Field(ge=1, le=300_000)] = (
+            DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE
+        ),
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="get_file",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "source_id": source_id,
+                "include_extracted_text": include_extracted_text,
+                "max_bytes_per_file": max_bytes_per_file,
+                "max_extracted_chars_per_file": max_extracted_chars_per_file,
+            },
+            operation=_retrieve_files_result(
+                services=services,
+                clerk_user_id=clerk_user_id,
+                source_ids=[source_id],
+                include_extracted_text=include_extracted_text,
+                max_bytes_per_file=max_bytes_per_file,
+                max_extracted_chars_per_file=max_extracted_chars_per_file,
+            ),
+        )
+
+    @server.tool(
+        name="read_file_bytes",
+        description=(
+            "Return the original bytes for one stored source file by source_id through MCP embedded resources. "
+            "Use this for PDFs or other non-text files when the model needs the stored file content."
+        ),
+        annotations=read_only,
+    )
+    async def read_file_bytes_tool(
+        source_id: Annotated[str, Field(min_length=1)],
+        include_extracted_text: bool = True,
+        max_bytes_per_file: Annotated[int, Field(ge=1, le=5_000_000)] = DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE,
+        max_extracted_chars_per_file: Annotated[int, Field(ge=1, le=300_000)] = (
+            DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE
+        ),
+    ) -> ToolResult:
+        clerk_user_id = current_mcp_clerk_user_id()
+        return await _run_logged_tool(
+            tool_name="read_file_bytes",
+            clerk_user_id=clerk_user_id,
+            arguments={
+                "source_id": source_id,
+                "include_extracted_text": include_extracted_text,
+                "max_bytes_per_file": max_bytes_per_file,
+                "max_extracted_chars_per_file": max_extracted_chars_per_file,
+            },
+            operation=_retrieve_files_result(
+                services=services,
+                clerk_user_id=clerk_user_id,
+                source_ids=[source_id],
+                include_extracted_text=include_extracted_text,
+                max_bytes_per_file=max_bytes_per_file,
+                max_extracted_chars_per_file=max_extracted_chars_per_file,
+            ),
+        )
+
+    @server.tool(
+        name="create_download_link",
+        description=(
+            "Create a temporary direct download URL for one stored source file by source_id. "
+            "Prefer retrieve_files/download_source for model-readable MCP resources; use this when a URL is needed."
+        ),
+        annotations=read_only,
+    )
+    async def create_download_link_tool(source_id: Annotated[str, Field(min_length=1)]) -> dict[str, object]:
+        clerk_user_id = current_mcp_clerk_user_id()
+        detail = await _run_logged_tool(
+            tool_name="create_download_link",
+            clerk_user_id=clerk_user_id,
+            arguments={"source_id": source_id},
+            operation=services.sources.get_source(clerk_user_id=clerk_user_id, source_id=source_id),
+        )
+        return {
+            "source_id": detail.id,
+            "title": detail.display_title,
+            "original_filename": detail.original_filename,
+            "media_type": detail.media_type,
+            "byte_size": detail.byte_size,
+            "download_url": detail.download_url,
+            "expires_in_seconds": detail.download_url_expires_in_seconds,
+            "retrieval_tool": detail.content_retrieval_tool,
+            "retrieval_arguments": {"source_ids": [detail.id]},
+        }
 
     @server.tool(
         name="ingest_text_source",
@@ -1079,508 +1442,445 @@ async def _list_tags(*, services: AppServices, clerk_user_id: str) -> list[TagSu
     return await services.sources.list_tags(clerk_user_id=clerk_user_id)
 
 
-def _register_sources_app(*, server: FastMCP, services: AppServices) -> None:
+async def _retrieve_files_result(
+    *,
+    services: AppServices,
+    clerk_user_id: str,
+    source_ids: list[str],
+    include_extracted_text: bool,
+    max_bytes_per_file: int,
+    max_extracted_chars_per_file: int,
+) -> ToolResult:
+    content_blocks: list[TextContent | EmbeddedResource] = []
+    files: list[dict[str, object]] = []
+    for source_id in list(dict.fromkeys(source_ids)):
+        detail, payload = await services.sources.read_source_bytes(
+            clerk_user_id=clerk_user_id,
+            source_id=source_id,
+        )
+        returned_payload = payload[:max_bytes_per_file]
+        original_truncated = len(payload) > len(returned_payload)
+        resource_uri = f"vectorstore://sources/{detail.id}/original"
+        content_kind: Literal["text", "blob"]
+        if _is_text_resource(detail=detail):
+            content_kind = "text"
+            content_blocks.append(
+                EmbeddedResource(
+                    type="resource",
+                    resource=TextResourceContents(
+                        uri=cast(Any, resource_uri),
+                        mimeType=detail.media_type,
+                        text=returned_payload.decode("utf-8", errors="replace"),
+                    ),
+                )
+            )
+        else:
+            content_kind = "blob"
+            content_blocks.append(
+                EmbeddedResource(
+                    type="resource",
+                    resource=BlobResourceContents(
+                        uri=cast(Any, resource_uri),
+                        mimeType=detail.media_type,
+                        blob=b64encode(returned_payload).decode("ascii"),
+                    ),
+                )
+            )
+
+        extracted_text_included = False
+        extracted_text_truncated = False
+        if include_extracted_text and detail.chunks:
+            extracted_text = _source_extracted_text(detail)
+            if extracted_text:
+                clipped_extracted_text = extracted_text[:max_extracted_chars_per_file]
+                extracted_text_included = True
+                extracted_text_truncated = len(extracted_text) > len(clipped_extracted_text)
+                content_blocks.append(
+                    EmbeddedResource(
+                        type="resource",
+                        resource=TextResourceContents(
+                            uri=cast(Any, f"vectorstore://sources/{detail.id}/extracted-text"),
+                            mimeType="text/markdown",
+                            text=clipped_extracted_text,
+                        ),
+                    )
+                )
+
+        files.append(
+            {
+                "source_id": detail.id,
+                "title": detail.display_title,
+                "original_filename": detail.original_filename,
+                "media_type": detail.media_type,
+                "source_kind": detail.source_kind,
+                "byte_size": detail.byte_size,
+                "returned_bytes": len(returned_payload),
+                "original_truncated": original_truncated,
+                "content_kind": content_kind,
+                "resource_uri": resource_uri,
+                "extracted_text_included": extracted_text_included,
+                "extracted_text_truncated": extracted_text_truncated,
+                "chunk_count": len(detail.chunks),
+            }
+        )
+
+    summary_text = (
+        "Retrieved "
+        f"{len(files)} file{'s' if len(files) != 1 else ''} through MCP embedded resources. "
+        "Use the returned resource content blocks for the file payloads; do not fetch app storage URLs."
+    )
+    content_blocks.insert(0, TextContent(type="text", text=summary_text))
+    return ToolResult(content=content_blocks, structured_content={"files": files})
+
+
+def _is_text_resource(*, detail: LibrarySourceDetail) -> bool:
+    media_type = detail.media_type.split(";", 1)[0].strip().casefold()
+    return media_type.startswith("text/") or media_type in TEXT_RESOURCE_MEDIA_TYPES
+
+
+def _source_extracted_text(detail: LibrarySourceDetail) -> str:
+    parts: list[str] = []
+    for chunk in sorted(detail.chunks, key=lambda item: item.sequence):
+        title = chunk.title.strip()
+        text = chunk.text.strip()
+        if not title and not text:
+            continue
+        if title:
+            parts.append(f"## {title}\n\n{text}".strip())
+        else:
+            parts.append(text)
+    return "\n\n".join(parts)
+
+
+def _register_sources_app(*, server: FastMCP, services: AppServices, settings: AppSettings) -> None:
+    del settings
+
     sources_app = FastMCPApp("Indexed Files")
 
-    @sources_app.tool("refresh_sources")
-    async def refresh_sources_tool(
-        ctx: Context,
-        query: str | None = None,
-        tag_ids: list[str] | None = None,
-    ) -> dict[str, Any]:
+    @sources_app.tool("run_file_search_for_ui")
+    async def run_file_search_for_ui_tool(query: str, ctx: Context) -> dict[str, Any]:
         del ctx
-        response = await services.sources.list_sources(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            query=query,
-            tag_ids=tag_ids or [],
-            tag_match_mode="all",
-            page=1,
-            page_size=12,
-        )
-        payload = response.model_dump(mode="json")
-        payload["query"] = query or ""
-        payload["tag_ids"] = tag_ids or []
-        return payload
-
-    @sources_app.tool("refresh_tags")
-    async def refresh_tags_tool(ctx: Context) -> list[dict[str, Any]]:
-        del ctx
-        tags = await services.sources.list_tags(clerk_user_id=current_mcp_clerk_user_id())
-        return [tag.model_dump(mode="json") for tag in tags]
-
-    @sources_app.tool("refresh_tasks")
-    async def refresh_tasks_tool(ctx: Context) -> dict[str, Any]:
-        del ctx
-        response = await services.actions.list_tasks(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            kind=None,
-            limit=8,
-        )
-        return response.model_dump(mode="json")
-
-    @sources_app.tool("search_sources_for_ui")
-    async def search_sources_for_ui_tool(
-        query: str,
-        ctx: Context,
-        tag_ids: list[str] | None = None,
-        max_results: Annotated[int, Field(ge=1, le=16)] = 8,
-    ) -> dict[str, Any]:
-        del ctx
-        if not query.strip():
-            return {"query": "", "hits": []}
+        normalized_query = query.strip()
+        if not normalized_query:
+            return {
+                "query": "",
+                "iteration": 0,
+                "results": [],
+                "added": [],
+                "referenceContext": "",
+                "message": "Enter a search query.",
+            }
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=query, tag_ids=tag_ids or [], tag_match_mode="all", max_results=max_results),
+            request=SearchRequest(query=normalized_query, max_results=24),
+            origin_surface="mcp_app",
         )
-        return response.model_dump(mode="json")
+        added = _file_search_items_from_hits(response.hits, exclude_source_ids=set(), limit=5)
+        return {
+            "query": normalized_query,
+            "iteration": 1,
+            "results": added,
+            "added": added,
+            "referenceContext": _file_search_reference_context(added),
+            "message": f"Found {len(added)} files.",
+        }
 
-    @sources_app.tool("load_source_for_ui")
-    async def load_source_for_ui_tool(source_id: str, ctx: Context) -> dict[str, Any]:
-        del ctx
-        response = await services.sources.get_source(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            source_id=source_id,
-        )
-        return response.model_dump(mode="json")
-
-    @sources_app.tool("resplit_source_for_ui")
-    async def resplit_source_for_ui_tool(source_id: str, ctx: Context) -> dict[str, Any]:
-        del ctx
-        response = await services.sources.resplit_source(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            source_id=source_id,
-            tag_ids=None,
-            user_guidance=None,
-            origin_surface="mcp",
-        )
-        return response.model_dump(mode="json")
-
-    @sources_app.tool("build_research_library_for_ui")
-    async def build_research_library_for_ui_tool(
+    @sources_app.tool("continue_file_search_for_ui")
+    async def continue_file_search_for_ui_tool(
         query: str,
         ctx: Context,
-        seed_type: Literal["topic", "paper"] = "topic",
-        max_depth: Annotated[int, Field(ge=0, le=4)] = 2,
-        max_sources: Annotated[int, Field(ge=1, le=50)] = 12,
+        current_results: list[dict[str, Any]] | None = None,
+        dismissed_source_ids: list[str] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
+        iteration: int = 1,
     ) -> dict[str, Any]:
         del ctx
-        response = await services.research.build_library(
+        normalized_query = query.strip()
+        current_items = list(current_results or [])
+        dismissed_ids = {str(source_id) for source_id in dismissed_source_ids or [] if str(source_id).strip()}
+        selected_ids = {
+            str(item.get("source_id"))
+            for item in selected_files or []
+            if str(item.get("source_id") or "").strip()
+        }
+        seen_ids = {
+            str(item.get("source_id"))
+            for item in current_items
+            if str(item.get("source_id") or "").strip()
+        } | dismissed_ids | selected_ids
+        if not normalized_query:
+            return {
+                "query": "",
+                "iteration": iteration,
+                "results": current_items,
+                "added": [],
+                "referenceContext": "",
+                "message": "Enter a search query.",
+            }
+
+        reference_context = _file_search_reference_context(current_items)
+        branch_query = "\n\n".join([normalized_query, reference_context]).strip()
+        response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            payload=ResearchLibraryBuildRequest(
-                seed_type=seed_type,
-                query=query,
-                title=query,
-                auto_ingest=True,
-                discover_references=True,
-                max_depth=max_depth,
-                max_sources=max_sources,
-                max_candidates_per_source=min(max_sources, 8),
-                max_pending_candidates=max(50, max_sources * max(1, max_depth + 1)),
-            ),
+            request=SearchRequest(query=branch_query, max_results=24),
             origin_surface="mcp_app",
         )
-        return response.model_dump(mode="json")
+        added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
+        if not added:
+            response = await services.sources.search(
+                clerk_user_id=current_mcp_clerk_user_id(),
+                request=SearchRequest(query=normalized_query, max_results=24),
+                origin_surface="mcp_app",
+            )
+            added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
+        results = [*current_items, *added]
+        return {
+            "query": normalized_query,
+            "iteration": iteration + 1,
+            "results": results,
+            "added": added,
+            "referenceContext": _file_search_reference_context(results),
+            "message": f"Added {len(added)} files.",
+        }
 
-    @sources_app.tool("refresh_research_candidates_for_ui")
-    async def refresh_research_candidates_for_ui_tool(
+    @sources_app.tool("confirm_file_selection_for_ui")
+    async def confirm_file_selection_for_ui_tool(
+        selected_files: list[dict[str, Any]],
         ctx: Context,
-        task_id: str | None = None,
-        status: ResearchCandidateStatus | None = None,
     ) -> dict[str, Any]:
         del ctx
-        response = await services.research.list_candidates(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            task_id=task_id,
-            status=status,
-            page=1,
-            page_size=16,
+        selected = []
+        seen_ids: set[str] = set()
+        for item in selected_files:
+            source_id = str(item.get("source_id") or "").strip()
+            if not source_id or source_id in seen_ids:
+                continue
+            seen_ids.add(source_id)
+            selected.append(
+                {
+                    "source_id": source_id,
+                    "title": str(item.get("title") or source_id).strip(),
+                    "original_filename": str(item.get("original_filename") or "").strip(),
+                    "summary": str(item.get("summary") or "").strip(),
+                    "relevance_score": item.get("relevance_score"),
+                }
+            )
+        if not selected:
+            return {
+                "selected_files": [],
+                "selected_source_ids": [],
+                "model_context": "No files are currently selected in the file search widget.",
+                "follow_up_prompt": "No files are selected yet.",
+                "message": "No files selected.",
+            }
+        selected_source_ids = [item["source_id"] for item in selected]
+        selected_lines = [
+            f"- {item['title']} (`{item['source_id']}`): {item['summary']}"
+            for item in selected
+        ]
+        model_context = "\n".join(
+            [
+                "The user confirmed these selected library files in the file search widget:",
+                *selected_lines,
+                "",
+                f"Selected source IDs: {', '.join(selected_source_ids)}",
+                "Use library_search with include_file_contents=true and these source IDs when full file contents are needed.",
+            ]
         )
-        return response.model_dump(mode="json")
-
-    @sources_app.tool("update_research_candidate_status_for_ui")
-    async def update_research_candidate_status_for_ui_tool(
-        candidate_ids: list[str],
-        status: Literal["approved", "rejected", "pending"],
-        ctx: Context,
-    ) -> dict[str, Any]:
-        del ctx
-        response = await services.research.update_candidate_status(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            candidate_ids=candidate_ids,
-            status=status,
+        follow_up_prompt = (
+            "Use my confirmed selected library files for the next step. "
+            f"Selected source IDs: {', '.join(selected_source_ids)}. "
+            "If you need original file contents, call library_search with include_file_contents=true for those IDs."
         )
-        return response.model_dump(mode="json")
+        return {
+            "selected_files": selected,
+            "selected_source_ids": selected_source_ids,
+            "model_context": model_context,
+            "follow_up_prompt": follow_up_prompt,
+            "message": f"Confirmed {len(selected)} selected file{'s' if len(selected) != 1 else ''}.",
+        }
 
-    @sources_app.tool("ingest_research_candidates_for_ui")
-    async def ingest_research_candidates_for_ui_tool(
-        ctx: Context,
-        task_id: str | None = None,
-        candidate_ids: list[str] | None = None,
-        folder_id: str | None = None,
-    ) -> dict[str, Any]:
-        del ctx
-        response = await services.research.ingest_approved_candidates(
-            clerk_user_id=current_mcp_clerk_user_id(),
-            payload=ResearchCandidateIngestRequest(
-                candidate_ids=candidate_ids,
-                task_id=task_id,
-                folder_id=folder_id,
-            ),
-            origin_surface="mcp_app",
-        )
-        return response.model_dump(mode="json")
-
-    @sources_app.ui(
-        name="sources",
-        title="Indexed Files",
-        description="Browse indexed files, build research libraries, and inspect discovered candidate status.",
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
-    )
-    async def sources(ctx: Context) -> PrefabApp:
-        initial_sources = await refresh_sources_tool(ctx)
-        initial_tags = await refresh_tags_tool(ctx)
-        with Card(css_class="w-full max-w-2xl mx-auto") as view:
-            with CardHeader(), Column(gap=1):
-                CardTitle("Indexed Files")
-                CardDescription("Browse indexed files, filter by tags, and inspect source detail.")
-            with CardContent(), Column(gap=2):
+    def build_file_search_app() -> PrefabApp:
+        with Column(gap=4, css_class="p-4 max-w-2xl mx-auto") as view:
+            with Column(gap=1):
+                Text("File Search", bold=True, css_class="text-lg")
+                Muted("Semantic search over the indexed library.")
+            with Form(
+                on_submit=[
+                    SetState("selectedFiles", []),
+                    SetState("dismissedSourceIds", []),
+                    CallTool(
+                        "run_file_search_for_ui",
+                        arguments={"query": EVENT.formData.file_query},
+                        onSuccess=SetState("search", RESULT),
+                        onError=ShowToast(f"{ERROR}", variant="error"),
+                    ),
+                ]
+            ):
                 with Column(gap=2):
-                    with Row(gap=2, align="center"):
-                        h3("Files")
-                        Button(
-                            "Refresh",
-                            variant="secondary",
-                            size="sm",
-                            on_click=[
-                                CallTool(
-                                    "refresh_sources",
-                                    arguments={"query": STATE.sources.query, "tag_ids": STATE.selectedTagIds},
-                                    on_success=SetState("sources", RESULT),
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
-                                CallTool(
-                                    "refresh_tasks",
-                                    on_success=SetState("tasks", RESULT),
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
-                            ],
-                        )
-                    with Form(
-                        on_submit=CallTool(
-                            "refresh_sources",
-                            arguments={"query": EVENT.formData.file_query, "tag_ids": STATE.selectedTagIds},
-                            on_success=SetState("sources", RESULT),
-                            on_error=ShowToast(ERROR, variant="error"),
-                        )
-                    ):
-                        with Column(gap=2):
-                            Input(
-                                name="file_query",
-                                input_type="search",
-                                placeholder="Query files, filenames, kinds, status",
-                                value=STATE.sources.query,
-                            )
-                            Button("Query", button_type="submit", size="sm")
-                    with Row(gap=1, align="center"):
-                        Small("Tags")
-                        Button(
-                            "All",
-                            variant="secondary",
-                            size="sm",
-                            on_click=[
-                                SetState("selectedTagIds", []),
-                                CallTool(
-                                    "refresh_sources",
-                                    arguments={"query": STATE.sources.query, "tag_ids": []},
-                                    on_success=SetState("sources", RESULT),
-                                    on_error=ShowToast(ERROR, variant="error"),
-                                ),
-                            ],
-                        )
-                        with ForEach(STATE.tags) as tag:
-                            Button(
-                                tag.name,  # ty:ignore[invalid-argument-type]
-                                variant="outline",
-                                size="sm",
-                                on_click=[
-                                    SetState("selectedTagIds", [tag.id]),  # ty:ignore[invalid-argument-type]
-                                    CallTool(
-                                        "refresh_sources",
-                                        arguments={"query": STATE.sources.query, "tag_ids": [tag.id]},  # ty:ignore[invalid-argument-type]
-                                        on_success=SetState("sources", RESULT),
-                                        on_error=ShowToast(ERROR, variant="error"),
-                                    ),
-                                ],
-                            )
-                    with ForEach(STATE.sources.sources) as source, Card(css_class="border border-slate-200"):
-                        with CardContent(), Column(gap=1):
-                            with Row(gap=1, align="center"):
-                                Text(source.display_title)  # ty:ignore[invalid-argument-type]
-                                Badge(source.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                Badge(source.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                            Small(source.original_filename)  # ty:ignore[invalid-argument-type]
-                            with Row(gap=1, align="center"):
-                                Muted(source.chunk_count)  # ty:ignore[invalid-argument-type]
-                                Button(
-                                    "Inspect",
-                                    size="sm",
-                                    on_click=CallTool(
-                                        "load_source_for_ui",
-                                        arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
-                                        on_success=SetState("selectedSource", RESULT),
-                                        on_error=ShowToast(ERROR, variant="error"),
-                                    ),
-                                )
-                                Button(
-                                    "Re-split",
-                                    variant="secondary",
-                                    size="sm",
-                                    on_click=CallTool(
-                                        "resplit_source_for_ui",
-                                        arguments={"source_id": source.id},  # ty:ignore[invalid-argument-type]
-                                        on_success=[
-                                            ShowToast("Re-split queued", variant="success"),
-                                            CallTool(
-                                                "refresh_sources",
-                                                on_success=SetState("sources", RESULT),
-                                                on_error=ShowToast(ERROR, variant="error"),
-                                            ),
+                    Input(
+                        name="file_query",
+                        value=STATE.search.query,
+                        inputType="search",
+                        placeholder="Search files by meaning, topic, method, claim, or source",
+                    )
+                    Button("Search", size="sm", buttonType="submit")
+            with If(STATE.search.results):
+                with Row(gap=2, align="center"):
+                    Badge(STATE.search.message, variant="secondary")
+                    Button(
+                        "Add five more",
+                        variant="secondary",
+                        size="sm",
+                        onClick=CallTool(
+                            "continue_file_search_for_ui",
+                            arguments={
+                                "query": STATE.search.query,
+                                "current_results": STATE.search.results,
+                                "dismissed_source_ids": STATE.dismissedSourceIds,
+                                "selected_files": STATE.selectedFiles,
+                                "iteration": STATE.search.iteration,
+                            },
+                            onSuccess=SetState("search", RESULT),
+                            onError=ShowToast(f"{ERROR}", variant="error"),
+                        ),
+                    )
+                with ForEach(STATE.search.results) as item:
+                    with Card(css_class="border border-slate-200"):
+                        with CardContent():
+                            with Column(gap=2):
+                                with Row(gap=2, align="center"):
+                                    Text(item.title, bold=True)
+                                    Badge(item.relevance_label, variant="secondary")
+                                    Badge(item.relevance_score, variant="outline")
+                                Small(item.original_filename)
+                                Muted(item.summary)
+                                Small(item.match_title)
+                                with Row(gap=2, align="center"):
+                                    Button(
+                                        "Select",
+                                        size="sm",
+                                        onClick=[
+                                            AppendState("selectedFiles", item),
+                                            ShowToast("File selected", variant="success"),
                                         ],
-                                        on_error=ShowToast(ERROR, variant="error"),
-                                    ),
-                                )
-                    with If(STATE.selectedSource):
-                        Separator()
-                        with Card(css_class="border border-slate-200"):
-                            with CardHeader(), Column(gap=1):
-                                CardTitle(STATE.selectedSource.display_title)  # ty:ignore[invalid-argument-type]
-                                CardDescription(STATE.selectedSource.original_filename)  # ty:ignore[invalid-argument-type]
-                            with CardContent(), Column(gap=2):
-                                with Row(gap=1, align="center"):
-                                    Badge(STATE.selectedSource.source_kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                    Badge(STATE.selectedSource.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                    Muted(STATE.selectedSource.chunk_count)  # ty:ignore[invalid-argument-type]
-                                with ForEach(STATE.selectedSource.chunks) as chunk:
-                                    with Card(css_class="border border-slate-200"):
-                                        with CardContent(), Column(gap=1):
-                                            Small(chunk.title)  # ty:ignore[invalid-argument-type]
-                                            Muted(chunk.summary)  # ty:ignore[invalid-argument-type]
-
-        return PrefabApp(
-            title="Indexed Files",
-            view=view,
-            state={
-                "sources": initial_sources,
-                "tags": initial_tags,
-                "selectedTagIds": [],
-                "selectedSource": None,
-            },
-        )
-
-    @sources_app.ui(
-        name="source_search",
-        title="Library Search",
-        description="Search indexed source chunks and inspect retrieved references.",
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
-    )
-    async def source_search(ctx: Context) -> PrefabApp:
-        initial_tags = await refresh_tags_tool(ctx)
-        with Card(css_class="w-full max-w-2xl mx-auto") as view:
-            with CardHeader(), Column(gap=1):
-                CardTitle("Library Search")
-                CardDescription("Run targeted vector searches over indexed source files.")
-            with CardContent(), Column(gap=2):
-                with Row(gap=1, align="center"):
-                    Small("Scope")
-                    Button(
-                        "All tags",
-                        variant="secondary",
-                        size="sm",
-                        on_click=SetState("selectedTagIds", []),
-                    )
-                    with ForEach(STATE.tags) as tag:
-                        Button(
-                            tag.name,  # ty:ignore[invalid-argument-type]
-                            variant="outline",
-                            size="sm",
-                            on_click=SetState("selectedTagIds", [tag.id]),  # ty:ignore[invalid-argument-type]
-                        )
-                with Form(
-                    on_submit=CallTool(
-                        "search_sources_for_ui",
-                        arguments={
-                            "query": EVENT.formData.chunk_query,
-                            "tag_ids": STATE.selectedTagIds,
-                            "max_results": 8,
-                        },
-                        on_success=SetState("searchResults", RESULT),
-                        on_error=ShowToast(ERROR, variant="error"),
-                    )
-                ):
-                    with Column(gap=2):
-                        Input(
-                            name="chunk_query",
-                            input_type="search",
-                            placeholder="Search indexed files with the selected tag scope",
-                        )
-                        Button("Search chunks", button_type="submit", size="sm")
-                with If(STATE.searchResults):
-                    with ForEach(STATE.searchResults.hits) as hit:
-                        with Card(css_class="border border-slate-200"):
-                            with CardContent(), Column(gap=1):
-                                with Row(gap=1, align="center"):
-                                    Text(hit.title)  # ty:ignore[invalid-argument-type]
-                                    Badge(hit.score, variant="secondary")  # ty:ignore[invalid-argument-type]
-                                Small(hit.source_title)  # ty:ignore[invalid-argument-type]
-                                Muted(hit.summary)  # ty:ignore[invalid-argument-type]
-        return PrefabApp(
-            title="Library Search",
-            view=view,
-            state={
-                "tags": initial_tags,
-                "selectedTagIds": [],
-                "searchResults": None,
-            },
-        )
-
-    @sources_app.ui(
-        name="research_libraries",
-        title="Research Libraries",
-        description="Build research libraries and review discovered candidates.",
-        annotations=ToolAnnotations(readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=True),
-    )
-    async def research_libraries(ctx: Context) -> PrefabApp:
-        initial_research_candidates = await refresh_research_candidates_for_ui_tool(ctx)
-        with Card(css_class="w-full max-w-2xl mx-auto") as view:
-            with CardHeader(), Column(gap=1):
-                CardTitle("Research Libraries")
-                CardDescription("Create a bounded research library from a topic or paper and inspect candidates.")
-            with CardContent(), Column(gap=2):
-                with Row(gap=2, align="center"):
-                    h3("Research Library Builder")
-                    Button(
-                        "Refresh",
-                        variant="secondary",
-                        size="sm",
-                        on_click=CallTool(
-                            "refresh_research_candidates_for_ui",
-                            on_success=SetState("researchCandidates", RESULT),
-                            on_error=ShowToast(ERROR, variant="error"),
-                        ),
-                    )
-                with Form(
-                    on_submit=CallTool(
-                        "build_research_library_for_ui",
-                        arguments={
-                            "query": EVENT.formData.research_query,
-                            "seed_type": EVENT.formData.research_seed_type,
-                            "max_depth": EVENT.formData.research_max_depth,
-                            "max_sources": EVENT.formData.research_max_sources,
-                        },
-                        on_success=[
-                            SetState("researchBuild", RESULT),
-                            CallTool(
-                                "refresh_research_candidates_for_ui",
-                                arguments={"task_id": RESULT.task.id},  # ty:ignore[invalid-argument-type]
-                                on_success=SetState("researchCandidates", RESULT),
-                                on_error=ShowToast(ERROR, variant="error"),
-                            ),
-                            ShowToast("Research library build complete", variant="success"),
-                        ],
-                        on_error=ShowToast(ERROR, variant="error"),
-                    )
-                ):
-                    with Column(gap=2):
-                        Input(
-                            name="research_query",
-                            input_type="search",
-                            placeholder="Topic or paper title",
-                        )
-                        with Row(gap=1, align="center"):
-                            Input(
-                                name="research_seed_type",
-                                placeholder="topic or paper",
-                                value="topic",
-                            )
-                            Input(
-                                name="research_max_sources",
-                                input_type="number",
-                                value="12",
-                            )
-                            Input(
-                                name="research_max_depth",
-                                input_type="number",
-                                value="2",
-                            )
-                        Button("Build library", button_type="submit", size="sm")
-                with If(STATE.researchBuild):
-                    with Card(css_class="border border-slate-200"):
-                        with CardContent(), Column(gap=1):
-                            with Row(gap=1, align="center"):
-                                Text(STATE.researchBuild.task.title)  # ty:ignore[invalid-argument-type]
-                                Badge(STATE.researchBuild.task.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                            Small(STATE.researchBuild.duplicate_count)  # ty:ignore[invalid-argument-type]
-                with Row(gap=1, align="center"):
-                    h3("Candidates")
-                    Badge(STATE.researchCandidates.total_count, variant="secondary")  # ty:ignore[invalid-argument-type]
-                with ForEach(STATE.researchCandidates.candidates) as candidate:
-                    with Card(css_class="border border-slate-200"):
-                        with CardContent(), Column(gap=1):
-                            with Row(gap=1, align="center"):
-                                Text(candidate.title)  # ty:ignore[invalid-argument-type]
-                                Badge(candidate.status, variant="outline")  # ty:ignore[invalid-argument-type]
-                                Badge(candidate.source_type, variant="secondary")  # ty:ignore[invalid-argument-type]
-                            Muted(candidate.summary)  # ty:ignore[invalid-argument-type]
-                            Small(candidate.normalized_url)  # ty:ignore[invalid-argument-type]
-        return PrefabApp(
-            title="Research Libraries",
-            view=view,
-            state={
-                "researchBuild": None,
-                "researchCandidates": initial_research_candidates,
-            },
-        )
-
-    @sources_app.ui(
-        name="activity",
-        title="Activity",
-        description="Inspect recent app tasks and indexing status.",
-        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
-    )
-    async def activity(ctx: Context) -> PrefabApp:
-        initial_tasks = await refresh_tasks_tool(ctx)
-        with Card(css_class="w-full max-w-2xl mx-auto") as view:
-            with CardHeader(), Column(gap=1):
-                CardTitle("Activity")
-                CardDescription("Recent ingest, search, research, and generation tasks.")
-            with CardContent(), Column(gap=2):
-                with Row(gap=2, align="center"):
-                    h3("Recent Tasks")
-                    Button(
-                        "Refresh",
-                        variant="secondary",
-                        size="sm",
-                        on_click=CallTool(
-                            "refresh_tasks",
-                            on_success=SetState("tasks", RESULT),
-                            on_error=ShowToast(ERROR, variant="error"),
-                        ),
-                    )
-                with ForEach(STATE.tasks.tasks) as task:
-                    with Card(css_class="border border-slate-200"):
-                        with CardContent(), Row(gap=1, align="center"):
-                            Text(task.title)  # ty:ignore[invalid-argument-type]
-                            Badge(task.kind, variant="secondary")  # ty:ignore[invalid-argument-type]
-                            Badge(task.status, variant="outline")  # ty:ignore[invalid-argument-type]
+                                    )
+                                    Button(
+                                        "Dismiss",
+                                        variant="secondary",
+                                        size="sm",
+                                        onClick=[
+                                            AppendState("dismissedSourceIds", item.source_id),
+                                            ShowToast("File dismissed", variant="success"),
+                                        ],
+                                    )
+                                    Button("Leave", variant="outline", size="sm")
+            with If(STATE.selectedFiles):
                 Separator()
-                Muted("Use search_chunks and branch_search tools for deeper retrieval from ChatGPT hosts.")
+                with Row(gap=2, align="center"):
+                    Text("Selected", bold=True)
+                    Button(
+                        "Use selected",
+                        size="sm",
+                        onClick=CallTool(
+                            "confirm_file_selection_for_ui",
+                            arguments={"selected_files": STATE.selectedFiles},
+                            onSuccess=[
+                                SetState("selection", RESULT),
+                                UpdateContext(content=RESULT.model_context),
+                                SendMessage(f"{RESULT.follow_up_prompt}"),
+                                ShowToast(RESULT.message, variant="success"),
+                            ],
+                            onError=ShowToast(f"{ERROR}", variant="error"),
+                        ),
+                    )
+                with ForEach(STATE.selectedFiles) as selected:
+                    Small(selected.title)
+            with If(STATE.selection):
+                Small(STATE.selection.message)
         return PrefabApp(
-            title="Activity",
+            title="File Search",
             view=view,
-            state={"tasks": initial_tasks},
+            state={
+                "search": {
+                    "query": "",
+                    "iteration": 0,
+                    "results": [],
+                    "added": [],
+                    "referenceContext": "",
+                    "message": "",
+                },
+                "selectedFiles": [],
+                "dismissedSourceIds": [],
+                "selection": None,
+            },
         )
+
+    @sources_app.ui(
+        name="open_file_search_ui",
+        title="Open File Search UI",
+        description="Search the indexed file library five semantic matches at a time.",
+        annotations=ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False),
+    )
+    async def open_file_search_ui(ctx: Context) -> PrefabApp:
+        del ctx
+        return build_file_search_app()
 
     server.add_provider(sources_app)
+
+
+def _file_search_items_from_hits(
+    hits: list[ChunkHit],
+    *,
+    exclude_source_ids: set[str],
+    limit: int,
+) -> list[dict[str, object]]:
+    items: list[dict[str, object]] = []
+    for hit in hits:
+        if hit.source_file_id in exclude_source_ids:
+            continue
+        score = round(float(hit.score), 3)
+        if score >= 0.8:
+            relevance_label = "Strong"
+        elif score >= 0.6:
+            relevance_label = "Good"
+        else:
+            relevance_label = "Possible"
+        items.append(
+            {
+                "source_id": hit.source_file_id,
+                "chunk_id": hit.chunk_id,
+                "title": hit.source_title,
+                "original_filename": hit.original_filename,
+                "summary": hit.summary,
+                "match_title": hit.title,
+                "snippet": hit.text[:900],
+                "relevance_score": score,
+                "relevance_label": relevance_label,
+                "tags": hit.tags,
+            }
+        )
+        exclude_source_ids.add(hit.source_file_id)
+        if len(items) >= limit:
+            break
+    return items
+
+
+def _file_search_reference_context(items: list[dict[str, Any]]) -> str:
+    reference_parts: list[str] = []
+    ranked_items = sorted(
+        items,
+        key=lambda item: float(item.get("relevance_score") or 0.0),
+        reverse=True,
+    )
+    for item in ranked_items[:3]:
+        title = str(item.get("title") or "").strip()
+        summary = str(item.get("summary") or "").strip()
+        snippet = str(item.get("snippet") or "").strip()
+        if not title and not summary and not snippet:
+            continue
+        reference_parts.append("\n".join([title, summary, snippet[:700]]).strip())
+    return "\n\n".join(reference_parts)
 
 
 def _serialize_for_log(value: object) -> str:
@@ -1588,12 +1888,34 @@ def _serialize_for_log(value: object) -> str:
 
 
 def _summarize_result(result: object) -> object:
+    if isinstance(result, ToolResult):
+        structured_content = result.structured_content or {}
+        files = structured_content.get("files")
+        file_items = files if isinstance(files, list) else []
+        return {
+            "content_blocks": len(result.content),
+            "files": len(file_items),
+            "truncated": any(
+                isinstance(item, dict) and (item.get("original_truncated") or item.get("extracted_text_truncated"))
+                for item in file_items
+            ),
+        }
     if isinstance(result, FileListResponse):
         return {"returned": len(result.sources), "total_count": result.total_count}
     if isinstance(result, SearchResponse):
         return {"returned": len(result.hits)}
     if isinstance(result, BranchSearchResponse):
         return {"levels": len(result.levels), "returned": sum(len(level.hits) for level in result.levels)}
+    if isinstance(result, LibrarySourceDetail):
+        return {
+            "source_id": result.id,
+            "title": result.display_title,
+            "media_type": result.media_type,
+            "byte_size": result.byte_size,
+            "chunks": len(result.chunks),
+            "download_url_present": result.download_url is not None,
+            "content_retrieval_tool": result.content_retrieval_tool,
+        }
     if isinstance(result, SplitPreviewResponse):
         return {
             "source_kind": result.source_kind,

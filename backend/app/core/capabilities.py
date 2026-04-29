@@ -18,6 +18,7 @@ AppOperation: TypeAlias = Literal[
     "update_tag",
     "delete_tag",
     "get_source_detail",
+    "retrieve_files",
     "preview_semantic_split",
     "start_research_import",
     "build_research_library",
@@ -150,6 +151,16 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
         rest_routes=("GET /api/sources/{source_id}",),
         chatkit_tool="get_source_detail",
         mcp_tools=("get_source_detail",),
+    ),
+    AppCapability(
+        operation="retrieve_files",
+        summary="Retrieve stored source payloads through MCP embedded resources or temporary download links.",
+        rest_routes=("GET /api/sources/{source_id}/content",),
+        mcp_tools=("retrieve_files", "download_source", "get_file", "read_file_bytes", "create_download_link"),
+        notes=(
+            "MCP returns text resources for text-like files and base64 blob resources for binary files; "
+            "download link aliases exist for clients that look for explicit file retrieval tools."
+        ),
     ),
     AppCapability(
         operation="preview_semantic_split",
@@ -324,7 +335,16 @@ APP_CAPABILITIES: tuple[AppCapability, ...] = (
     ),
 )
 
-MCP_RENDER_TOOLS: tuple[str, ...] = ("sources", "source_search", "research_libraries", "activity")
+MCP_RENDER_TOOLS: tuple[str, ...] = (
+    "open_file_search_ui",
+)
+
+MCP_AGENT_FACADE_TOOLS: tuple[str, ...] = (
+    "library_search",
+    "research_library",
+    "answer_from_library",
+    "manage_library",
+)
 
 
 def capability_by_operation() -> dict[AppOperation, AppCapability]:
@@ -340,7 +360,4 @@ def chatkit_tool_names() -> set[str]:
 
 
 def mcp_tool_names() -> set[str]:
-    return {
-        *[tool_name for capability in APP_CAPABILITIES for tool_name in capability.mcp_tools],
-        *MCP_RENDER_TOOLS,
-    }
+    return {*MCP_RENDER_TOOLS, *MCP_AGENT_FACADE_TOOLS}

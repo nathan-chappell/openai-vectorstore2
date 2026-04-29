@@ -461,6 +461,13 @@ class ChunkSummary(BaseModel):
 class LibrarySourceDetail(LibrarySourceSummary):
     storage_provider: str
     storage_key: str
+    download_url: str | None = None
+    download_url_expires_in_seconds: int | None = None
+    content_retrieval_tool: str = "retrieve_files"
+    content_retrieval_source_ids: list[str] = Field(default_factory=list)
+    content_retrieval_note: str = (
+        "Call retrieve_files with content_retrieval_source_ids to retrieve the original file payload through MCP."
+    )
     ingest_strategy: str | None = None
     metadata: SourceMetadata = Field(default_factory=_empty_source_metadata)
     chunks: list[ChunkSummary] = Field(default_factory=list)
