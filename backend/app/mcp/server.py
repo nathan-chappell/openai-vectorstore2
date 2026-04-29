@@ -1574,10 +1574,12 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 "added": [],
                 "referenceContext": "",
                 "message": "Enter a search query.",
+                "selected_source_ids": [],
+                "dismissed_source_ids": [],
             }
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=normalized_query, max_results=24),
+            request=SearchRequest(query=normalized_query, max_results=32),
             origin_surface="mcp_app",
         )
         added = _file_search_items_from_hits(response.hits, exclude_source_ids=set(), limit=5)
@@ -1588,6 +1590,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             "added": added,
             "referenceContext": _file_search_reference_context(added),
             "message": f"Found {len(added)} files.",
+            "selected_source_ids": [],
+            "dismissed_source_ids": [],
         }
 
     async def continue_file_search_for_ui(
@@ -1600,45 +1604,73 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         normalized_query = query.strip()
         current_items = list(current_results or [])
         dismissed_ids = {str(source_id) for source_id in dismissed_source_ids or [] if str(source_id).strip()}
-        selected_ids = {str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()}
+        selected_ids = [str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()]
+        selected_id_set = set(selected_ids)
+        selected_items = [
+            item
+            for item in current_items
+            if str(item.get("source_id") or "").strip() in selected_id_set
+        ]
+        dropped_ids = {
+            str(item.get("source_id"))
+            for item in current_items
+            if str(item.get("source_id") or "").strip() and str(item.get("source_id")) not in selected_id_set
+        }
+        dismissed_ids |= dropped_ids
         seen_ids = {
             str(item.get("source_id"))
             for item in current_items
             if str(item.get("source_id") or "").strip()
-        } | dismissed_ids | selected_ids
+        } | dismissed_ids | selected_id_set
         if not normalized_query:
             return {
                 "query": "",
                 "iteration": iteration,
-                "results": current_items,
+                "results": selected_items,
                 "added": [],
                 "referenceContext": "",
                 "message": "Enter a search query.",
+                "selected_source_ids": selected_ids,
+                "dismissed_source_ids": sorted(dismissed_ids),
             }
 
-        reference_context = _file_search_reference_context(current_items)
+        if len(selected_items) >= 10:
+            return {
+                "query": normalized_query,
+                "iteration": iteration,
+                "results": selected_items,
+                "added": [],
+                "referenceContext": _file_search_reference_context(selected_items),
+                "message": "Kept 10 files. Use selected or unselect files to continue.",
+                "selected_source_ids": selected_ids[:10],
+                "dismissed_source_ids": sorted(dismissed_ids),
+            }
+
+        reference_context = _file_search_reference_context(selected_items or current_items)
         branch_query = "\n\n".join([normalized_query, reference_context]).strip()
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
-            request=SearchRequest(query=branch_query, max_results=24),
+            request=SearchRequest(query=branch_query, max_results=32),
             origin_surface="mcp_app",
         )
         added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
         if not added:
             response = await services.sources.search(
                 clerk_user_id=current_mcp_clerk_user_id(),
-                request=SearchRequest(query=normalized_query, max_results=24),
+                request=SearchRequest(query=normalized_query, max_results=32),
                 origin_surface="mcp_app",
             )
             added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
-        results = [*current_items, *added]
+        results = [*selected_items, *added]
         return {
             "query": normalized_query,
             "iteration": iteration + 1,
             "results": results,
             "added": added,
             "referenceContext": _file_search_reference_context(results),
-            "message": f"Added {len(added)} files.",
+            "message": f"Kept {len(selected_items)} and added {len(added)} files.",
+            "selected_source_ids": selected_ids[:10],
+            "dismissed_source_ids": sorted(dismissed_ids),
         }
 
     def toggle_file_selection_for_ui(source_id: str, selected_source_ids: list[str] | None = None) -> dict[str, Any]:
@@ -1649,6 +1681,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         if normalized_source_id in selected_ids:
             selected_ids = [item for item in selected_ids if item != normalized_source_id]
         else:
+            if len(selected_ids) >= 10:
+                return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids), "message": "Selection limit is 10 files."}
             selected_ids.append(normalized_source_id)
         return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids)}
 
@@ -1779,7 +1813,12 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                         "selected_source_ids": STATE.selectedSourceIds,
                         "iteration": STATE.search.iteration,
                     },
-                    on_success=SetState("search", RESULT),
+                    on_success=[
+                        SetState("search", RESULT),
+                        SetState("selectedSourceIds", RESULT.selected_source_ids),
+                        SetState("dismissedSourceIds", RESULT.dismissed_source_ids),
+                        SetState("selection", False),
+                    ],
                     on_error=ShowToast(f"{ERROR}", variant="error"),
                 )
             ):
@@ -1794,14 +1833,13 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             with If(STATE.search.results):
                 with Row(gap=2, align="center", justify="between"):
                     Badge(STATE.search.message, variant="secondary")
-                    Small("Run the same search again to add five more.")
                 with Table():
                     with TableHeader():
                         with TableRow():
-                            TableHead("", css_class="w-10")
-                            TableHead("File")
-                            TableHead("Relevance", css_class="w-32")
-                            TableHead("Match", css_class="w-44")
+                            TableHead("Keep", css_class="w-16")
+                            TableHead("Name")
+                            TableHead("Description")
+                            TableHead("Score", css_class="w-20")
                             TableHead("", css_class="w-12")
                     with TableBody():
                         with ForEach(STATE.search.results) as item:
@@ -1809,10 +1847,9 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                 with TableCell():
                                     with If("{{ selectedSourceIds.includes(_loop_1.source_id) }}"):
                                         Button(
-                                            "",
-                                            icon="check-square",
+                                            "[x]",
                                             variant="default",
-                                            size="icon-sm",
+                                            size="sm",
                                             onClick=visible_tool_call(
                                                 arguments={
                                                     "action": "toggle_selection",
@@ -1825,10 +1862,9 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                         )
                                     with If("{{ !selectedSourceIds.includes(_loop_1.source_id) }}"):
                                         Button(
-                                            "",
-                                            icon="square",
+                                            "[ ]",
                                             variant="outline",
-                                            size="icon-sm",
+                                            size="sm",
                                             onClick=visible_tool_call(
                                                 arguments={
                                                     "action": "toggle_selection",
@@ -1840,21 +1876,16 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                             ),
                                         )
                                 with TableCell():
-                                    with Column(gap=1):
-                                        Text(item.title, bold=True)
-                                        Small(item.original_filename)
-                                        Muted(item.summary)
+                                    Text(item.title, bold=True, css_class="max-w-72 truncate")
                                 with TableCell():
-                                    with Row(gap=1, align="center"):
-                                        Badge(item.relevance_label, variant="secondary")
-                                        Badge(item.relevance_score, variant="outline")
-                                TableCell(item.match_title)
+                                    Muted(item.summary, css_class="max-w-xl truncate")
+                                with TableCell():
+                                    Badge(item.relevance_score, variant="outline")
                                 with TableCell():
                                     Button(
-                                        "",
-                                        icon="x",
+                                        "X",
                                         variant="destructive",
-                                        size="icon-sm",
+                                        size="sm",
                                         onClick=visible_tool_call(
                                             arguments={
                                                 "action": "dismiss",
