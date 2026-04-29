@@ -1690,7 +1690,7 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
         update={
             "app_base_url": "https://vectorstore.example.com",
             "mcp_authorization_servers": ["https://auth.example.com"],
-            "mcp_required_scopes": ["openid", "profile"],
+            "mcp_required_scopes": ["email", "profile"],
         }
     )
     app = create_fastapi_app(settings)
@@ -1701,10 +1701,27 @@ async def test_mcp_protected_resource_metadata_is_json_when_configured(
 
     assert response.status_code == 200
     assert response.headers["content-type"].startswith("application/json")
-    assert response.json() == {
-        "resource": "https://vectorstore.example.com/mcp",
+    metadata = response.json()
+    assert metadata == {
+        "resource": "https://vectorstore.example.com",
         "authorization_servers": ["https://auth.example.com"],
-        "scopes_supported": ["openid", "profile"],
+        "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
+        "token_introspection_endpoint": "https://auth.example.com/oauth/token",
+        "token_introspection_endpoint_auth_methods_supported": [
+            "client_secret_post",
+            "client_secret_basic",
+        ],
+        "jwks_uri": "https://auth.example.com/.well-known/jwks.json",
+        "authorization_data_types_supported": ["oauth_scope"],
+        "authorization_data_locations_supported": ["header", "body"],
+        "key_challenges_supported": [
+            {
+                "challenge_type": "urn:ietf:params:oauth:pkce:code_challenge",
+                "challenge_algs": ["S256"],
+            }
+        ],
+        "service_documentation": "https://clerk.com/docs",
+        "scopes_supported": ["email", "profile"],
         "resource_name": settings.app_name,
     }
 

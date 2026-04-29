@@ -50,7 +50,7 @@ class AppSettings(BaseSettings):
     clerk_credit_floor_metadata_key: str = "credit_floor_usd"
     clerk_clock_skew_ms: int = 5_000
     clerk_authorized_parties: Annotated[list[str], NoDecode] = Field(default_factory=list)
-    mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["openid", "email", "profile"])
+    mcp_required_scopes: Annotated[list[str], NoDecode] = Field(default_factory=lambda: ["email", "profile"])
     mcp_authorization_servers: Annotated[list[str], NoDecode] = Field(default_factory=list)
 
     storage_backend: Literal["local", "s3"] = "local"

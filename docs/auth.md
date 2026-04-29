@@ -48,7 +48,7 @@ The default public implementation uses the in-repo auth and billing services. A 
 FastMCP uses `VectorstoreTokenVerifier`.
 
 - The verifier delegates bearer-token validation to the same app `AuthService` used by REST.
-- Required scopes default to `openid,email,profile` through `MCP_REQUIRED_SCOPES`.
+- Required scopes default to `email,profile` through `MCP_REQUIRED_SCOPES`, matching Clerk's MCP helper examples.
 - `MCP_AUTHORIZATION_SERVERS` publishes the OAuth protected-resource metadata
   authorization server list for ChatGPT/OpenAI MCP clients. Leave it empty until
   an OAuth provider or auth proxy can issue MCP audience-bound tokens.

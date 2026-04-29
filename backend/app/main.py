@@ -204,9 +204,26 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="MCP auth is disabled.")
         if not resolved_settings.mcp_authorization_servers:
             raise HTTPException(status_code=status.HTTP_501_NOT_IMPLEMENTED, detail="MCP OAuth is not configured.")
+        authorization_server = resolved_settings.mcp_authorization_servers[0].rstrip("/")
         return {
-            "resource": f"{resolved_settings.normalized_app_base_url}/mcp",
+            "resource": resolved_settings.normalized_app_base_url,
             "authorization_servers": resolved_settings.mcp_authorization_servers,
+            "token_types_supported": ["urn:ietf:params:oauth:token-type:access_token"],
+            "token_introspection_endpoint": f"{authorization_server}/oauth/token",
+            "token_introspection_endpoint_auth_methods_supported": [
+                "client_secret_post",
+                "client_secret_basic",
+            ],
+            "jwks_uri": f"{authorization_server}/.well-known/jwks.json",
+            "authorization_data_types_supported": ["oauth_scope"],
+            "authorization_data_locations_supported": ["header", "body"],
+            "key_challenges_supported": [
+                {
+                    "challenge_type": "urn:ietf:params:oauth:pkce:code_challenge",
+                    "challenge_algs": ["S256"],
+                }
+            ],
+            "service_documentation": "https://clerk.com/docs",
             "scopes_supported": resolved_settings.mcp_required_scopes,
             "resource_name": resolved_settings.app_name,
         }
