@@ -1949,10 +1949,12 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
         assert '"action": "search"' in serialized
         assert "run_file_search_for_ui" not in serialized
         assert '"type": "Table"' in serialized
-        assert "selection_action" in serialized
+        assert "Score" in serialized
+        assert "Match" in serialized
         assert "selectedFiles" in serialized
-        assert "Rank" in serialized
-        assert "Summary" in serialized
+        assert "selection_action" not in serialized
+        assert "Rank" not in serialized
+        assert "Summary" not in serialized
         assert "Description" not in serialized
         assert '"label": "[x]"' not in serialized
         assert '"label": "[ ]"' not in serialized
@@ -1992,68 +1994,71 @@ async def test_mcp_sources_ui_search_respects_search_request_limit(
 
     assert result.structured_content is not None
     assert captured_max_results == [24]
-    assert result.structured_content["message"] == "Found 0 files."
+    assert result.structured_content["message"] == "No matching files."
 
 
 @pytest.mark.asyncio
-async def test_mcp_sources_ui_selection_persists_file_snapshots_and_caps_at_ten(
+async def test_mcp_sources_ui_search_keeps_top_ten_by_score(
     configured_settings: AppSettings,
     fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     del fake_openai
-    item = {
-        "source_id": "src_1",
-        "title": "Source One",
-        "summary": "Useful source summary.",
-        "relevance_score": 0.8,
-        "rank": 1,
-    }
     selected_files = [
         {
             "source_id": f"src_{index}",
             "title": f"Source {index}",
             "summary": "Already selected.",
-            "relevance_score": 0.5,
+            "preview": "Already selected.",
+            "relevance_score": index / 10,
         }
-        for index in range(2, 12)
+        for index in range(1, 11)
     ]
+
+    async def fake_search(*, clerk_user_id: str, request: Any, origin_surface: str) -> SimpleNamespace:
+        assert clerk_user_id == "local-dev"
+        assert origin_surface == "mcp_app"
+        assert request.max_results == 24
+        return SimpleNamespace(
+            query=request.query,
+            hits=[
+                SimpleNamespace(
+                    chunk_id="chunk_high",
+                    source_file_id="src_high",
+                    source_title="High Score Source",
+                    original_filename="high-score.pdf",
+                    score=0.95,
+                    title="Matched section",
+                    summary="OpenAI vector-store match from the indexed source file.",
+                    text="A useful matched snippet that explains why this file belongs in the kept set.",
+                    tags=[],
+                )
+            ],
+        )
+
     services = create_services(configured_settings)
+    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr(services.sources, "search", fake_search)
     server = create_mcp_server(configured_settings, services)
     try:
-        selected_result = await server.call_tool(
+        result = await server.call_tool(
             "open_file_search_ui",
             {
-                "action": "toggle_selection",
-                "file_item": item,
-                "current_results": [item],
-                "selected_files": [],
+                "action": "search",
                 "query": "fine tuning",
-                "iteration": 1,
-            },
-            run_middleware=False,
-        )
-        capped_result = await server.call_tool(
-            "open_file_search_ui",
-            {
-                "action": "toggle_selection",
-                "file_item": item,
-                "current_results": [item],
                 "selected_files": selected_files,
-                "query": "fine tuning",
-                "iteration": 1,
             },
             run_middleware=False,
         )
     finally:
         await services.close()
 
-    assert selected_result.structured_content is not None
-    assert selected_result.structured_content["selected_source_ids"] == ["src_1"]
-    assert selected_result.structured_content["selected_files"][0]["title"] == "Source One"
-    assert selected_result.structured_content["search"]["results"][0]["selection_action"] == "Uncheck"
-    assert capped_result.structured_content is not None
-    assert capped_result.structured_content["selected_count"] == 10
-    assert capped_result.structured_content["message"] == "Selection limit is 10 files."
+    assert result.structured_content is not None
+    source_ids = result.structured_content["selected_source_ids"]
+    assert len(source_ids) == 10
+    assert source_ids[:2] == ["src_10", "src_high"]
+    assert "src_1" not in source_ids
+    assert result.structured_content["results"][1]["preview"].startswith("Matched section:")
 
 
 @pytest.mark.asyncio
