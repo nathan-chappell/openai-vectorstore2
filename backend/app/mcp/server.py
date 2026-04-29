@@ -1737,38 +1737,51 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 "message": "No files selected.",
             }
         selected_source_ids = [item["source_id"] for item in selected]
-        selected_lines = [
-            f"- {item['title']} (`{item['source_id']}`): {item.get('preview') or item['summary']}"
-            for item in selected
-        ]
-        retrieval_payload = {
-            "instruction": "Retrieve the full contents for the files the user selected in the file search widget.",
-            "source_ids": selected_source_ids,
-            "include_file_contents": True,
-            "max_results": max(len(selected_source_ids), 1),
+        download_links: list[dict[str, object]] = []
+        clerk_user_id = current_mcp_clerk_user_id()
+        for item in selected:
+            detail = await services.sources.get_source(clerk_user_id=clerk_user_id, source_id=item["source_id"])
+            download_links.append(
+                {
+                    "source_id": detail.id,
+                    "title": detail.display_title,
+                    "original_filename": detail.original_filename,
+                    "media_type": detail.media_type,
+                    "byte_size": detail.byte_size,
+                    "download_url": detail.download_url,
+                    "expires_in_seconds": detail.download_url_expires_in_seconds,
+                }
+            )
+        selected_lines = [_download_link_context_line(item) for item in download_links]
+        qa_payload = {
+            "instruction": "Answer using only the files selected in the file search widget.",
+            "selected_source_ids": selected_source_ids,
+            "max_results": min(max(len(selected_source_ids), 1), 16),
         }
         model_context = "\n".join(
             [
-                "The user confirmed these selected library files in the file search widget:",
+                "The user confirmed these library files in the file search widget.",
+                "Use these temporary download links when the actual source files are needed; do not request full file bytes through chat.",
                 *selected_lines,
                 "",
                 f"Selected source IDs: {', '.join(selected_source_ids)}",
-                "Immediately call the MCP tool `library_search` with this JSON payload to retrieve the selected file contents:",
-                json.dumps(retrieval_payload, sort_keys=True),
+                "For RAG or QA over these files, call the MCP tool `answer_from_library` with this JSON payload:",
+                json.dumps(qa_payload, sort_keys=True),
             ]
         )
         follow_up_prompt = (
-            "Please retrieve the full contents for my selected library files now. "
-            f"Call `library_search` with: {json.dumps(retrieval_payload, sort_keys=True)}"
+            "Use the selected file download links now. For QA over them, call "
+            f"`answer_from_library` with: {json.dumps(qa_payload, sort_keys=True)}"
         )
         return {
             "selected_files": selected,
             "selected_source_ids": selected_source_ids,
-            "retrieval_tool": "library_search",
-            "retrieval_payload": retrieval_payload,
+            "download_links": download_links,
+            "qa_tool": "answer_from_library",
+            "qa_payload": qa_payload,
             "model_context": model_context,
             "follow_up_prompt": follow_up_prompt,
-            "message": f"Confirmed {len(selected)} selected file{'s' if len(selected) != 1 else ''}.",
+            "message": f"Prepared {len(download_links)} download link{'s' if len(download_links) != 1 else ''}.",
         }
 
     def visible_tool_call(
@@ -2077,6 +2090,20 @@ def _file_search_status_message(*, total: int, added: int) -> str:
     if total <= 0:
         return "No matching files."
     return f"Keeping top {total} file{'s' if total != 1 else ''}. Added {added}."
+
+
+def _download_link_context_line(item: dict[str, object]) -> str:
+    title = str(item.get("title") or item.get("source_id") or "").strip()
+    source_id = str(item.get("source_id") or "").strip()
+    filename = str(item.get("original_filename") or "").strip()
+    media_type = str(item.get("media_type") or "application/octet-stream").strip()
+    byte_size = item.get("byte_size")
+    expires = item.get("expires_in_seconds")
+    download_url = item.get("download_url")
+    size_part = f"{byte_size} bytes" if isinstance(byte_size, int) else "size unknown"
+    expiry_part = f"expires in {expires}s" if isinstance(expires, int) else "expiry unknown"
+    url_text = str(download_url) if download_url else "download URL unavailable"
+    return f"- {title} (`{source_id}`), {filename}, {media_type}, {size_part}, {expiry_part}: {url_text}"
 
 
 def _file_search_reference_context(items: list[dict[str, Any]]) -> str:

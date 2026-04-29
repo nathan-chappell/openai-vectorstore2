@@ -2062,6 +2062,61 @@ async def test_mcp_sources_ui_search_keeps_top_ten_by_score(
 
 
 @pytest.mark.asyncio
+async def test_mcp_sources_ui_confirm_returns_download_links_not_file_bytes(
+    configured_settings: AppSettings,
+    fake_openai: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_openai
+
+    async def fake_get_source(*, clerk_user_id: str, source_id: str) -> SimpleNamespace:
+        assert clerk_user_id == "local-dev"
+        assert source_id == "src_1"
+        return SimpleNamespace(
+            id="src_1",
+            display_title="Source One",
+            original_filename="source-one.pdf",
+            media_type="application/pdf",
+            byte_size=12345,
+            download_url="https://example.com/download/source-one.pdf?token=abc",
+            download_url_expires_in_seconds=900,
+        )
+
+    services = create_services(configured_settings)
+    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr(services.sources, "get_source", fake_get_source)
+    server = create_mcp_server(configured_settings, services)
+    try:
+        result = await server.call_tool(
+            "open_file_search_ui",
+            {
+                "action": "confirm",
+                "selected_files": [
+                    {
+                        "source_id": "src_1",
+                        "title": "Source One",
+                        "summary": "Source preview.",
+                        "preview": "Source preview.",
+                        "relevance_score": 0.91,
+                    }
+                ],
+            },
+            run_middleware=False,
+        )
+    finally:
+        await services.close()
+
+    assert result.structured_content is not None
+    assert result.structured_content["download_links"][0]["download_url"] == (
+        "https://example.com/download/source-one.pdf?token=abc"
+    )
+    assert result.structured_content["qa_tool"] == "answer_from_library"
+    assert result.structured_content["qa_payload"]["selected_source_ids"] == ["src_1"]
+    assert "include_file_contents" not in result.structured_content["model_context"]
+    assert "download/source-one.pdf" in result.structured_content["model_context"]
+
+
+@pytest.mark.asyncio
 async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
     configured_settings: AppSettings,
     fake_openai: None,
