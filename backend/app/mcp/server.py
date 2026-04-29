@@ -126,6 +126,12 @@ class VisibleToolCall(Action):
     tool: str
     arguments: dict[str, Any] = Field(default_factory=dict)
 
+
+class OpenLink(Action):
+    action: Literal["openLink"] = "openLink"
+    url: Any
+
+
 TEXT_RESOURCE_MEDIA_TYPES = {
     "application/javascript",
     "application/json",
@@ -1769,9 +1775,15 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 json.dumps(qa_payload, sort_keys=True),
             ]
         )
-        follow_up_prompt = (
-            "Use the selected file download links now. For QA over them, call "
-            f"`answer_from_library` with: {json.dumps(qa_payload, sort_keys=True)}"
+        follow_up_prompt = "\n".join(
+            [
+                "Use these selected vstore files now.",
+                "Temporary download links:",
+                *selected_lines,
+                "",
+                "For QA over them, call `answer_from_library` with this JSON payload:",
+                json.dumps(qa_payload, sort_keys=True),
+            ]
         )
         return {
             "selected_files": selected,
@@ -1898,6 +1910,27 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                     )
             with If(STATE.selection):
                 Small(STATE.selection.message)
+                with If(STATE.selection.download_links):
+                    with Table():
+                        with TableHeader():
+                            with TableRow():
+                                TableHead("File")
+                                TableHead("Link", css_class="w-20")
+                        with TableBody():
+                            with ForEach(STATE.selection.download_links) as link:
+                                with TableRow():
+                                    with TableCell():
+                                        Text(link.title, bold=True, css_class="max-w-md truncate")
+                                        Small(link.original_filename, css_class="max-w-md truncate")
+                                        Small(link.download_url, css_class="max-w-xl truncate")
+                                    with TableCell():
+                                        Button(
+                                            "Open",
+                                            variant="outline",
+                                            size="sm",
+                                            onClick=OpenLink(url=link.download_url),
+                                        )
+                    Small("The widget also asked ChatGPT to use these links and the answer_from_library tool.")
         return PrefabApp(
             title="File Search",
             view=view,
@@ -1986,6 +2019,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             ui_meta["visibility"] = ["model", "app"]
             meta["ui"] = ui_meta
             meta["openai/widgetAccessible"] = True
+            meta["openai/toolInvocation/invoking"] = "Opening file search"
+            meta["openai/toolInvocation/invoked"] = "File search ready"
             component.meta = meta
             break
 

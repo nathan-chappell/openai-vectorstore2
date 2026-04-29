@@ -1622,6 +1622,8 @@ async def test_mcp_server_exposes_app_first_tools(
     assert tools["open_file_search_ui"].meta["ui"]["resourceUri"].endswith("/renderer.html")
     assert tools["open_file_search_ui"].meta["ui"]["visibility"] == ["model", "app"]
     assert tools["open_file_search_ui"].meta["openai/widgetAccessible"] is True
+    assert tools["open_file_search_ui"].meta["openai/toolInvocation/invoking"] == "Opening file search"
+    assert tools["open_file_search_ui"].meta["openai/toolInvocation/invoked"] == "File search ready"
     assert tools["open_file_search_ui"].meta["fastmcp"]["app"] == "Indexed Files"
     assert tools["open_file_search_ui"].title == "Open File Search UI"
     assert "sources" not in tools
@@ -1951,6 +1953,7 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
         assert '"type": "Table"' in serialized
         assert "Score" in serialized
         assert "Match" in serialized
+        assert '"action": "openLink"' in serialized
         assert "selectedFiles" in serialized
         assert "selection_action" not in serialized
         assert "Rank" not in serialized
@@ -2114,6 +2117,7 @@ async def test_mcp_sources_ui_confirm_returns_download_links_not_file_bytes(
     assert result.structured_content["qa_payload"]["selected_source_ids"] == ["src_1"]
     assert "include_file_contents" not in result.structured_content["model_context"]
     assert "download/source-one.pdf" in result.structured_content["model_context"]
+    assert "download/source-one.pdf" in result.structured_content["follow_up_prompt"]
 
 
 @pytest.mark.asyncio
