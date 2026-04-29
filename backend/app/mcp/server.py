@@ -206,7 +206,9 @@ def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any
         instructions=(
             "You are the MCP adapter for Vector Library Search. "
             "Use open_file_search_ui to open the interactive file search UI. "
-            "Use library_search, research_library, answer_from_library, and manage_library for all non-UI work."
+            "Use library_search, research_library, answer_from_library, and manage_library for all non-UI work. "
+            "When the user asks to download, open, read, or inspect original selected files, call library_search with "
+            "include_file_contents=true and the selected source_ids; it returns MCP embedded file resources."
         ),
         auth=auth,
         lifespan=server_lifespan,
@@ -225,7 +227,8 @@ def _register_agent_facade_tools(*, server: FastMCP, services: AppServices) -> N
         name="library_search",
         description=(
             "Subagent facade for library search, browsing, source inspection, vector search, branch search, and file "
-            "content retrieval. Set include_file_contents=true when selected source payloads are needed."
+            "content retrieval. Set include_file_contents=true with source_ids when selected original file payloads "
+            "are needed; the result returns MCP embedded resources for text and binary files."
         ),
         annotations=read_only,
     )
@@ -239,6 +242,24 @@ def _register_agent_facade_tools(*, server: FastMCP, services: AppServices) -> N
         include_file_contents: bool = False,
     ) -> ToolResult:
         clerk_user_id = current_mcp_clerk_user_id()
+        if include_file_contents and source_ids:
+            return await _run_logged_tool(
+                tool_name="library_search",
+                clerk_user_id=clerk_user_id,
+                arguments={
+                    "instruction": instruction,
+                    "source_ids": source_ids,
+                    "include_file_contents": include_file_contents,
+                },
+                operation=_retrieve_files_result(
+                    services=services,
+                    clerk_user_id=clerk_user_id,
+                    source_ids=source_ids,
+                    include_extracted_text=True,
+                    max_bytes_per_file=DEFAULT_RETRIEVE_MAX_BYTES_PER_FILE,
+                    max_extracted_chars_per_file=DEFAULT_RETRIEVE_MAX_EXTRACTED_CHARS_PER_FILE,
+                ),
+            )
         payload = McpFacadeInput(
             instruction=instruction,
             query=query,
@@ -1527,6 +1548,8 @@ async def _retrieve_files_result(
                 "media_type": detail.media_type,
                 "source_kind": detail.source_kind,
                 "byte_size": detail.byte_size,
+                "download_url": detail.download_url,
+                "download_url_expires_in_seconds": detail.download_url_expires_in_seconds,
                 "returned_bytes": len(returned_payload),
                 "original_truncated": original_truncated,
                 "content_kind": content_kind,
@@ -1540,7 +1563,8 @@ async def _retrieve_files_result(
     summary_text = (
         "Retrieved "
         f"{len(files)} file{'s' if len(files) != 1 else ''} through MCP embedded resources. "
-        "Use the returned resource content blocks for the file payloads; do not fetch app storage URLs."
+        "Use the returned resource content blocks for host/model file payloads, but do not paste raw file contents "
+        "into chat. Provide summaries, citations, or the temporary download URLs instead."
     )
     content_blocks.insert(0, TextContent(type="text", text=summary_text))
     return ToolResult(content=content_blocks, structured_content={"files": files})
@@ -1759,6 +1783,12 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 }
             )
         selected_lines = [_download_link_context_line(item) for item in download_links]
+        retrieval_payload = {
+            "instruction": "Retrieve the selected original file payloads as MCP embedded resources.",
+            "source_ids": selected_source_ids,
+            "include_file_contents": True,
+            "max_results": min(max(len(selected_source_ids), 1), 24),
+        }
         qa_payload = {
             "instruction": "Answer using only the files selected in the file search widget.",
             "selected_source_ids": selected_source_ids,
@@ -1771,6 +1801,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 *selected_lines,
                 "",
                 f"Selected source IDs: {', '.join(selected_source_ids)}",
+                "Do not paste file contents into chat. If the host/model explicitly needs original file payloads, call `library_search` with this JSON payload so the files are returned as MCP resources:",
+                json.dumps(retrieval_payload, sort_keys=True),
                 "For RAG or QA over these files, call the MCP tool `answer_from_library` with this JSON payload:",
                 json.dumps(qa_payload, sort_keys=True),
             ]
@@ -1781,6 +1813,9 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 "Temporary download links:",
                 *selected_lines,
                 "",
+                "Do not paste file contents into chat. If the user asked to download the files, give them the temporary links above. If the host/model explicitly needs original payloads, call `library_search` with:",
+                json.dumps(retrieval_payload, sort_keys=True),
+                "",
                 "For QA over them, call `answer_from_library` with this JSON payload:",
                 json.dumps(qa_payload, sort_keys=True),
             ]
@@ -1789,6 +1824,8 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             "selected_files": selected,
             "selected_source_ids": selected_source_ids,
             "download_links": download_links,
+            "retrieval_tool": "library_search",
+            "retrieval_payload": retrieval_payload,
             "qa_tool": "answer_from_library",
             "qa_payload": qa_payload,
             "model_context": model_context,
@@ -1930,7 +1967,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                             size="sm",
                                             onClick=OpenLink(url=link.download_url),
                                         )
-                    Small("The widget also asked ChatGPT to use these links and the answer_from_library tool.")
+                    Small("The widget also asked ChatGPT to call library_search for MCP file resources when file payloads are needed.")
         return PrefabApp(
             title="File Search",
             view=view,

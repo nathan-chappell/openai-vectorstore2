@@ -21,6 +21,7 @@ from chatkit.types import (
     UserMessageTextContent,
 )
 import httpx
+from mcp.types import TextContent
 import pytest
 from sqlalchemy import select
 
@@ -2115,7 +2116,10 @@ async def test_mcp_sources_ui_confirm_returns_download_links_not_file_bytes(
     )
     assert result.structured_content["qa_tool"] == "answer_from_library"
     assert result.structured_content["qa_payload"]["selected_source_ids"] == ["src_1"]
-    assert "include_file_contents" not in result.structured_content["model_context"]
+    assert result.structured_content["retrieval_tool"] == "library_search"
+    assert result.structured_content["retrieval_payload"]["include_file_contents"] is True
+    assert result.structured_content["retrieval_payload"]["source_ids"] == ["src_1"]
+    assert "Do not paste file contents into chat" in result.structured_content["model_context"]
     assert "download/source-one.pdf" in result.structured_content["model_context"]
     assert "download/source-one.pdf" in result.structured_content["follow_up_prompt"]
 
@@ -2157,6 +2161,59 @@ async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
         {"operation": "fake_library_search", "summary": {"ok": True}}
     ]
     assert getattr(result.content[0], "text", None) == "Fake library-search facade result."
+
+
+@pytest.mark.asyncio
+async def test_mcp_library_search_retrieves_files_as_resources_not_chat_text(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    file_payload = b"Library search retrieval should be an MCP resource, not chat text."
+    source_id = ""
+    try:
+        ingest = await services.sources.ingest_source(
+            clerk_user_id="local-dev",
+            filename="library-search-retrieval.txt",
+            declared_media_type="text/plain",
+            payload=file_payload,
+            tag_ids=[],
+            user_guidance=None,
+            origin_surface="mcp",
+        )
+        assert ingest.task is not None
+        source_id = ingest.source.id
+        await _wait_for_service_task(
+            services,
+            task_id=ingest.task.id,
+            expected_status="completed",
+        )
+        result = await create_mcp_server(configured_settings, services).call_tool(
+            "library_search",
+            {
+                "instruction": "Retrieve the selected source as an MCP resource.",
+                "source_ids": [source_id],
+                "include_file_contents": True,
+            },
+            run_middleware=False,
+        )
+    finally:
+        await services.close()
+
+    assert result.structured_content is not None
+    [file_metadata] = result.structured_content["files"]
+    assert file_metadata["source_id"] == source_id
+    assert file_metadata["download_url"] is not None
+    assert result.content
+    text_blocks = [
+        block.text
+        for block in result.content
+        if isinstance(block, TextContent)
+    ]
+    assert all(file_payload.decode("utf-8") not in text for text in text_blocks)
+    original_resource = next(item for item in result.content if getattr(item, "type", None) == "resource")
+    assert getattr(cast(Any, original_resource).resource, "text") == file_payload.decode("utf-8")
 
 
 @pytest.mark.asyncio
