@@ -8,6 +8,7 @@ import json
 import logging
 from time import perf_counter
 from typing import Annotated, Any, Literal, cast
+from urllib.parse import quote
 
 from fastmcp import FastMCP, FastMCPApp
 from fastmcp.server.context import Context
@@ -1494,7 +1495,14 @@ async def _retrieve_files_result(
         )
         returned_payload = payload[:max_bytes_per_file]
         original_truncated = len(payload) > len(returned_payload)
-        resource_uri = f"vectorstore://sources/{detail.id}/original"
+        resource_filename = detail.original_filename or detail.display_title or f"{detail.id}.bin"
+        resource_uri = f"vectorstore://sources/{detail.id}/files/{quote(resource_filename, safe='')}"
+        resource_meta = {
+            "name": resource_filename,
+            "filename": resource_filename,
+            "title": detail.display_title,
+            "source_id": detail.id,
+        }
         content_kind: Literal["text", "blob"]
         if _is_text_resource(detail=detail):
             content_kind = "text"
@@ -1504,6 +1512,7 @@ async def _retrieve_files_result(
                     resource=TextResourceContents(
                         uri=cast(Any, resource_uri),
                         mimeType=detail.media_type,
+                        _meta=resource_meta,
                         text=returned_payload.decode("utf-8", errors="replace"),
                     ),
                 )
@@ -1516,6 +1525,7 @@ async def _retrieve_files_result(
                     resource=BlobResourceContents(
                         uri=cast(Any, resource_uri),
                         mimeType=detail.media_type,
+                        _meta=resource_meta,
                         blob=b64encode(returned_payload).decode("ascii"),
                     ),
                 )
@@ -1529,12 +1539,23 @@ async def _retrieve_files_result(
                 clipped_extracted_text = extracted_text[:max_extracted_chars_per_file]
                 extracted_text_included = True
                 extracted_text_truncated = len(extracted_text) > len(clipped_extracted_text)
+                extracted_text_filename = f"{resource_filename}.extracted.md"
                 content_blocks.append(
                     EmbeddedResource(
                         type="resource",
                         resource=TextResourceContents(
-                            uri=cast(Any, f"vectorstore://sources/{detail.id}/extracted-text"),
+                            uri=cast(
+                                Any,
+                                f"vectorstore://sources/{detail.id}/extracted-text/"
+                                f"{quote(extracted_text_filename, safe='')}",
+                            ),
                             mimeType="text/markdown",
+                            _meta={
+                                "name": extracted_text_filename,
+                                "filename": extracted_text_filename,
+                                "title": f"{detail.display_title} extracted text",
+                                "source_id": detail.id,
+                            },
                             text=clipped_extracted_text,
                         ),
                     )

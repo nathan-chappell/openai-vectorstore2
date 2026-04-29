@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openai-vectorstore2"
-version = "1.2.0"
+version = "1.2.1"
 description = "App-first OpenAI vector-store backed semantic RAG workspace with ChatKit and MCP adapters."
 readme = "README.md"
 requires-python = ">=3.14"

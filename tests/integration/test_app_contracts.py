@@ -2234,7 +2234,10 @@ async def test_mcp_library_search_retrieves_files_as_resources_not_chat_text(
     ]
     assert all(file_payload.decode("utf-8") not in text for text in text_blocks)
     original_resource = next(item for item in result.content if getattr(item, "type", None) == "resource")
-    assert getattr(cast(Any, original_resource).resource, "text") == file_payload.decode("utf-8")
+    resource = cast(Any, original_resource).resource
+    assert resource.text == file_payload.decode("utf-8")
+    assert str(resource.uri).endswith("/library-search-retrieval.txt")
+    assert resource.meta["filename"] == "library-search-retrieval.txt"
 
 
 @pytest.mark.asyncio
@@ -2355,9 +2358,13 @@ async def test_mcp_retrieve_files_returns_embedded_file_resources(
     assert file_metadata["source_id"] == source_id
     assert file_metadata["content_kind"] == "text"
     assert file_metadata["original_truncated"] is False
+    assert str(file_metadata["resource_uri"]).endswith("/retrievable-note.txt")
     assert len(retrieved.content) >= 2
     original_resource = next(item for item in retrieved.content if getattr(item, "type", None) == "resource")
-    assert getattr(cast(Any, original_resource).resource, "text") == file_payload.decode("utf-8")
+    resource = cast(Any, original_resource).resource
+    assert resource.text == file_payload.decode("utf-8")
+    assert str(resource.uri).endswith("/retrievable-note.txt")
+    assert resource.meta["filename"] == "retrievable-note.txt"
 
 
 @pytest.mark.asyncio

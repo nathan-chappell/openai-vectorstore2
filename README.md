@@ -139,6 +139,45 @@ When testing from ChatGPT's browser client, include ChatGPT origins in
 CORS_ORIGINS=https://your-service.example,https://chatgpt.com,https://chat.openai.com
 ```
 
+ChatGPT's hosted Apps runtime also has file-specific behavior. The Apps SDK
+documents file input metadata through
+[`_meta["openai/fileParams"]`](https://developers.openai.com/apps-sdk/reference#_meta-fields-on-tool-descriptor)
+and widget file APIs such as
+[`window.openai.getFileDownloadUrl`](https://developers.openai.com/apps-sdk/reference#capabilities).
+For this app, selected library files are handed to ChatGPT as temporary download
+links and, when the model explicitly needs file payloads, MCP embedded resources.
+The assistant instructions and tool results intentionally keep raw file contents
+out of ordinary chat text.
+
+## ChatGPT MCP user story
+
+This flow was captured from ChatGPT Developer Mode against the live MCP server.
+It demonstrates a hosted ChatGPT conversation opening a FastMCP Prefab UI,
+searching the indexed vector library, materializing selected files with user
+permission, and producing a grounded report from those files.
+
+1. The user asks ChatGPT to open the Vector Library Search MCP app. ChatGPT calls
+   `open_file_search_ui` and mounts the hosted app surface inside the
+   conversation.
+
+   ![ChatGPT opening the Vector Library Search MCP UI](docs/mcp-user-story-images/chatgpt-opening-ui.png)
+
+2. The File Search UI loads from the live MCP server and is ready to search the
+   indexed library without leaving ChatGPT.
+
+   ![The File Search UI loaded inside ChatGPT](docs/mcp-user-story-images/chatgpt-ui-open.png)
+
+3. The user searches the library, keeps the relevant files, and grants
+   ChatGPT's file-materialization permission. The selected MCP file resources
+   become available to the conversation, and ChatGPT uses the materialized files
+   plus library tools to draft a concise research note.
+
+   ![A grounded research report generated from materialized MCP files](docs/mcp-user-story-images/chatgpt-research-report.png)
+
+Current POC caveat: ChatGPT may display materialized file labels based on MCP
+resource URIs. The app now emits resource URIs ending in the original filename
+instead of a generic `original` suffix so the host has a useful label to show.
+
 ## Test commands
 
 ```bash
@@ -156,8 +195,7 @@ Playwright uses live OpenAI and S3-compatible storage from `.env`, while Clerk i
 
 - Finish and document the private on-prem companion path in `vendor/openai-vectorstore2-on-prem`, including OpenAI-compatible local model serving, deployment notes, and the boundary between the base app and on-prem runtime
 - Continue visual and interaction design work across Explorer, Library, Results, admin billing, previews, and mobile layouts
-- Test the deployed MCP server from ChatGPT with a real user account, including tool discovery, authenticated calls, source previews, research actions, and MCP Apps UI rendering
-- Add screenshots or a short walkthrough showing Explorer, Library search, ChatKit grounded answers, saved report artifacts, and MCP usage
+- Expand the ChatGPT MCP walkthrough as the hosted Apps UI evolves from the POC file-search flow into the fuller explorer experience
 - Expand browser coverage for realistic deployed flows, including Clerk auth, ChatKit citations, file reveal, research-library creation, and report persistence
 
 ## More docs
