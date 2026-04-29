@@ -24,12 +24,6 @@ from prefab_ui.components import (
     STATE,
     Badge,
     Button,
-    Card,
-    CardContent,
-    CardDescription,
-    CardHeader,
-    CardTitle,
-    Checkbox,
     Column,
     ForEach,
     Form,
@@ -103,12 +97,6 @@ from backend.app.services.reports import save_report_markdown_source
 Badge: Any = Badge
 Button: Any = Button
 SendMessage: Any = SendMessage
-Card: Any = Card
-CardContent: Any = CardContent
-CardDescription: Any = CardDescription
-CardHeader: Any = CardHeader
-CardTitle: Any = CardTitle
-Checkbox: Any = Checkbox
 Column: Any = Column
 ForEach: Any = ForEach
 Form: Any = Form
@@ -1819,18 +1807,38 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                         with ForEach(STATE.search.results) as item:
                             with TableRow():
                                 with TableCell():
-                                    Checkbox(
-                                        value="{{ selectedSourceIds.includes(_loop_1.source_id) }}",
-                                        onChange=visible_tool_call(
-                                            arguments={
-                                                "action": "toggle_selection",
-                                                "source_id": item.source_id,
-                                                "selected_source_ids": STATE.selectedSourceIds,
-                                            },
-                                            on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
-                                            on_error=ShowToast(f"{ERROR}", variant="error"),
-                                        ),
-                                    )
+                                    with If("{{ selectedSourceIds.includes(_loop_1.source_id) }}"):
+                                        Button(
+                                            "",
+                                            icon="check-square",
+                                            variant="default",
+                                            size="icon-sm",
+                                            onClick=visible_tool_call(
+                                                arguments={
+                                                    "action": "toggle_selection",
+                                                    "source_id": item.source_id,
+                                                    "selected_source_ids": STATE.selectedSourceIds,
+                                                },
+                                                on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
+                                                on_error=ShowToast(f"{ERROR}", variant="error"),
+                                            ),
+                                        )
+                                    with If("{{ !selectedSourceIds.includes(_loop_1.source_id) }}"):
+                                        Button(
+                                            "",
+                                            icon="square",
+                                            variant="outline",
+                                            size="icon-sm",
+                                            onClick=visible_tool_call(
+                                                arguments={
+                                                    "action": "toggle_selection",
+                                                    "source_id": item.source_id,
+                                                    "selected_source_ids": STATE.selectedSourceIds,
+                                                },
+                                                on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
+                                                on_error=ShowToast(f"{ERROR}", variant="error"),
+                                            ),
+                                        )
                                 with TableCell():
                                     with Column(gap=1):
                                         Text(item.title, bold=True)

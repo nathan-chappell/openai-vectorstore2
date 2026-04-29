@@ -1949,7 +1949,9 @@ async def test_mcp_sources_ui_resource_renders_explorer_sections(
         assert '"action": "search"' in serialized
         assert "run_file_search_for_ui" not in serialized
         assert '"type": "Table"' in serialized
-        assert '"type": "Checkbox"' in serialized
+        assert '"icon": "check-square"' in serialized
+        assert '"icon": "square"' in serialized
+        assert '"type": "Checkbox"' not in serialized
         assert '"selectedSourceIds": []' in serialized
     finally:
         await services.close()
