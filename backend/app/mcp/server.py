@@ -14,7 +14,7 @@ from fastmcp.server.context import Context
 from fastmcp.tools import Tool, ToolResult
 from mcp.types import BlobResourceContents, EmbeddedResource, TextContent, TextResourceContents, ToolAnnotations
 from prefab_ui import PrefabApp
-from prefab_ui.actions import AppendState, SetState, ShowToast
+from prefab_ui.actions import SetState, ShowToast
 from prefab_ui.actions.base import Action
 from prefab_ui.actions.mcp import SendMessage, UpdateContext
 from prefab_ui.components import (
@@ -29,6 +29,7 @@ from prefab_ui.components import (
     CardDescription,
     CardHeader,
     CardTitle,
+    Checkbox,
     Column,
     ForEach,
     Form,
@@ -39,6 +40,12 @@ from prefab_ui.components import (
     Row,
     Separator,
     Small,
+    Table,
+    TableBody,
+    TableCell,
+    TableHead,
+    TableHeader,
+    TableRow,
     Text,
 )
 from pydantic import BaseModel, Field
@@ -93,7 +100,6 @@ from backend.app.schemas import (
 )
 from backend.app.services.reports import save_report_markdown_source
 
-AppendState: Any = AppendState
 Badge: Any = Badge
 Button: Any = Button
 SendMessage: Any = SendMessage
@@ -102,6 +108,7 @@ CardContent: Any = CardContent
 CardDescription: Any = CardDescription
 CardHeader: Any = CardHeader
 CardTitle: Any = CardTitle
+Checkbox: Any = Checkbox
 Column: Any = Column
 ForEach: Any = ForEach
 Form: Any = Form
@@ -114,6 +121,12 @@ Separator: Any = Separator
 SetState: Any = SetState
 ShowToast: Any = ShowToast
 Small: Any = Small
+Table: Any = Table
+TableBody: Any = TableBody
+TableCell: Any = TableCell
+TableHead: Any = TableHead
+TableHeader: Any = TableHeader
+TableRow: Any = TableRow
 Text: Any = Text
 UpdateContext: Any = UpdateContext
 
@@ -1593,17 +1606,13 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         query: str,
         current_results: list[dict[str, Any]] | None = None,
         dismissed_source_ids: list[str] | None = None,
-        selected_files: list[dict[str, Any]] | None = None,
+        selected_source_ids: list[str] | None = None,
         iteration: int = 1,
     ) -> dict[str, Any]:
         normalized_query = query.strip()
         current_items = list(current_results or [])
         dismissed_ids = {str(source_id) for source_id in dismissed_source_ids or [] if str(source_id).strip()}
-        selected_ids = {
-            str(item.get("source_id"))
-            for item in selected_files or []
-            if str(item.get("source_id") or "").strip()
-        }
+        selected_ids = {str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()}
         seen_ids = {
             str(item.get("source_id"))
             for item in current_items
@@ -1644,14 +1653,62 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             "message": f"Added {len(added)} files.",
         }
 
+    def toggle_file_selection_for_ui(source_id: str, selected_source_ids: list[str] | None = None) -> dict[str, Any]:
+        normalized_source_id = source_id.strip()
+        selected_ids = [str(item) for item in selected_source_ids or [] if str(item).strip()]
+        if not normalized_source_id:
+            return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids)}
+        if normalized_source_id in selected_ids:
+            selected_ids = [item for item in selected_ids if item != normalized_source_id]
+        else:
+            selected_ids.append(normalized_source_id)
+        return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids)}
+
+    def dismiss_file_for_ui(
+        source_id: str,
+        current_results: list[dict[str, Any]] | None = None,
+        dismissed_source_ids: list[str] | None = None,
+        selected_source_ids: list[str] | None = None,
+        query: str | None = None,
+        iteration: int = 0,
+    ) -> dict[str, Any]:
+        normalized_source_id = source_id.strip()
+        dismissed_ids = [str(item) for item in dismissed_source_ids or [] if str(item).strip()]
+        selected_ids = [str(item) for item in selected_source_ids or [] if str(item).strip()]
+        if normalized_source_id and normalized_source_id not in dismissed_ids:
+            dismissed_ids.append(normalized_source_id)
+        if normalized_source_id:
+            selected_ids = [item for item in selected_ids if item != normalized_source_id]
+        results = [
+            item
+            for item in current_results or []
+            if str(item.get("source_id") or "").strip() != normalized_source_id
+        ]
+        search = {
+            "query": query or "",
+            "iteration": iteration,
+            "results": results,
+            "added": [],
+            "referenceContext": _file_search_reference_context(results),
+            "message": f"Showing {len(results)} files.",
+        }
+        return {
+            "search": search,
+            "dismissed_source_ids": dismissed_ids,
+            "selected_source_ids": selected_ids,
+            "selected_count": len(selected_ids),
+        }
+
     async def confirm_file_selection_for_ui(
-        selected_files: list[dict[str, Any]],
+        selected_source_ids: list[str] | None = None,
+        current_results: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         selected = []
+        wanted_ids = {str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()}
         seen_ids: set[str] = set()
-        for item in selected_files:
+        for item in current_results or []:
             source_id = str(item.get("source_id") or "").strip()
-            if not source_id or source_id in seen_ids:
+            if not source_id or source_id in seen_ids or source_id not in wanted_ids:
                 continue
             seen_ids.add(source_id)
             selected.append(
@@ -1676,23 +1733,31 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             f"- {item['title']} (`{item['source_id']}`): {item['summary']}"
             for item in selected
         ]
+        retrieval_payload = {
+            "instruction": "Retrieve the full contents for the files the user selected in the file search widget.",
+            "source_ids": selected_source_ids,
+            "include_file_contents": True,
+            "max_results": max(len(selected_source_ids), 1),
+        }
         model_context = "\n".join(
             [
                 "The user confirmed these selected library files in the file search widget:",
                 *selected_lines,
                 "",
                 f"Selected source IDs: {', '.join(selected_source_ids)}",
-                "Use library_search with include_file_contents=true and these source IDs when full file contents are needed.",
+                "Immediately call the MCP tool `library_search` with this JSON payload to retrieve the selected file contents:",
+                json.dumps(retrieval_payload, sort_keys=True),
             ]
         )
         follow_up_prompt = (
-            "Use my confirmed selected library files for the next step. "
-            f"Selected source IDs: {', '.join(selected_source_ids)}. "
-            "If you need original file contents, call library_search with include_file_contents=true for those IDs."
+            "Please retrieve the full contents for my selected library files now. "
+            f"Call `library_search` with: {json.dumps(retrieval_payload, sort_keys=True)}"
         )
         return {
             "selected_files": selected,
             "selected_source_ids": selected_source_ids,
+            "retrieval_tool": "library_search",
+            "retrieval_payload": retrieval_payload,
             "model_context": model_context,
             "follow_up_prompt": follow_up_prompt,
             "message": f"Confirmed {len(selected)} selected file{'s' if len(selected) != 1 else ''}.",
@@ -1711,20 +1776,24 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         return action
 
     def build_file_search_app() -> PrefabApp:
-        with Column(gap=4, css_class="p-4 max-w-2xl mx-auto") as view:
+        with Column(gap=4, css_class="p-4 max-w-4xl mx-auto") as view:
             with Column(gap=1):
                 Text("File Search", bold=True, css_class="text-lg")
                 Muted("Semantic search over the indexed library.")
             with Form(
-                on_submit=[
-                    SetState("selectedFiles", []),
-                    SetState("dismissedSourceIds", []),
-                    visible_tool_call(
-                        arguments={"action": "search", "query": EVENT.formData.file_query},
-                        on_success=SetState("search", RESULT),
-                        on_error=ShowToast(f"{ERROR}", variant="error"),
-                    ),
-                ]
+                on_submit=visible_tool_call(
+                    arguments={
+                        "action": "search",
+                        "query": EVENT.formData.file_query,
+                        "previous_query": STATE.search.query,
+                        "current_results": STATE.search.results,
+                        "dismissed_source_ids": STATE.dismissedSourceIds,
+                        "selected_source_ids": STATE.selectedSourceIds,
+                        "iteration": STATE.search.iteration,
+                    },
+                    on_success=SetState("search", RESULT),
+                    on_error=ShowToast(f"{ERROR}", variant="error"),
+                )
             ):
                 with Column(gap=2):
                     Input(
@@ -1735,64 +1804,80 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                     )
                     Button("Search", size="sm", buttonType="submit")
             with If(STATE.search.results):
-                with Row(gap=2, align="center"):
+                with Row(gap=2, align="center", justify="between"):
                     Badge(STATE.search.message, variant="secondary")
-                    Button(
-                        "Add five more",
-                        variant="secondary",
-                        size="sm",
-                        onClick=visible_tool_call(
-                            arguments={
-                                "action": "continue",
-                                "query": STATE.search.query,
-                                "current_results": STATE.search.results,
-                                "dismissed_source_ids": STATE.dismissedSourceIds,
-                                "selected_files": STATE.selectedFiles,
-                                "iteration": STATE.search.iteration,
-                            },
-                            on_success=SetState("search", RESULT),
-                            on_error=ShowToast(f"{ERROR}", variant="error"),
-                        ),
-                    )
-                with ForEach(STATE.search.results) as item:
-                    with Card(css_class="border border-slate-200"):
-                        with CardContent():
-                            with Column(gap=2):
-                                with Row(gap=2, align="center"):
-                                    Text(item.title, bold=True)
-                                    Badge(item.relevance_label, variant="secondary")
-                                    Badge(item.relevance_score, variant="outline")
-                                Small(item.original_filename)
-                                Muted(item.summary)
-                                Small(item.match_title)
-                                with Row(gap=2, align="center"):
-                                    Button(
-                                        "Select",
-                                        size="sm",
-                                        onClick=[
-                                            AppendState("selectedFiles", item),
-                                            ShowToast("File selected", variant="success"),
-                                        ],
+                    Small("Run the same search again to add five more.")
+                with Table():
+                    with TableHeader():
+                        with TableRow():
+                            TableHead("", css_class="w-10")
+                            TableHead("File")
+                            TableHead("Relevance", css_class="w-32")
+                            TableHead("Match", css_class="w-44")
+                            TableHead("", css_class="w-12")
+                    with TableBody():
+                        with ForEach(STATE.search.results) as item:
+                            with TableRow():
+                                with TableCell():
+                                    Checkbox(
+                                        value="{{ selectedSourceIds.includes(_loop_1.source_id) }}",
+                                        onChange=visible_tool_call(
+                                            arguments={
+                                                "action": "toggle_selection",
+                                                "source_id": item.source_id,
+                                                "selected_source_ids": STATE.selectedSourceIds,
+                                            },
+                                            on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
+                                            on_error=ShowToast(f"{ERROR}", variant="error"),
+                                        ),
                                     )
+                                with TableCell():
+                                    with Column(gap=1):
+                                        Text(item.title, bold=True)
+                                        Small(item.original_filename)
+                                        Muted(item.summary)
+                                with TableCell():
+                                    with Row(gap=1, align="center"):
+                                        Badge(item.relevance_label, variant="secondary")
+                                        Badge(item.relevance_score, variant="outline")
+                                TableCell(item.match_title)
+                                with TableCell():
                                     Button(
-                                        "Dismiss",
-                                        variant="secondary",
-                                        size="sm",
-                                        onClick=[
-                                            AppendState("dismissedSourceIds", item.source_id),
-                                            ShowToast("File dismissed", variant="success"),
-                                        ],
+                                        "",
+                                        icon="x",
+                                        variant="destructive",
+                                        size="icon-sm",
+                                        onClick=visible_tool_call(
+                                            arguments={
+                                                "action": "dismiss",
+                                                "source_id": item.source_id,
+                                                "query": STATE.search.query,
+                                                "current_results": STATE.search.results,
+                                                "dismissed_source_ids": STATE.dismissedSourceIds,
+                                                "selected_source_ids": STATE.selectedSourceIds,
+                                                "iteration": STATE.search.iteration,
+                                            },
+                                            on_success=[
+                                                SetState("search", RESULT.search),
+                                                SetState("dismissedSourceIds", RESULT.dismissed_source_ids),
+                                                SetState("selectedSourceIds", RESULT.selected_source_ids),
+                                            ],
+                                            on_error=ShowToast(f"{ERROR}", variant="error"),
+                                        ),
                                     )
-                                    Button("Leave", variant="outline", size="sm")
-            with If(STATE.selectedFiles):
+            with If("{{ selectedSourceIds.length > 0 }}"):
                 Separator()
                 with Row(gap=2, align="center"):
-                    Text("Selected", bold=True)
+                    Text("{{ selectedSourceIds.length }} selected", bold=True)
                     Button(
                         "Use selected",
                         size="sm",
                         onClick=visible_tool_call(
-                            arguments={"action": "confirm", "selected_files": STATE.selectedFiles},
+                            arguments={
+                                "action": "confirm",
+                                "selected_source_ids": STATE.selectedSourceIds,
+                                "current_results": STATE.search.results,
+                            },
                             on_success=[
                                 SetState("selection", RESULT),
                                 UpdateContext(content=RESULT.model_context),
@@ -1802,8 +1887,6 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                             on_error=ShowToast(f"{ERROR}", variant="error"),
                         ),
                     )
-                with ForEach(STATE.selectedFiles) as selected:
-                    Small(selected.title)
             with If(STATE.selection):
                 Small(STATE.selection.message)
         return PrefabApp(
@@ -1818,7 +1901,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                     "referenceContext": "",
                     "message": "",
                 },
-                "selectedFiles": [],
+                "selectedSourceIds": [],
                 "dismissedSourceIds": [],
                 "selection": None,
             },
@@ -1832,26 +1915,50 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
     )
     async def open_file_search_ui(
         ctx: Context,
-        action: Literal["render", "search", "continue", "confirm"] = "render",
+        action: Literal["render", "search", "continue", "toggle_selection", "dismiss", "confirm"] = "render",
         query: str | None = None,
+        previous_query: str | None = None,
+        source_id: str | None = None,
         current_results: list[dict[str, Any]] | None = None,
         dismissed_source_ids: list[str] | None = None,
-        selected_files: list[dict[str, Any]] | None = None,
+        selected_source_ids: list[str] | None = None,
         iteration: int = 1,
     ) -> PrefabApp | dict[str, Any]:
         del ctx
         if action == "search":
+            if current_results and (query or "").strip() == (previous_query or "").strip():
+                return await continue_file_search_for_ui(
+                    query or "",
+                    current_results=current_results,
+                    dismissed_source_ids=dismissed_source_ids,
+                    selected_source_ids=selected_source_ids,
+                    iteration=iteration,
+                )
             return await run_file_search_for_ui(query or "")
         if action == "continue":
             return await continue_file_search_for_ui(
                 query or "",
                 current_results=current_results,
                 dismissed_source_ids=dismissed_source_ids,
-                selected_files=selected_files,
+                selected_source_ids=selected_source_ids,
+                iteration=iteration,
+            )
+        if action == "toggle_selection":
+            return toggle_file_selection_for_ui(source_id or "", selected_source_ids)
+        if action == "dismiss":
+            return dismiss_file_for_ui(
+                source_id or "",
+                current_results=current_results,
+                dismissed_source_ids=dismissed_source_ids,
+                selected_source_ids=selected_source_ids,
+                query=query,
                 iteration=iteration,
             )
         if action == "confirm":
-            return await confirm_file_selection_for_ui(selected_files or [])
+            return await confirm_file_selection_for_ui(
+                selected_source_ids=selected_source_ids,
+                current_results=current_results,
+            )
         return build_file_search_app()
 
     # FastMCP's @app.ui defaults to model-only. This UI reuses its visible
