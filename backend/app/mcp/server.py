@@ -11,7 +11,7 @@ from typing import Annotated, Any, Literal, cast
 
 from fastmcp import FastMCP, FastMCPApp
 from fastmcp.server.context import Context
-from fastmcp.tools import ToolResult
+from fastmcp.tools import Tool, ToolResult
 from mcp.types import BlobResourceContents, EmbeddedResource, TextContent, TextResourceContents, ToolAnnotations
 from prefab_ui import PrefabApp
 from prefab_ui.actions import AppendState, SetState, ShowToast
@@ -1853,6 +1853,18 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         if action == "confirm":
             return await confirm_file_selection_for_ui(selected_files or [])
         return build_file_search_app()
+
+    # FastMCP's @app.ui defaults to model-only. This UI reuses its visible
+    # entry tool for widget state actions, so ChatGPT must also see app visibility.
+    for component in cast(Any, sources_app)._local._components.values():
+        if isinstance(component, Tool) and component.name == "open_file_search_ui":
+            meta = dict(component.meta or {})
+            ui_meta = dict(meta.get("ui") or {})
+            ui_meta["visibility"] = ["model", "app"]
+            meta["ui"] = ui_meta
+            meta["openai/widgetAccessible"] = True
+            component.meta = meta
+            break
 
     server.add_provider(sources_app)
 

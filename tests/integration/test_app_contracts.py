@@ -1620,7 +1620,8 @@ async def test_mcp_server_exposes_app_first_tools(
     assert tools["open_file_search_ui"].meta is not None
     assert tools["open_file_search_ui"].meta["ui"]["resourceUri"].startswith("ui://prefab/tool/")
     assert tools["open_file_search_ui"].meta["ui"]["resourceUri"].endswith("/renderer.html")
-    assert tools["open_file_search_ui"].meta["ui"]["visibility"] == ["model"]
+    assert tools["open_file_search_ui"].meta["ui"]["visibility"] == ["model", "app"]
+    assert tools["open_file_search_ui"].meta["openai/widgetAccessible"] is True
     assert tools["open_file_search_ui"].meta["fastmcp"]["app"] == "Indexed Files"
     assert tools["open_file_search_ui"].title == "Open File Search UI"
     assert "sources" not in tools
