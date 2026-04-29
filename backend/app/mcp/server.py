@@ -1564,8 +1564,14 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
 
     sources_app = FastMCPApp("Indexed Files")
 
-    async def run_file_search_for_ui(query: str) -> dict[str, Any]:
+    async def run_file_search_for_ui(
+        query: str,
+        selected_files: list[dict[str, Any]] | None = None,
+        dismissed_source_ids: list[str] | None = None,
+    ) -> dict[str, Any]:
         normalized_query = query.strip()
+        selected_ids = _selected_file_ids(selected_files)
+        dismissed_ids = {str(source_id) for source_id in dismissed_source_ids or [] if str(source_id).strip()}
         if not normalized_query:
             return {
                 "query": "",
@@ -1574,15 +1580,16 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 "added": [],
                 "referenceContext": "",
                 "message": "Enter a search query.",
-                "selected_source_ids": [],
-                "dismissed_source_ids": [],
+                "selected_source_ids": selected_ids,
+                "dismissed_source_ids": sorted(dismissed_ids),
             }
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
             request=SearchRequest(query=normalized_query, max_results=24),
             origin_surface="mcp_app",
         )
-        added = _file_search_items_from_hits(response.hits, exclude_source_ids=set(), limit=5)
+        added = _file_search_items_from_hits(response.hits, exclude_source_ids=dismissed_ids, limit=5)
+        added = _mark_file_search_selection(added, selected_ids)
         return {
             "query": normalized_query,
             "iteration": 1,
@@ -1590,43 +1597,37 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
             "added": added,
             "referenceContext": _file_search_reference_context(added),
             "message": f"Found {len(added)} files.",
-            "selected_source_ids": [],
-            "dismissed_source_ids": [],
+            "selected_source_ids": selected_ids,
+            "dismissed_source_ids": sorted(dismissed_ids),
         }
 
     async def continue_file_search_for_ui(
         query: str,
         current_results: list[dict[str, Any]] | None = None,
         dismissed_source_ids: list[str] | None = None,
-        selected_source_ids: list[str] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
         iteration: int = 1,
     ) -> dict[str, Any]:
         normalized_query = query.strip()
         current_items = list(current_results or [])
         dismissed_ids = {str(source_id) for source_id in dismissed_source_ids or [] if str(source_id).strip()}
-        selected_ids = [str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()]
-        selected_id_set = set(selected_ids)
-        selected_items = [
-            item
-            for item in current_items
-            if str(item.get("source_id") or "").strip() in selected_id_set
-        ]
+        selected_ids = _selected_file_ids(selected_files)
         dropped_ids = {
             str(item.get("source_id"))
             for item in current_items
-            if str(item.get("source_id") or "").strip() and str(item.get("source_id")) not in selected_id_set
+            if str(item.get("source_id") or "").strip() and str(item.get("source_id")) not in set(selected_ids)
         }
         dismissed_ids |= dropped_ids
         seen_ids = {
             str(item.get("source_id"))
             for item in current_items
             if str(item.get("source_id") or "").strip()
-        } | dismissed_ids | selected_id_set
+        } | dismissed_ids | set(selected_ids)
         if not normalized_query:
             return {
                 "query": "",
                 "iteration": iteration,
-                "results": selected_items,
+                "results": [],
                 "added": [],
                 "referenceContext": "",
                 "message": "Enter a search query.",
@@ -1634,19 +1635,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 "dismissed_source_ids": sorted(dismissed_ids),
             }
 
-        if len(selected_items) >= 10:
-            return {
-                "query": normalized_query,
-                "iteration": iteration,
-                "results": selected_items,
-                "added": [],
-                "referenceContext": _file_search_reference_context(selected_items),
-                "message": "Kept 10 files. Use selected or unselect files to continue.",
-                "selected_source_ids": selected_ids[:10],
-                "dismissed_source_ids": sorted(dismissed_ids),
-            }
-
-        reference_context = _file_search_reference_context(selected_items or current_items)
+        reference_context = _file_search_reference_context(list(selected_files or []) or current_items)
         branch_query = "\n\n".join([normalized_query, reference_context]).strip()
         response = await services.sources.search(
             clerk_user_id=current_mcp_clerk_user_id(),
@@ -1661,51 +1650,87 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 origin_surface="mcp_app",
             )
             added = _file_search_items_from_hits(response.hits, exclude_source_ids=seen_ids, limit=5)
-        results = [*selected_items, *added]
+        added = _mark_file_search_selection(added, selected_ids)
         return {
             "query": normalized_query,
             "iteration": iteration + 1,
-            "results": results,
+            "results": added,
             "added": added,
-            "referenceContext": _file_search_reference_context(results),
-            "message": f"Kept {len(selected_items)} and added {len(added)} files.",
+            "referenceContext": _file_search_reference_context(added),
+            "message": f"Added {len(added)} files. Selected {len(selected_ids)} of 10.",
             "selected_source_ids": selected_ids[:10],
             "dismissed_source_ids": sorted(dismissed_ids),
         }
 
-    def toggle_file_selection_for_ui(source_id: str, selected_source_ids: list[str] | None = None) -> dict[str, Any]:
+    def toggle_file_selection_for_ui(
+        file_item: dict[str, Any] | None = None,
+        current_results: list[dict[str, Any]] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
+        query: str | None = None,
+        iteration: int = 0,
+    ) -> dict[str, Any]:
+        item = dict(file_item or {})
+        source_id = str(item.get("source_id") or "").strip()
         normalized_source_id = source_id.strip()
-        selected_ids = [str(item) for item in selected_source_ids or [] if str(item).strip()]
+        selected = _dedupe_selected_files(selected_files or [])
         if not normalized_source_id:
-            return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids)}
+            selected_ids = _selected_file_ids(selected)
+            return {
+                "search": {
+                    "query": query or "",
+                    "iteration": iteration,
+                    "results": _mark_file_search_selection(current_results or [], selected_ids),
+                    "added": [],
+                    "referenceContext": _file_search_reference_context(current_results or []),
+                    "message": f"Selected {len(selected_ids)} of 10 files.",
+                },
+                "selected_files": selected,
+                "selected_source_ids": selected_ids,
+                "selected_count": len(selected_ids),
+                "message": f"Selected {len(selected_ids)} of 10 files.",
+            }
+        selected_ids = _selected_file_ids(selected)
         if normalized_source_id in selected_ids:
-            selected_ids = [item for item in selected_ids if item != normalized_source_id]
+            selected = [selected_item for selected_item in selected if selected_item["source_id"] != normalized_source_id]
         else:
-            if len(selected_ids) >= 10:
-                return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids), "message": "Selection limit is 10 files."}
-            selected_ids.append(normalized_source_id)
-        return {"selected_source_ids": selected_ids, "selected_count": len(selected_ids)}
+            if len(selected) >= 10:
+                return _selection_state_result(
+                    current_results=current_results,
+                    selected_files=selected,
+                    query=query,
+                    iteration=iteration,
+                    message="Selection limit is 10 files.",
+                )
+            selected.append(_file_search_selected_item(item))
+        return _selection_state_result(
+            current_results=current_results,
+            selected_files=selected,
+            query=query,
+            iteration=iteration,
+        )
 
     def dismiss_file_for_ui(
         source_id: str,
         current_results: list[dict[str, Any]] | None = None,
         dismissed_source_ids: list[str] | None = None,
-        selected_source_ids: list[str] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
         query: str | None = None,
         iteration: int = 0,
     ) -> dict[str, Any]:
         normalized_source_id = source_id.strip()
         dismissed_ids = [str(item) for item in dismissed_source_ids or [] if str(item).strip()]
-        selected_ids = [str(item) for item in selected_source_ids or [] if str(item).strip()]
+        selected = _dedupe_selected_files(selected_files or [])
         if normalized_source_id and normalized_source_id not in dismissed_ids:
             dismissed_ids.append(normalized_source_id)
         if normalized_source_id:
-            selected_ids = [item for item in selected_ids if item != normalized_source_id]
+            selected = [item for item in selected if item["source_id"] != normalized_source_id]
+        selected_ids = _selected_file_ids(selected)
         results = [
             item
             for item in current_results or []
             if str(item.get("source_id") or "").strip() != normalized_source_id
         ]
+        results = _mark_file_search_selection(results, selected_ids)
         search = {
             "query": query or "",
             "iteration": iteration,
@@ -1717,31 +1742,24 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         return {
             "search": search,
             "dismissed_source_ids": dismissed_ids,
+            "selected_files": selected,
             "selected_source_ids": selected_ids,
             "selected_count": len(selected_ids),
         }
 
     async def confirm_file_selection_for_ui(
         selected_source_ids: list[str] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
         current_results: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
-        selected = []
+        selected = _dedupe_selected_files(selected_files or [])
         wanted_ids = {str(source_id) for source_id in selected_source_ids or [] if str(source_id).strip()}
-        seen_ids: set[str] = set()
-        for item in current_results or []:
-            source_id = str(item.get("source_id") or "").strip()
-            if not source_id or source_id in seen_ids or source_id not in wanted_ids:
-                continue
-            seen_ids.add(source_id)
-            selected.append(
-                {
-                    "source_id": source_id,
-                    "title": str(item.get("title") or source_id).strip(),
-                    "original_filename": str(item.get("original_filename") or "").strip(),
-                    "summary": str(item.get("summary") or "").strip(),
-                    "relevance_score": item.get("relevance_score"),
-                }
-            )
+        if not selected and wanted_ids:
+            selected = [
+                _file_search_selected_item(item)
+                for item in current_results or []
+                if str(item.get("source_id") or "").strip() in wanted_ids
+            ]
         if not selected:
             return {
                 "selected_files": [],
@@ -1810,7 +1828,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                         "previous_query": STATE.search.query,
                         "current_results": STATE.search.results,
                         "dismissed_source_ids": STATE.dismissedSourceIds,
-                        "selected_source_ids": STATE.selectedSourceIds,
+                        "selected_files": STATE.selectedFiles,
                         "iteration": STATE.search.iteration,
                     },
                     on_success=[
@@ -1836,51 +1854,46 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                 with Table():
                     with TableHeader():
                         with TableRow():
-                            TableHead("Keep", css_class="w-16")
-                            TableHead("Name")
-                            TableHead("Description")
+                            TableHead("Rank", css_class="w-14")
+                            TableHead("File")
+                            TableHead("Summary")
                             TableHead("Score", css_class="w-20")
+                            TableHead("Keep", css_class="w-24")
                             TableHead("", css_class="w-12")
                     with TableBody():
                         with ForEach(STATE.search.results) as item:
                             with TableRow():
                                 with TableCell():
-                                    with If("{{ selectedSourceIds.includes(_loop_1.source_id) }}"):
-                                        Button(
-                                            "[x]",
-                                            variant="default",
-                                            size="sm",
-                                            onClick=visible_tool_call(
-                                                arguments={
-                                                    "action": "toggle_selection",
-                                                    "source_id": item.source_id,
-                                                    "selected_source_ids": STATE.selectedSourceIds,
-                                                },
-                                                on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
-                                                on_error=ShowToast(f"{ERROR}", variant="error"),
-                                            ),
-                                        )
-                                    with If("{{ !selectedSourceIds.includes(_loop_1.source_id) }}"):
-                                        Button(
-                                            "[ ]",
-                                            variant="outline",
-                                            size="sm",
-                                            onClick=visible_tool_call(
-                                                arguments={
-                                                    "action": "toggle_selection",
-                                                    "source_id": item.source_id,
-                                                    "selected_source_ids": STATE.selectedSourceIds,
-                                                },
-                                                on_success=SetState("selectedSourceIds", RESULT.selected_source_ids),
-                                                on_error=ShowToast(f"{ERROR}", variant="error"),
-                                            ),
-                                        )
+                                    Small(item.rank)
                                 with TableCell():
                                     Text(item.title, bold=True, css_class="max-w-72 truncate")
                                 with TableCell():
                                     Muted(item.summary, css_class="max-w-xl truncate")
                                 with TableCell():
                                     Badge(item.relevance_score, variant="outline")
+                                with TableCell():
+                                    Button(
+                                        item.selection_action,
+                                        variant="secondary",
+                                        size="sm",
+                                        onClick=visible_tool_call(
+                                            arguments={
+                                                "action": "toggle_selection",
+                                                "file_item": item,
+                                                "current_results": STATE.search.results,
+                                                "selected_files": STATE.selectedFiles,
+                                                "query": STATE.search.query,
+                                                "iteration": STATE.search.iteration,
+                                            },
+                                            on_success=[
+                                                SetState("search", RESULT.search),
+                                                SetState("selectedFiles", RESULT.selected_files),
+                                                SetState("selectedSourceIds", RESULT.selected_source_ids),
+                                                ShowToast(RESULT.message, variant="success"),
+                                            ],
+                                            on_error=ShowToast(f"{ERROR}", variant="error"),
+                                        ),
+                                    )
                                 with TableCell():
                                     Button(
                                         "X",
@@ -1893,12 +1906,13 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                                                 "query": STATE.search.query,
                                                 "current_results": STATE.search.results,
                                                 "dismissed_source_ids": STATE.dismissedSourceIds,
-                                                "selected_source_ids": STATE.selectedSourceIds,
+                                                "selected_files": STATE.selectedFiles,
                                                 "iteration": STATE.search.iteration,
                                             },
                                             on_success=[
                                                 SetState("search", RESULT.search),
                                                 SetState("dismissedSourceIds", RESULT.dismissed_source_ids),
+                                                SetState("selectedFiles", RESULT.selected_files),
                                                 SetState("selectedSourceIds", RESULT.selected_source_ids),
                                             ],
                                             on_error=ShowToast(f"{ERROR}", variant="error"),
@@ -1915,6 +1929,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                             arguments={
                                 "action": "confirm",
                                 "selected_source_ids": STATE.selectedSourceIds,
+                                "selected_files": STATE.selectedFiles,
                                 "current_results": STATE.search.results,
                             },
                             on_success=[
@@ -1940,6 +1955,7 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                     "referenceContext": "",
                     "message": "",
                 },
+                "selectedFiles": [],
                 "selectedSourceIds": [],
                 "dismissedSourceIds": [],
                 "selection": None,
@@ -1958,9 +1974,11 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
         query: str | None = None,
         previous_query: str | None = None,
         source_id: str | None = None,
+        file_item: dict[str, Any] | None = None,
         current_results: list[dict[str, Any]] | None = None,
         dismissed_source_ids: list[str] | None = None,
         selected_source_ids: list[str] | None = None,
+        selected_files: list[dict[str, Any]] | None = None,
         iteration: int = 1,
     ) -> PrefabApp | dict[str, Any]:
         del ctx
@@ -1970,32 +1988,43 @@ def _register_sources_app(*, server: FastMCP, services: AppServices, settings: A
                     query or "",
                     current_results=current_results,
                     dismissed_source_ids=dismissed_source_ids,
-                    selected_source_ids=selected_source_ids,
+                    selected_files=selected_files,
                     iteration=iteration,
                 )
-            return await run_file_search_for_ui(query or "")
+            return await run_file_search_for_ui(
+                query or "",
+                selected_files=selected_files,
+                dismissed_source_ids=dismissed_source_ids,
+            )
         if action == "continue":
             return await continue_file_search_for_ui(
                 query or "",
                 current_results=current_results,
                 dismissed_source_ids=dismissed_source_ids,
-                selected_source_ids=selected_source_ids,
+                selected_files=selected_files,
                 iteration=iteration,
             )
         if action == "toggle_selection":
-            return toggle_file_selection_for_ui(source_id or "", selected_source_ids)
+            return toggle_file_selection_for_ui(
+                file_item=file_item,
+                current_results=current_results,
+                selected_files=selected_files,
+                query=query,
+                iteration=iteration,
+            )
         if action == "dismiss":
             return dismiss_file_for_ui(
                 source_id or "",
                 current_results=current_results,
                 dismissed_source_ids=dismissed_source_ids,
-                selected_source_ids=selected_source_ids,
+                selected_files=selected_files,
                 query=query,
                 iteration=iteration,
             )
         if action == "confirm":
             return await confirm_file_selection_for_ui(
                 selected_source_ids=selected_source_ids,
+                selected_files=selected_files,
                 current_results=current_results,
             )
         return build_file_search_app()
@@ -2020,8 +2049,8 @@ def _file_search_items_from_hits(
     *,
     exclude_source_ids: set[str],
     limit: int,
-) -> list[dict[str, object]]:
-    items: list[dict[str, object]] = []
+) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
     for hit in hits:
         if hit.source_file_id in exclude_source_ids:
             continue
@@ -2034,15 +2063,17 @@ def _file_search_items_from_hits(
             relevance_label = "Possible"
         items.append(
             {
+                "rank": len(items) + 1,
                 "source_id": hit.source_file_id,
                 "chunk_id": hit.chunk_id,
                 "title": hit.source_title,
                 "original_filename": hit.original_filename,
-                "summary": hit.summary,
+                "summary": hit.summary or hit.text[:220],
                 "match_title": hit.title,
                 "snippet": hit.text[:900],
                 "relevance_score": score,
                 "relevance_label": relevance_label,
+                "selection_action": "Check",
                 "tags": hit.tags,
             }
         )
@@ -2050,6 +2081,82 @@ def _file_search_items_from_hits(
         if len(items) >= limit:
             break
     return items
+
+
+def _file_search_selected_item(item: dict[str, Any]) -> dict[str, Any]:
+    source_id = str(item.get("source_id") or "").strip()
+    title = str(item.get("title") or source_id).strip()
+    summary = str(item.get("summary") or item.get("snippet") or "").strip()
+    return {
+        "source_id": source_id,
+        "title": title,
+        "original_filename": str(item.get("original_filename") or "").strip(),
+        "summary": summary,
+        "relevance_score": item.get("relevance_score"),
+    }
+
+
+def _dedupe_selected_files(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    selected: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for item in items:
+        source_id = str(item.get("source_id") or "").strip()
+        if not source_id or source_id in seen_ids:
+            continue
+        selected.append(_file_search_selected_item(item))
+        seen_ids.add(source_id)
+        if len(selected) >= 10:
+            break
+    return selected
+
+
+def _selected_file_ids(items: list[dict[str, Any]] | None) -> list[str]:
+    return [item["source_id"] for item in _dedupe_selected_files(items or [])]
+
+
+def _mark_file_search_selection(
+    items: list[dict[str, Any]],
+    selected_source_ids: list[str],
+) -> list[dict[str, Any]]:
+    selected_id_set = set(selected_source_ids)
+    marked: list[dict[str, Any]] = []
+    for index, item in enumerate(items, start=1):
+        source_id = str(item.get("source_id") or "").strip()
+        selected = bool(source_id and source_id in selected_id_set)
+        marked_item = dict(item)
+        marked_item["rank"] = marked_item.get("rank") or index
+        marked_item["selected"] = selected
+        marked_item["selection_action"] = "Uncheck" if selected else "Check"
+        marked.append(marked_item)
+    return marked
+
+
+def _selection_state_result(
+    *,
+    current_results: list[dict[str, Any]] | None,
+    selected_files: list[dict[str, Any]],
+    query: str | None = None,
+    iteration: int = 0,
+    message: str | None = None,
+) -> dict[str, Any]:
+    selected = _dedupe_selected_files(selected_files)
+    selected_ids = _selected_file_ids(selected)
+    results = _mark_file_search_selection(current_results or [], selected_ids)
+    resolved_message = message or f"Selected {len(selected_ids)} of 10 files."
+    return {
+        "search": {
+            "query": query or "",
+            "iteration": iteration,
+            "results": results,
+            "added": [],
+            "referenceContext": _file_search_reference_context(results),
+            "message": resolved_message,
+        },
+        "selected_files": selected,
+        "selected_source_ids": selected_ids,
+        "selected_count": len(selected_ids),
+        "message": resolved_message,
+    }
 
 
 def _file_search_reference_context(items: list[dict[str, Any]]) -> str:
