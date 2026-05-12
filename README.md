@@ -31,6 +31,47 @@ The live deployment runs on Railway with PostgreSQL, S3-compatible object storag
 - Generate image and voice artifacts from retrieved context
 - Use the MCP endpoint at `/mcp/` from compatible MCP clients
 
+## Library usage
+
+The repository now installs a Python package named `openai_vectorstore2`. The
+FastAPI app still owns the HTTP, ChatKit, and MCP surfaces, but the OpenAI-backed
+RAG/IR operations are available through a small async facade that can be used by
+scripts, notebooks, or another local app after `pip install -e .`.
+
+```python
+from openai_vectorstore2 import ProgressEvent, create_rag_library
+
+
+async def show_progress(event: ProgressEvent) -> None:
+    print(f"{event.stage}: {event.status} - {event.message}")
+
+
+async with create_rag_library(clerk_user_id="local-dev") as rag:
+    ingest = await rag.ingest_text(
+        "Vector search systems need grounded evaluation.",
+        filename="notes.txt",
+        wait=True,
+        progress=show_progress,
+    )
+    results = await rag.search("How should retrieval systems be evaluated?", max_results=5)
+    answer = await rag.qa("Summarize the evaluation advice.", selected_source_ids=[ingest.source.id])
+```
+
+For async-generator style progress, use `rag.ingest_path_events(...)` and iterate
+over progress/result events. The same facade also exposes library/tag management,
+branch search, grounded writing, and research-library building.
+
+The generic eval CLI validates a JSONL dataset and runs retrieval requests
+against a running app:
+
+```bash
+./.venv/bin/openai-vectorstore2 --eval dataset.jsonl --base-url http://localhost:8000 --output eval-results.json
+```
+
+Each JSONL row must contain `id`, `query`, and either `expected_source_id` or
+`expected_doc_id`. Optional fields include `tag_ids`, `selected_source_ids`,
+`library_id`, and `reference_answer`.
+
 ## Local setup
 
 ### Prerequisites

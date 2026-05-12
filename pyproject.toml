@@ -41,9 +41,10 @@ dev = [
 ]
 
 [project.scripts]
+openai-vectorstore2 = "openai_vectorstore2.cli:main"
 openai-vectorstore2-http = "backend.app.main:main"
 openai-vectorstore2-stdio = "backend.app.mcp.stdio:main"
-openai-vectorstore2-open-ragbench-eval = "backend.app.evals.open_ragbench:main"
+openai-vectorstore2-open-ragbench-eval = "openai_vectorstore2.evals.open_ragbench:main"
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -52,7 +53,7 @@ pythonpath = [".", "vendor/ai-portfolio-admin/src"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["backend", "tests"]
+include = ["backend", "openai_vectorstore2", "tests"]
 extraPaths = ["vendor/ai-portfolio-admin/src"]
 venvPath = "."
 venv = ".venv"
@@ -69,7 +70,7 @@ target-version = "py314"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["backend*", "migrations*"]
+include = ["backend*", "migrations*", "openai_vectorstore2*"]
 
 [tool.setuptools.package-data]
 migrations = ["script.py.mako"]

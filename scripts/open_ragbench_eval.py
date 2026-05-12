@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import sys
 
-from backend.app.evals.open_ragbench import main
+from openai_vectorstore2.evals.open_ragbench import main
 
 
 if __name__ == "__main__":
