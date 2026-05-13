@@ -7,9 +7,9 @@ from pathlib import Path
 from time import monotonic
 from typing import Literal
 
-from backend.app.bootstrap import AppServices, create_services
-from backend.app.core.config import AppSettings, get_settings
-from backend.app.schemas import (
+from openai_vectorstore2_backend.app.bootstrap import AppServices, create_services
+from openai_vectorstore2_backend.app.core.config import AppSettings, get_settings
+from openai_vectorstore2_backend.app.schemas import (
     ActionResponse,
     BranchSearchRequest,
     BranchSearchResponse,
@@ -28,7 +28,7 @@ from backend.app.schemas import (
     TagSummary,
     TaskDetail,
 )
-from backend.app.schemas.records import LibraryVisibility
+from openai_vectorstore2_backend.app.schemas.records import LibraryVisibility
 
 ProgressSink = Callable[["ProgressEvent"], Awaitable[None] | None]
 

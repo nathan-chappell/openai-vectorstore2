@@ -7,7 +7,7 @@ from typing import Any, cast
 from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 
-from backend.app.services.sources import build_pdf_text_batches, extract_pdf_text, split_pdf_payload_by_size
+from openai_vectorstore2_backend.app.services.sources import build_pdf_text_batches, extract_pdf_text, split_pdf_payload_by_size
 
 
 def test_build_pdf_text_batches_preserves_page_markers_and_ranges() -> None:

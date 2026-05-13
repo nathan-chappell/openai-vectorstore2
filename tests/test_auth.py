@@ -7,8 +7,8 @@ import httpx
 from pydantic import SecretStr, ValidationError
 import pytest
 
-from backend.app.core.config import AppSettings
-from backend.app.services.auth import AuthService, ClerkUserPayload
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.services.auth import AuthService, ClerkUserPayload
 
 
 @pytest.mark.asyncio

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.admin import build_auth_service, payment_integration_status
-from backend.app.core.config import AppSettings
-from backend.app.services.auth import AuthService
+from openai_vectorstore2_backend.app.admin import build_auth_service, payment_integration_status
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.services.auth import AuthService
 
 
 @pytest.mark.asyncio
@@ -49,7 +49,7 @@ async def test_shared_admin_integration_can_load_private_package_adapter(
     settings = configured_settings.model_copy(
         update={
             "admin_integration_provider": "ai_portfolio_admin",
-            "admin_shared_module": "backend.app.admin.shared_adapter",
+            "admin_shared_module": "openai_vectorstore2_backend.app.admin.shared_adapter",
         }
     )
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any, cast
 
-from backend.app.services.sources import VECTOR_ATTRIBUTES_VERSION, bounded_tag_ids, build_filter_groups, build_vector_attributes
+from openai_vectorstore2_backend.app.services.sources import VECTOR_ATTRIBUTES_VERSION, bounded_tag_ids, build_filter_groups, build_vector_attributes
 
 
 def test_build_vector_attributes_records_version_and_single_tag() -> None:

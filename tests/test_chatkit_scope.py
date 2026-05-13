@@ -13,7 +13,7 @@ from chatkit.types import (
     UserMessageTextContent,
 )
 
-from backend.app.chatkit.server import (
+from openai_vectorstore2_backend.app.chatkit.server import (
     apply_agent_thread_title,
     clean_thread_title,
     chatkit_source_deeplink,
@@ -29,7 +29,7 @@ from backend.app.chatkit.server import (
     pending_chatkit_thread_items,
     selected_scope,
 )
-from backend.app.chatkit.store import VectorstoreChatContext
+from openai_vectorstore2_backend.app.chatkit.store import VectorstoreChatContext
 
 NOW = datetime(2026, 4, 27, tzinfo=UTC)
 

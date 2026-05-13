@@ -10,9 +10,9 @@ from pypdf import PdfWriter
 from pypdf.generic import DictionaryObject, NameObject, StreamObject
 import pytest
 
-from backend import create_fastapi_app
-from backend.app.core.config import AppSettings
-from backend.app.evals.open_ragbench import (
+from openai_vectorstore2_backend import create_fastapi_app
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.evals.open_ragbench import (
     AnswerEvalResult,
     CorpusDoc,
     EvalReport,

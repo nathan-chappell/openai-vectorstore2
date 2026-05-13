@@ -8,12 +8,12 @@ from typing import Any, cast
 import httpx
 import pytest
 
-from backend import create_fastapi_app
-from backend.app.core.config import AppSettings
-from backend.app.models import ResearchImportCandidate, SourceFile
-from backend.app.schemas import ResearchImportCreateRequest, ResearchLibraryBuildRequest
-from backend.app.services import research as research_module
-from backend.app.services.research import ResearchImportService
+from openai_vectorstore2_backend import create_fastapi_app
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.models import ResearchImportCandidate, SourceFile
+from openai_vectorstore2_backend.app.schemas import ResearchImportCreateRequest, ResearchLibraryBuildRequest
+from openai_vectorstore2_backend.app.services import research as research_module
+from openai_vectorstore2_backend.app.services.research import ResearchImportService
 
 
 def test_research_import_url_normalization_removes_tracking_and_fragments() -> None:

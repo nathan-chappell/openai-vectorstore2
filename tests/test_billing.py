@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.core.config import AppSettings
-from backend.app.db.session import DatabaseManager
-from backend.app.services.billing import BillingService, CreditRequiredError, pricing_key_for_model
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.db.session import DatabaseManager
+from openai_vectorstore2_backend.app.services.billing import BillingService, CreditRequiredError, pricing_key_for_model
 
 
 @pytest.mark.asyncio

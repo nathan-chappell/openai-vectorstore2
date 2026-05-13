@@ -126,7 +126,7 @@ The default public provider keeps checkout disabled and supports local/manual ad
 
 ```bash
 ADMIN_INTEGRATION_PROVIDER=ai_portfolio_admin
-ADMIN_SHARED_MODULE=backend.app.admin.shared_adapter
+ADMIN_SHARED_MODULE=openai_vectorstore2_backend.app.admin.shared_adapter
 ```
 
 Billing defaults are intentionally light:

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import pytest
 
-from backend.app.core.config import AppSettings
-from backend.app.integrations.openai_gateway import OpenAITextResult, VectorSearchCandidate
-from backend.app.schemas import (
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.integrations.openai_gateway import OpenAITextResult, VectorSearchCandidate
+from openai_vectorstore2_backend.app.schemas import (
     ChunkHit,
     ChunkLocator,
     ResearchDiscoveryCandidateDraft,
@@ -236,7 +236,7 @@ def configured_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iter
 
 @pytest.fixture
 def fake_openai(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr("backend.app.bootstrap.OpenAIGateway", FakeOpenAIGateway)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.bootstrap.OpenAIGateway", FakeOpenAIGateway)
 
 
 @pytest.fixture
