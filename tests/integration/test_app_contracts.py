@@ -25,14 +25,14 @@ from mcp.types import TextContent
 import pytest
 from sqlalchemy import select
 
-from backend import create_fastapi_app
-from backend.app.bootstrap import AppServices, create_services
-from backend.app.chatkit.store import VectorstoreChatStore
-from backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, rest_route_names
-from backend.app.core.config import AppSettings, get_settings
-from backend.app.mcp.server import create_mcp_server
-from backend.app.models import AppChatAttachment, AppChatEntry
-from backend.app.schemas import QaRequest, TaskDetail
+from openai_vectorstore2_backend import create_fastapi_app
+from openai_vectorstore2_backend.app.bootstrap import AppServices, create_services
+from openai_vectorstore2_backend.app.chatkit.store import VectorstoreChatStore
+from openai_vectorstore2_backend.app.core.capabilities import chatkit_tool_names, mcp_tool_names, rest_route_names
+from openai_vectorstore2_backend.app.core.config import AppSettings, get_settings
+from openai_vectorstore2_backend.app.mcp.server import create_mcp_server
+from openai_vectorstore2_backend.app.models import AppChatAttachment, AppChatEntry
+from openai_vectorstore2_backend.app.schemas import QaRequest, TaskDetail
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -1641,15 +1641,15 @@ async def test_mcp_dev_entrypoint_exports_local_tooling_server(
     del configured_settings
     del fake_openai
     get_settings.cache_clear()
-    sys.modules.pop("backend.app.mcp.dev_server", None)
-    module = import_module("backend.app.mcp.dev_server")
+    sys.modules.pop("openai_vectorstore2_backend.app.mcp.dev_server", None)
+    module = import_module("openai_vectorstore2_backend.app.mcp.dev_server")
     server = getattr(module, "mcp")
     services = cast(AppServices, getattr(module, "services"))
     try:
         tools = {tool.name for tool in await server.list_tools(run_middleware=False)}
     finally:
         await services.close()
-        sys.modules.pop("backend.app.mcp.dev_server", None)
+        sys.modules.pop("openai_vectorstore2_backend.app.mcp.dev_server", None)
         get_settings.cache_clear()
 
     assert tools == mcp_tool_names()
@@ -1685,8 +1685,8 @@ def test_http_app_uses_noauth_mcp_server_when_mcp_auth_mode_is_none(
         calls.append("none")
         return FakeMcpServer()
 
-    monkeypatch.setattr("backend.app.main.create_mcp_server", fake_create_mcp_server)
-    monkeypatch.setattr("backend.app.main.create_dev_mcp_server", fake_create_dev_mcp_server)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.main.create_mcp_server", fake_create_mcp_server)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.main.create_dev_mcp_server", fake_create_dev_mcp_server)
 
     create_fastapi_app(configured_settings.model_copy(update={"mcp_auth_mode": "none"}))
 
@@ -1855,7 +1855,7 @@ async def test_mcp_authorization_server_metadata_proxies_configured_issuer(
                 },
             )
 
-    monkeypatch.setattr("backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
     settings = configured_settings.model_copy(
         update={
             "app_base_url": "https://vectorstore.example.com",
@@ -1916,7 +1916,7 @@ async def test_mcp_openid_metadata_aliases_proxy_configured_issuer(
                 },
             )
 
-    monkeypatch.setattr("backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.main.HttpAsyncClient", FakeAuthorizationMetadataClient)
     settings = configured_settings.model_copy(
         update={
             "app_base_url": "https://vectorstore.example.com",
@@ -2005,7 +2005,7 @@ async def test_mcp_sources_ui_search_respects_search_request_limit(
         return SimpleNamespace(query=request.query, hits=[])
 
     services = create_services(configured_settings)
-    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr("openai_vectorstore2_backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
     monkeypatch.setattr(services.sources, "search", fake_search)
     server = create_mcp_server(configured_settings, services)
     try:
@@ -2062,7 +2062,7 @@ async def test_mcp_sources_ui_search_keeps_top_ten_by_score(
         )
 
     services = create_services(configured_settings)
-    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr("openai_vectorstore2_backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
     monkeypatch.setattr(services.sources, "search", fake_search)
     server = create_mcp_server(configured_settings, services)
     try:
@@ -2108,7 +2108,7 @@ async def test_mcp_sources_ui_confirm_returns_download_links_not_file_bytes(
         )
 
     services = create_services(configured_settings)
-    monkeypatch.setattr("backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
+    monkeypatch.setattr("openai_vectorstore2_backend.app.mcp.server.current_mcp_clerk_user_id", lambda: "local-dev")
     monkeypatch.setattr(services.sources, "get_source", fake_get_source)
     server = create_mcp_server(configured_settings, services)
     try:
@@ -2163,7 +2163,7 @@ async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
             last_response_id="resp_fake_facade",
         )
 
-    monkeypatch.setattr("backend.app.mcp.agent_facade.Runner.run", fake_run)
+    monkeypatch.setattr("openai_vectorstore2_backend.app.mcp.agent_facade.Runner.run", fake_run)
     services = create_services(configured_settings)
     server = create_mcp_server(configured_settings, services)
     try:
@@ -2336,7 +2336,7 @@ async def test_mcp_retrieve_files_returns_embedded_file_resources(
         source_id = ingest.source.id
 
         detail = await services.sources.get_source(clerk_user_id="local-dev", source_id=source_id)
-        from backend.app.mcp.server import _retrieve_files_result  # pyright: ignore[reportPrivateUsage]
+        from openai_vectorstore2_backend.app.mcp.server import _retrieve_files_result  # pyright: ignore[reportPrivateUsage]
 
         retrieved = await _retrieve_files_result(
             services=services,

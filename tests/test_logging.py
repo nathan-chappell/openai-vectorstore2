@@ -6,11 +6,11 @@ from pathlib import Path
 import httpx
 import pytest
 
-from backend import create_fastapi_app
-from backend.app.core.config import AppSettings
-from backend.app.core.logging import configure_logging
-from backend.app.core.openai_observability import openai_platform_log_url, openai_platform_log_urls
-from backend.app.integrations.openai_gateway import log_openai_response
+from openai_vectorstore2_backend import create_fastapi_app
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.core.logging import configure_logging
+from openai_vectorstore2_backend.app.core.openai_observability import openai_platform_log_url, openai_platform_log_urls
+from openai_vectorstore2_backend.app.integrations.openai_gateway import log_openai_response
 
 
 def test_configure_logging_writes_plain_file(tmp_path: Path) -> None:
@@ -133,7 +133,7 @@ async def test_http_requests_are_logged_to_file(
             handler.flush()
 
         contents = log_path.read_text(encoding="utf-8")
-        assert "backend.app.main GET /health (" in contents
+        assert "openai_vectorstore2_backend.app.main GET /health (" in contents
         assert "status_code=200" not in contents
     finally:
         for handler in logging.getLogger().handlers[:]:

@@ -8,9 +8,9 @@ from alembic.config import Config
 from sqlalchemy import create_engine, inspect
 import pytest
 
-from backend.app.core.config import AppSettings
-from backend.app.db.session import DatabaseManager, postgres_connect_args
-from backend.app.models import Base
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.db.session import DatabaseManager, postgres_connect_args
+from openai_vectorstore2_backend.app.models import Base
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,7 +30,7 @@ def test_postgres_public_schema_search_path_is_not_duplicated() -> None:
 
 
 def test_alembic_postgres_version_table_uses_configured_schema() -> None:
-    migration_env = (PROJECT_ROOT / "migrations" / "env.py").read_text(encoding="utf-8")
+    migration_env = (PROJECT_ROOT / "openai_vectorstore2_migrations" / "env.py").read_text(encoding="utf-8")
     assert "version_table_schema=_version_table_schema(postgres_schema)" in migration_env
 
 
@@ -43,7 +43,7 @@ def test_alembic_ini_uses_env_resolving_placeholder() -> None:
 def test_alembic_head_matches_orm_tables_and_columns(tmp_path: Path) -> None:
     database_path = tmp_path / "migration-check.db"
     config = Config(str(PROJECT_ROOT / "alembic.ini"))
-    config.set_main_option("script_location", str(PROJECT_ROOT / "migrations"))
+    config.set_main_option("script_location", str(PROJECT_ROOT / "openai_vectorstore2_migrations"))
     config.set_main_option("sqlalchemy.url", f"sqlite:///{database_path}")
 
     command.upgrade(config, "head")
@@ -115,7 +115,7 @@ async def test_database_manager_retries_database_starting_up(
     monkeypatch.setattr(manager, "_upgrade_to_head", lambda: None)
 
     try:
-        with caplog.at_level(logging.WARNING, logger="backend.app.db.session"):
+        with caplog.at_level(logging.WARNING, logger="openai_vectorstore2_backend.app.db.session"):
             await manager.ensure_ready()
     finally:
         await manager.close()

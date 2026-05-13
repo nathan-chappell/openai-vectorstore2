@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.app.integrations.chat_completions import (
+from openai_vectorstore2_backend.app.integrations.chat_completions import (
     ChatCompletionsCompactionSummary,
     ChatCompletionMessagePayload,
     chat_completions_model_context,

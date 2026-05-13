@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openai-vectorstore2"
-version = "1.2.1"
+version = "1.2.2"
 description = "App-first OpenAI vector-store backed semantic RAG workspace with ChatKit and MCP adapters."
 readme = "README.md"
 requires-python = ">=3.14"
@@ -42,8 +42,8 @@ dev = [
 
 [project.scripts]
 openai-vectorstore2 = "openai_vectorstore2.cli:main"
-openai-vectorstore2-http = "backend.app.main:main"
-openai-vectorstore2-stdio = "backend.app.mcp.stdio:main"
+openai-vectorstore2-http = "openai_vectorstore2_backend.app.main:main"
+openai-vectorstore2-stdio = "openai_vectorstore2_backend.app.mcp.stdio:main"
 openai-vectorstore2-open-ragbench-eval = "openai_vectorstore2.evals.open_ragbench:main"
 
 [tool.pytest.ini_options]
@@ -53,7 +53,7 @@ pythonpath = [".", "vendor/ai-portfolio-admin/src"]
 [tool.pyright]
 pythonVersion = "3.14"
 typeCheckingMode = "strict"
-include = ["backend", "openai_vectorstore2", "tests"]
+include = ["openai_vectorstore2_backend", "openai_vectorstore2", "tests"]
 extraPaths = ["vendor/ai-portfolio-admin/src"]
 venvPath = "."
 venv = ".venv"
@@ -70,7 +70,7 @@ target-version = "py314"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["backend*", "migrations*", "openai_vectorstore2*"]
+include = ["openai_vectorstore2_backend*", "openai_vectorstore2_migrations*", "openai_vectorstore2*"]
 
 [tool.setuptools.package-data]
-migrations = ["script.py.mako"]
+openai_vectorstore2_migrations = ["script.py.mako"]

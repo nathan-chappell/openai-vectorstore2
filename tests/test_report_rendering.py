@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 from pydantic import ValidationError
 
-from backend.app.schemas import (
+from openai_vectorstore2_backend.app.schemas import (
     ReportCitation,
     ReportDocument,
     ReportFigureBlock,
@@ -13,7 +13,7 @@ from backend.app.schemas import (
     ReportSection,
     ReportTableBlock,
 )
-from backend.app.services.reports import render_report_markdown
+from openai_vectorstore2_backend.app.services.reports import render_report_markdown
 
 
 def test_render_report_markdown_preserves_math_tables_and_citations() -> None:

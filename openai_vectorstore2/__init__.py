@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from backend.app.core.config import AppSettings
-from backend.app.schemas import (
+from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.schemas import (
     ActionResponse,
     BranchSearchRequest,
     BranchSearchResponse,
