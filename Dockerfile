@@ -1,4 +1,4 @@
-FROM node:25-slim AS frontend-build
+FROM node:24-slim AS frontend-build
 WORKDIR /app
 
 ARG PUBLIC_CLERK_PUBLISHABLE=
