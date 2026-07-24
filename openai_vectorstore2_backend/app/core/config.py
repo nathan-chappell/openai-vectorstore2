@@ -33,6 +33,8 @@ class AppSettings(BaseSettings):
     database_postgres_schema: str | None = None
     database_startup_retry_attempts: int = 6
     database_startup_retry_delay_seconds: float = 2.0
+    database_recovery_retry_seconds: float = Field(default=5.0, gt=0.0)
+    administrator_email: str = "nathan.s.chappell@gmail.com"
     static_dir: str = "frontend/dist"
     cors_origins: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
@@ -173,6 +175,18 @@ class AppSettings(BaseSettings):
             return None
         if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", normalized_value):
             raise ValueError("DATABASE_POSTGRES_SCHEMA must be a simple PostgreSQL identifier.")
+        return normalized_value
+
+    @field_validator("administrator_email")
+    @classmethod
+    def _validate_administrator_email(cls, raw_value: str) -> str:
+        normalized_value = raw_value.strip()
+        if (
+            "@" not in normalized_value
+            or normalized_value.startswith("@")
+            or normalized_value.endswith("@")
+        ):
+            raise ValueError("ADMINISTRATOR_EMAIL must be a valid contact email address")
         return normalized_value
 
     @model_validator(mode="after")

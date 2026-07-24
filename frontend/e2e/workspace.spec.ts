@@ -101,7 +101,7 @@ test("workspace shell loads with local-dev auth", async ({ page }, testInfo) => 
   await expect(page.locator("openai-chatkit")).toBeVisible();
   await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "Library" })).toBeVisible();
-  await expect(page.getByText("0 indexed files selected")).toBeVisible();
+  await expect(page.getByText("0 items shown")).toBeVisible();
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "New Folder" })).toBeEnabled();
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Up" })).toHaveCount(0);
   await expect(page.locator(".explorer-commandbar").getByRole("button", { name: "Rename" })).toHaveCount(0);
@@ -167,7 +167,7 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
     { id: "tag-rag", name: "RAG", slug: "rag", color: null, source: "manual", source_count: 1 },
   ];
 
-  await page.route("**/api/tags", async (route) => {
+  await page.route("**/api/tags**", async (route) => {
     await route.fulfill({
       json: tags,
     });
@@ -186,10 +186,10 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
       },
     });
   });
-  await page.route("**/api/sources/source-alpha", async (route) => {
+  await page.route("**/api/sources/source-alpha**", async (route) => {
     await route.fulfill({ json: { ...alphaSource, storage_provider: "local", storage_key: "alpha", ingest_strategy: "source", metadata: {}, chunks: [] } });
   });
-  await page.route("**/api/sources/source-alpha/content", async (route) => {
+  await page.route("**/api/sources/source-alpha/content**", async (route) => {
     await route.fulfill({
       body: "Alpha Notes\nRetrieval quality details for preview.",
       contentType: "text/plain",
@@ -228,10 +228,10 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
   await expect(page.locator(".file-rows")).toContainText("bravo-plan.txt");
 
   await page.getByRole("tab", { name: "Library" }).click();
-  await page.getByLabel("Tag").selectOption("tag-rag");
+  await page.getByRole("combobox", { name: "Tag", exact: true }).selectOption("tag-rag");
   await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files"]);
   expect(searchPayloads[0].tag_ids).toEqual(["tag-rag"]);
-  await expect(page.getByLabel("Tag")).toHaveValue("tag-rag");
+  await expect(page.getByRole("combobox", { name: "Tag", exact: true })).toHaveValue("tag-rag");
   await expect(page.locator(".library-file-rows")).toContainText("alpha-notes.txt");
 
   await page.getByPlaceholder("indexed files").fill("bravo");
@@ -239,9 +239,11 @@ test("library semantic append and tag clicks use the Library view", async ({ pag
   await expect.poll(() => searchPayloads.map((payload) => payload.query)).toEqual(["indexed files", "bravo"]);
   await expect(page.locator(".library-file-rows")).toContainText("alpha-notes.txt");
   await expect(page.locator(".library-file-rows")).toContainText("charlie-paper.pdf");
-  await page.locator(".library-result-row").filter({ hasText: "alpha-notes.txt" }).locator(".library-result-open").click();
-  await expect(page.getByRole("tab", { name: "Explorer" })).toHaveAttribute("aria-selected", "true");
-  await expect(page.locator('[data-entry-id="entry-alpha"]')).toHaveClass(/selected-file-row/);
+  await page.locator(".library-file-rows [role='row']").filter({ hasText: "alpha-notes.txt" }).click();
+  await expect(page.getByRole("tab", { name: "Library" })).toHaveAttribute("aria-selected", "true");
+  await expect(
+    page.locator(".library-file-rows [role='row']").filter({ hasText: "alpha-notes.txt" }),
+  ).toHaveAttribute("aria-selected", "true");
   await expect(page.locator(".explorer-detail")).toContainText("Alpha Notes");
   await expect(page.locator(".raw-preview")).toContainText("Retrieval quality details for preview.");
   await page.screenshot({ path: testInfo.outputPath("workspace-library-search.png"), fullPage: true });
@@ -415,8 +417,7 @@ test("explorer-selected file answers through chatkit and deletes cleanly", async
     await page.locator(".file-rows [role='row']").filter({ hasText: readySources[1].original_filename }).click({
       modifiers: ["Control"],
     });
-    await expect(page.getByText("2 indexed files selected")).toBeVisible();
-    await expect(page.locator(".explorer-selection-summary")).toContainText(readySources[0].original_filename);
+    await expect(page.locator(".file-rows [role='row'][aria-selected='true']")).toHaveCount(2);
     await page.screenshot({ path: testInfo.outputPath("workspace-sample-library.png"), fullPage: true });
 
     await sendChatKitMessage(

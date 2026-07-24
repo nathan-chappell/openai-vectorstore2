@@ -2185,6 +2185,76 @@ async def test_mcp_agent_facade_tool_runs_through_agents_sdk(
 
 
 @pytest.mark.asyncio
+async def test_concurrent_first_uploads_create_one_vector_store(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    gateway = cast(Any, services.openai)
+    try:
+        await services.database.ensure_ready()
+        await services.sources.list_filesystem(clerk_user_id="local-dev")
+        gateway.vector_store_create_delay_seconds = 0.05
+
+        ingests = await asyncio.gather(
+            *(
+                services.sources.ingest_source(
+                    clerk_user_id="local-dev",
+                    filename=f"concurrent-{index}.txt",
+                    declared_media_type="text/plain",
+                    payload=f"concurrent upload {index}".encode(),
+                    tag_ids=[],
+                    user_guidance=None,
+                    origin_surface="web",
+                )
+                for index in range(2)
+            )
+        )
+
+        assert len(ingests) == 2
+        assert gateway.vector_store_create_calls == 1
+    finally:
+        await services.close()
+
+
+@pytest.mark.asyncio
+async def test_chatkit_request_context_preserves_client_library_and_file_scope(
+    configured_settings: AppSettings,
+    fake_openai: None,
+) -> None:
+    del fake_openai
+    services = create_services(configured_settings)
+    try:
+        context = await services.chatkit_server.build_request_context(
+            json.dumps(
+                {
+                    "type": "threads.list",
+                    "params": {},
+                    "metadata": {
+                        "origin": "web",
+                        "library_id": "library-1",
+                        "selected_source_ids": ["source-1", "source-2", "source-1"],
+                    },
+                }
+            ),
+            clerk_user_id="local-dev",
+            user_email="local-dev@example.com",
+            display_name="Local Developer",
+            role="admin",
+            credit_floor_usd=0.0,
+            bearer_token="local-dev",
+            request_app=None,
+        )
+    finally:
+        await services.close()
+
+    assert context.library_id == "library-1"
+    assert context.selected_source_ids == ["source-1", "source-2"]
+    assert context.thread_origin == "web"
+
+
+@pytest.mark.asyncio
 async def test_mcp_library_search_retrieves_files_as_resources_not_chat_text(
     configured_settings: AppSettings,
     fake_openai: None,

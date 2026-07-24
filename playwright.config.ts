@@ -30,25 +30,19 @@ for (const name of requiredEnvNames) {
 }
 
 const backendPort = process.env.PLAYWRIGHT_BACKEND_PORT ?? "8000";
-const frontendPort = process.env.PLAYWRIGHT_FRONTEND_PORT ?? "5173";
 const backendUrl = `http://127.0.0.1:${backendPort}`;
-const frontendUrl = `http://127.0.0.1:${frontendPort}`;
 
 const backendEnv: Record<string, string> = {
   ...baseEnv,
-  DATABASE_URL: `sqlite+aiosqlite:///./.local/playwright/app-${Date.now()}.db`,
+  DATABASE_URL:
+    process.env.PLAYWRIGHT_DATABASE_URL ??
+    "sqlite+aiosqlite:///./.local/playwright/app-v20260428.db",
   LOCAL_STORAGE_DIR: ".local/playwright/storage",
   STORAGE_BACKEND: "s3",
   STATIC_DIR: "frontend/dist",
   ...clerkDisabledEnv,
 };
 
-const frontendEnv: Record<string, string> = {
-  ...baseEnv,
-  VITE_BACKEND_URL: backendUrl,
-  VITE_PORT: frontendPort,
-  ...clerkDisabledEnv,
-};
 const reuseExistingServer = process.env.PLAYWRIGHT_REUSE_EXISTING_SERVER === "true";
 
 export default defineConfig({
@@ -60,24 +54,18 @@ export default defineConfig({
   expect: {
     timeout: 10_000,
   },
-  webServer: [
-    {
-      command: `./.venv/bin/uvicorn backend.app.main:create_fastapi_app --factory --host 127.0.0.1 --port ${backendPort}`,
-      url: `${backendUrl}/health`,
-      timeout: 60_000,
-      reuseExistingServer,
-      env: backendEnv,
-    },
-    {
-      command: `npm run dev -- --host 127.0.0.1 --port ${frontendPort}`,
-      url: frontendUrl,
-      timeout: 60_000,
-      reuseExistingServer,
-      env: frontendEnv,
-    },
-  ],
+  webServer: {
+    command:
+      `npm run build && ` +
+      `./.venv/bin/uvicorn openai_vectorstore2_backend.app.main:create_fastapi_app ` +
+      `--factory --host 127.0.0.1 --port ${backendPort}`,
+    url: `${backendUrl}/health`,
+    timeout: 60_000,
+    reuseExistingServer,
+    env: backendEnv,
+  },
   use: {
-    baseURL: frontendUrl,
+    baseURL: backendUrl,
     screenshot: "only-on-failure",
     trace: "retain-on-failure",
   },

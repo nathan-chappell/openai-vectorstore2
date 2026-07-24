@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Iterator
 import base64
 from pathlib import Path
@@ -22,6 +23,8 @@ class FakeOpenAIGateway:
     def __init__(self, settings: AppSettings) -> None:
         self.settings = settings
         self.vector_store_id = "vs_fake"
+        self.vector_store_create_calls = 0
+        self.vector_store_create_delay_seconds = 0.0
         self._chunks: dict[str, VectorSearchCandidate] = {}
         self._uploaded_files: dict[str, tuple[str, bytes, object]] = {}
         self._counter = 0
@@ -37,6 +40,9 @@ class FakeOpenAIGateway:
 
     async def create_vector_store(self, *, name: str, metadata: dict[str, str]) -> str:
         del name, metadata
+        self.vector_store_create_calls += 1
+        if self.vector_store_create_delay_seconds:
+            await asyncio.sleep(self.vector_store_create_delay_seconds)
         return self.vector_store_id
 
     async def create_conversation(self, *, metadata: dict[str, str]) -> str:

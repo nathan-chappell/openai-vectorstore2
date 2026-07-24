@@ -377,12 +377,17 @@ export function App({ authMode, onSignOut }: AppProps) {
   );
 
   useEffect(() => {
+    const selectedSourceIds = selectedEntryIds.flatMap((entryId) => {
+      const sourceId = knownEntries[entryId]?.source_id;
+      return sourceId ? [sourceId] : [];
+    });
     setChatKitMetadataGetter(() => ({
       origin: "web",
       library_id: activeLibraryId,
+      selected_source_ids: selectedSourceIds,
     }));
     return () => setChatKitMetadataGetter(null);
-  }, [activeLibraryId]);
+  }, [activeLibraryId, knownEntries, selectedEntryIds]);
 
   useEffect(() => {
     void refreshAll();
