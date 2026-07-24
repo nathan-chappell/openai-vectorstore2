@@ -1,0 +1,5 @@
+Source: https://github.com/nathan-chappell/ai-portfolio-admin
+Commit: aadbc18ed797287379f224059e04c338e6d025c3
+
+This dependency is vendored so Railway's GitHub build does not require separate
+private-repository credentials during source checkout.

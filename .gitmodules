@@ -1,6 +1,3 @@
-[submodule "vendor/ai-portfolio-admin"]
-	path = vendor/ai-portfolio-admin
-	url = https://github.com/nathan-chappell/ai-portfolio-admin.git
 [submodule "vendor/openai-vectorstore2-on-prem"]
 	path = vendor/openai-vectorstore2-on-prem
 	url = https://github.com/nathan-chappell/openai-vectorstore2-on-prem.git
