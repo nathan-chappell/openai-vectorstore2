@@ -164,10 +164,28 @@ function ClerkTokenBridge() {
 }
 
 function LocalDevApp() {
+  const [tokenReady, setTokenReady] = useState(false);
+
   useEffect(() => {
     setBearerTokenGetter(async () => "local-dev");
+    setTokenReady(true);
     return () => setBearerTokenGetter(null);
   }, []);
+
+  if (!tokenReady) {
+    return (
+      <main className="auth-shell">
+        <section className="auth-panel" aria-labelledby="auth-title">
+          <div className="app-identity auth-identity">
+            <strong>AI Files</strong>
+            <span>Local dev auth</span>
+          </div>
+          <h1 id="auth-title">Opening workspace</h1>
+          <p>Preparing the local development session.</p>
+        </section>
+      </main>
+    );
+  }
 
   return <App authMode="local-dev" />;
 }

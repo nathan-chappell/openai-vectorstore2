@@ -8,13 +8,14 @@ from typing import Any
 
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection, Engine, make_url
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.schema import CreateSchema
 
 from openai_vectorstore2_backend.app.core.config import PROJECT_ROOT, AppSettings
+from openai_vectorstore2_backend.app.db.availability import is_temporary_database_error
 from openai_vectorstore2_backend.app.models import Base
 
 logger = logging.getLogger(__name__)
@@ -157,7 +158,7 @@ class DatabaseManager:
                             await connection.run_sync(Base.metadata.create_all)
                             await connection.run_sync(self._validate_schema_matches_metadata)
                 except Exception as exc:
-                    if attempt >= attempts or not _is_database_starting_up_error(exc):
+                    if attempt >= attempts or not is_temporary_database_error(exc):
                         raise
                     logger.warning(
                         "database_starting_up_retry database=%s attempt=%s attempts=%s delay_seconds=%.1f",
@@ -170,6 +171,24 @@ class DatabaseManager:
                     continue
                 _INITIALIZED_DATABASES.add(database_key)
                 return
+
+    async def ping(self) -> None:
+        if self._use_sync_sqlite:
+            sync_engine = self._sync_engine
+            if sync_engine is None:
+                raise RuntimeError("Synchronous SQLite engine is not configured.")
+
+            def _ping_sync_engine() -> None:
+                with sync_engine.connect() as connection:
+                    connection.execute(text("SELECT 1"))
+
+            await asyncio.to_thread(_ping_sync_engine)
+            return
+
+        if self._async_engine is None:
+            raise RuntimeError("Async engine is not configured.")
+        async with self._async_engine.connect() as connection:
+            await connection.execute(text("SELECT 1"))
 
     def _ensure_postgres_schema(self) -> None:
         schema_name = self._settings.database_postgres_schema
@@ -249,30 +268,6 @@ class DatabaseManager:
             self._sync_engine.dispose()
         if self._async_engine is not None:
             await self._async_engine.dispose()
-
-
-def _is_database_starting_up_error(exc: BaseException) -> bool:
-    seen: set[int] = set()
-    pending: list[BaseException] = [exc]
-    while pending:
-        current = pending.pop()
-        if id(current) in seen:
-            continue
-        seen.add(id(current))
-        message = str(current).lower()
-        if "database is starting up" in message or "database system is starting up" in message:
-            return True
-        cause = current.__cause__
-        if cause is not None:
-            pending.append(cause)
-        context = current.__context__
-        if context is not None:
-            pending.append(context)
-        original = getattr(current, "orig", None)
-        if isinstance(original, BaseException):
-            pending.append(original)
-    return False
-
 
 def _database_log_label(database_url: str) -> str:
     return make_url(database_url).render_as_string(hide_password=True)

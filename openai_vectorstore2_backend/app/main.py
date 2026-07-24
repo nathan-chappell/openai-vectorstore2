@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator, Awaitable, Callable
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from importlib.metadata import PackageNotFoundError, version
 import logging
 import mimetypes
@@ -13,7 +14,7 @@ from typing import Literal
 from chatkit.server import StreamingResult
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from httpx import AsyncClient as HttpAsyncClient
 from starlette.types import ASGIApp, Receive, Scope, Send
 import uvicorn
@@ -21,6 +22,10 @@ import uvicorn
 from openai_vectorstore2_backend.app.admin import payment_integration_status
 from openai_vectorstore2_backend.app.bootstrap import create_services
 from openai_vectorstore2_backend.app.core.config import AppSettings, get_settings
+from openai_vectorstore2_backend.app.db.availability import (
+    database_unavailable_body,
+    is_temporary_database_error,
+)
 from openai_vectorstore2_backend.app.mcp.server import create_dev_mcp_server, create_mcp_server
 from openai_vectorstore2_backend.app.schemas import (
     ActionResponse,
@@ -168,11 +173,79 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     mcp_http_app = HybridMcpHttpApp(stateful_app=mcp_stateful_http_app, stateless_app=mcp_stateless_http_app)
     static_dir = Path(resolved_settings.normalized_static_dir)
 
+    def database_unavailable_response() -> JSONResponse:
+        return JSONResponse(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            content=database_unavailable_body(resolved_settings.administrator_email),
+            headers={
+                "Retry-After": str(
+                    max(1, round(resolved_settings.database_recovery_retry_seconds))
+                )
+            },
+        )
+
+    async def recover_database(application: FastAPI) -> None:
+        try:
+            while not application.state.database_ready:
+                await asyncio.sleep(resolved_settings.database_recovery_retry_seconds)
+                try:
+                    await services.database.ensure_ready()
+                    await services.database.ping()
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    if not is_temporary_database_error(exc):
+                        logger.error(
+                            "database recovery stopped error_type=%s reason=non_temporary_error",
+                            type(exc).__name__,
+                        )
+                        return
+                    logger.warning(
+                        "database recovery retry error_type=%s retry_seconds=%.1f",
+                        type(exc).__name__,
+                        resolved_settings.database_recovery_retry_seconds,
+                    )
+                    continue
+
+                application.state.database_ready = True
+                logger.info("database recovered")
+        finally:
+            application.state.database_recovery_task = None
+
+    def schedule_database_recovery(application: FastAPI) -> None:
+        current_task = getattr(application.state, "database_recovery_task", None)
+        if current_task is not None and not current_task.done():
+            return
+        application.state.database_recovery_task = asyncio.create_task(
+            recover_database(application),
+            name="openai-vectorstore2-database-recovery",
+        )
+
+    def mark_database_unavailable(application: FastAPI, error: BaseException) -> None:
+        was_ready = bool(getattr(application.state, "database_ready", False))
+        application.state.database_ready = False
+        logger.warning(
+            "database temporarily offline transition=%s error_type=%s retry_seconds=%.1f",
+            "ready_to_offline" if was_ready else "startup_offline",
+            type(error).__name__,
+            resolved_settings.database_recovery_retry_seconds,
+        )
+        schedule_database_recovery(application)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         app.state.services = services
         app.state.mcp_server = mcp_server
-        await services.database.ensure_ready()
+        app.state.database_ready = False
+        app.state.database_recovery_task = None
+        try:
+            await services.database.ensure_ready()
+            await services.database.ping()
+            app.state.database_ready = True
+        except Exception as exc:
+            if not is_temporary_database_error(exc):
+                raise
+            mark_database_unavailable(app, exc)
         logger.info("app_started name=%s version=%s", resolved_settings.app_name, _app_version())
         if resolved_settings.mcp_auth_mode == "none":
             logger.warning("mcp_auth_disabled mode=none subject=local-dev")
@@ -181,9 +254,20 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
                 try:
                     yield
                 finally:
+                    recovery_task = getattr(app.state, "database_recovery_task", None)
+                    if recovery_task is not None:
+                        recovery_task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await recovery_task
                     await services.close()
 
-    app = FastAPI(title=resolved_settings.app_name, lifespan=lifespan)
+    app = FastAPI(
+        title=resolved_settings.app_name,
+        version=_app_version(),
+        lifespan=lifespan,
+    )
+    app.state.database_ready = False
+    app.state.database_recovery_task = None
     app.add_middleware(
         CORSMiddleware,
         allow_origins=resolved_settings.cors_origins,
@@ -202,16 +286,28 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
             response = Response(status_code=status.HTTP_204_NO_CONTENT, headers=OAUTH_METADATA_CORS_HEADERS)
             logger.info("%s %s (%.1fms)", method, path, (perf_counter() - started_at) * 1000)
             return response
-        try:
-            response = await call_next(request)
-        except Exception:
-            logger.exception(
-                "%s %s failed (%.1fms)",
-                method,
-                path,
-                (perf_counter() - started_at) * 1000,
-            )
-            raise
+        requires_database = method != "OPTIONS" and (
+            (path.startswith("/api/") and path != "/api/client-config")
+            or path == "/mcp"
+            or path.startswith("/mcp/")
+        )
+        if requires_database and not app.state.database_ready:
+            response = database_unavailable_response()
+        else:
+            try:
+                response = await call_next(request)
+            except Exception as exc:
+                if is_temporary_database_error(exc):
+                    mark_database_unavailable(app, exc)
+                    response = database_unavailable_response()
+                else:
+                    logger.exception(
+                        "%s %s failed (%.1fms)",
+                        method,
+                        path,
+                        (perf_counter() - started_at) * 1000,
+                    )
+                    raise
 
         duration_ms = (perf_counter() - started_at) * 1000
         log_method = logger.info
@@ -326,8 +422,28 @@ def create_fastapi_app(settings: AppSettings | None = None) -> FastAPI:
     app.mount("/mcp", mcp_http_app)
 
     @app.get("/health")
-    async def healthcheck() -> dict[str, str]:
+    async def healthcheck(response: Response) -> dict[str, str]:
+        response.headers["X-App-Version"] = _app_version()
+        response.headers["X-Commit-SHA"] = os.environ.get("RAILWAY_GIT_COMMIT_SHA", "unknown")
         return {"status": "ok"}
+
+    @app.get("/ready")
+    async def readinesscheck() -> Response:
+        if not app.state.database_ready:
+            unavailable_response = database_unavailable_response()
+            unavailable_response.headers["X-App-Version"] = _app_version()
+            unavailable_response.headers["X-Commit-SHA"] = os.environ.get(
+                "RAILWAY_GIT_COMMIT_SHA",
+                "unknown",
+            )
+            return unavailable_response
+        ready_response = JSONResponse(content={"status": "ready"})
+        ready_response.headers["X-App-Version"] = _app_version()
+        ready_response.headers["X-Commit-SHA"] = os.environ.get(
+            "RAILWAY_GIT_COMMIT_SHA",
+            "unknown",
+        )
+        return ready_response
 
     @app.get("/api/client-config")
     async def client_config_api() -> dict[str, str | None]:

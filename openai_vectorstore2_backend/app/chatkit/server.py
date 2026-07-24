@@ -240,7 +240,7 @@ class VectorstoreChatKitServer(ChatKitServer[VectorstoreChatContext]):
             credit_floor_usd=credit_floor_usd,
             bearer_token=bearer_token,
             library_id=_string_or_none(metadata.get("library_id")),
-            selected_source_ids=[],
+            selected_source_ids=list(dict.fromkeys(_string_list(metadata.get("selected_source_ids"))))[:50],
             thread_origin=_string_or_none(metadata.get("origin")),
         )
 

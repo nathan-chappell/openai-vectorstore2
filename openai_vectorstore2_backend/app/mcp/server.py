@@ -47,6 +47,7 @@ from pydantic import BaseModel, Field
 
 from openai_vectorstore2_backend.app.bootstrap import AppServices
 from openai_vectorstore2_backend.app.core.config import AppSettings
+from openai_vectorstore2_backend.app.db.availability import is_temporary_database_error
 from openai_vectorstore2_backend.app.mcp.agent_facade import (
     McpFacadeInput,
     run_answer_from_library_agent,
@@ -199,7 +200,15 @@ async def _run_logged_tool(
 def _build_mcp_server(*, settings: AppSettings, services: AppServices, auth: Any | None) -> FastMCP:
     @asynccontextmanager
     async def server_lifespan(_: FastMCP[None]):
-        await services.database.ensure_ready()
+        try:
+            await services.database.ensure_ready()
+        except Exception as exc:
+            if not is_temporary_database_error(exc):
+                raise
+            logger.warning(
+                "mcp_database_temporarily_offline error_type=%s",
+                type(exc).__name__,
+            )
         yield None
 
     server = FastMCP(

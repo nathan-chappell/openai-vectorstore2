@@ -178,6 +178,7 @@ class SourceService:
         self._openai = openai
         self._billing = billing
         self._ingest_semaphore: asyncio.Semaphore | None = None
+        self._vector_store_locks: dict[str, asyncio.Lock] = {}
         self._background_tasks: set[asyncio.Task[None]] = set()
         self._closed = False
 
@@ -2691,12 +2692,30 @@ class SourceService:
     async def _ensure_vector_store(self, session: Any, *, library: UserLibrary, app_user: AppUser) -> None:
         if library.openai_vector_store_id is not None:
             return
-        library.openai_vector_store_id = await self._openai.create_vector_store(
-            name=library.title,
-            metadata={"clerk_user_id": app_user.clerk_user_id, "library_id": library.id},
-        )
-        library.updated_at = _utcnow()
-        await session.flush()
+        lock = self._vector_store_locks.setdefault(library.id, asyncio.Lock())
+        async with lock:
+            locked_library = await session.scalar(
+                select(UserLibrary)
+                .where(UserLibrary.id == library.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if locked_library is None:
+                raise FileNotFoundError("Library not found.")
+            if locked_library.openai_vector_store_id is not None:
+                library.openai_vector_store_id = locked_library.openai_vector_store_id
+                return
+
+            locked_library.openai_vector_store_id = await self._openai.create_vector_store(
+                name=locked_library.title,
+                metadata={
+                    "clerk_user_id": app_user.clerk_user_id,
+                    "library_id": locked_library.id,
+                },
+            )
+            locked_library.updated_at = _utcnow()
+            await session.commit()
+            library.openai_vector_store_id = locked_library.openai_vector_store_id
 
     async def _source_for_user(
         self,
