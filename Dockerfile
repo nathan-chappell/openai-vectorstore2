@@ -21,9 +21,10 @@ WORKDIR /app
 
 COPY pyproject.toml README.md ./
 COPY vendor ./vendor
-COPY backend ./backend
+COPY openai_vectorstore2 ./openai_vectorstore2
+COPY openai_vectorstore2_backend ./openai_vectorstore2_backend
+COPY openai_vectorstore2_migrations ./openai_vectorstore2_migrations
 COPY alembic.ini ./
-COPY migrations ./migrations
 RUN pip install --no-cache-dir .
 
 COPY --from=frontend-build /app/frontend/dist ./frontend/dist
